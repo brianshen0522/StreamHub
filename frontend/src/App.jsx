@@ -4,6 +4,32 @@ import { resolveLanguage, translations } from "./i18n.js";
 
 const providerOptions = ["all", "movieffm", "777tv"];
 
+function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode }) {
+  try {
+    const obj = { p: provider, u: url, t: title, m: mediaType };
+    if (posterUrl) obj.ps = posterUrl;
+    if (seasonUrl) obj.s = seasonUrl;
+    if (episode)   obj.ep = episode;
+    // Unicode-safe: percent-encode → Latin1 bytes → base64
+    const latin1 = encodeURIComponent(JSON.stringify(obj)).replace(/%([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    return btoa(latin1).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function decodeViewState(encoded) {
+  try {
+    const padded = encoded + "===".slice((encoded.length + 3) % 4);
+    const latin1 = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+    const json = decodeURIComponent(latin1.split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+    const obj = JSON.parse(json);
+    return { provider: obj.p, url: obj.u, title: obj.t, mediaType: obj.m, posterUrl: obj.ps || "", seasonUrl: obj.s || null, episode: obj.ep || null };
+  } catch {
+    return null;
+  }
+}
+
 function toQuery(params) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -87,6 +113,7 @@ function App() {
   const [playerError, setPlayerError] = useState("");
   const videoRef = useRef(null);
   const tRef = useRef(t);
+  const restoredFromUrlRef = useRef(false);
   useEffect(() => { tRef.current = t; }, [t]);
 
   const groupedResults = useMemo(
@@ -165,6 +192,36 @@ function App() {
     return undefined;
   }, [activeSource]);
 
+  // Restore state from URL on initial load
+  useEffect(() => {
+    if (restoredFromUrlRef.current) return;
+    restoredFromUrlRef.current = true;
+    const raw = new URLSearchParams(window.location.search).get("v");
+    if (!raw) return;
+    const state = decodeViewState(raw);
+    if (!state?.url || !state?.provider) return;
+    handleSelectItem(
+      { url: state.url, provider: state.provider, title: state.title, mediaType: state.mediaType, posterUrl: state.posterUrl },
+      state.seasonUrl,
+      state.episode,
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep URL in sync with current item / season / episode
+  useEffect(() => {
+    if (!selectedItem || detailLoading) return;
+    const v = encodeViewState({
+      provider: selectedItem.provider,
+      url: selectedItem.url,
+      title: selectedItem.title,
+      mediaType: selectedItem.mediaType,
+      posterUrl: selectedItem.posterUrl,
+      seasonUrl: selectedSeason?.url,
+      episode: selectedEpisode,
+    });
+    history.replaceState(null, "", v ? `?v=${v}` : window.location.pathname);
+  }, [selectedItem, selectedSeason, selectedEpisode, detailLoading]);
+
   function handleGoHome() {
     setSelectedItem(null);
     setItemDetail(null);
@@ -177,6 +234,7 @@ function App() {
     setError("");
     setResults([]);
     setQuery("");
+    history.replaceState(null, "", window.location.pathname);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -193,6 +251,7 @@ function App() {
     setSources([]);
     setActiveSource(null);
     setPlaybackMode("");
+    history.replaceState(null, "", window.location.pathname);
     try {
       const response = await fetch(`/api/search?${toQuery({ q: query.trim(), provider: providerFilter })}`);
       if (!response.ok) throw new Error("Search failed.");
@@ -249,7 +308,7 @@ function App() {
     }
   }
 
-  async function handleSelectItem(item) {
+  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null) {
     setSelectedItem(item);
     setItemDetail(null);
     setEpisodes([]);
@@ -274,25 +333,28 @@ function App() {
       }
 
       if (detail.provider === "movieffm" && Array.isArray(detail.seasons) && detail.seasons.length > 0) {
-        setSelectedSeason(detail.seasons[0]);
+        const season = detail.seasons.find((s) => s.url === targetSeasonUrl) || detail.seasons[0];
+        setSelectedSeason(season);
         const episodesResponse = await fetch(
-          `/api/episodes?${toQuery({ provider: detail.provider, sourceUrl: detail.seasons[0].url })}`,
+          `/api/episodes?${toQuery({ provider: detail.provider, sourceUrl: season.url })}`,
         );
         if (!episodesResponse.ok) throw new Error("Failed to load episodes.");
         const episodesData = await episodesResponse.json();
         const nextEpisodes = episodesData.episodes || [];
         setEpisodes(nextEpisodes);
-        if (nextEpisodes[0]) {
-          await loadEpisodeSources(detail.provider, detail.seasons[0].url, nextEpisodes[0]);
+        const episode = nextEpisodes.includes(targetEpisode) ? targetEpisode : nextEpisodes[0];
+        if (episode) {
+          await loadEpisodeSources(detail.provider, season.url, episode);
         }
         return;
       }
 
       const nextEpisodes = detail.episodes || [];
       setEpisodes(nextEpisodes);
-      if (nextEpisodes[0]) {
+      const episode = nextEpisodes.includes(targetEpisode) ? targetEpisode : nextEpisodes[0];
+      if (episode) {
         const sourceUrl = detail.provider === "777tv" ? detail.detailUrl : detail.seasonUrl;
-        await loadEpisodeSources(detail.provider, sourceUrl, nextEpisodes[0]);
+        await loadEpisodeSources(detail.provider, sourceUrl, episode);
       }
     } catch (detailError) {
       setError(detailError.message);

@@ -482,17 +482,71 @@ img,video { display:block; }
 @media (max-width: 720px) {
   .navbar { padding: 0 16px; gap: 8px; }
   .logo   { font-size: 1.2rem; }
-  .navbar-controls { display: none; }
   .navbar-search { max-width: none; flex: 1; }
 
-  .poster-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 7px; }
+  /* 集數/季節改橫向滾動，不 wrap — 方便快速切換 */
+  .pill-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .pill-row::-webkit-scrollbar { display: none; }
+  .pill-row button {
+    flex-shrink: 0;
+    min-height: 40px;
+    padding: 0 16px;
+    touch-action: manipulation;
+  }
+
+  .source-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .source-list::-webkit-scrollbar { display: none; }
+  .source-item {
+    flex-shrink: 0;
+    min-height: 40px;
+    touch-action: manipulation;
+  }
+
+  .detail-left  { gap: 16px; }
+  .poster-grid  { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 7px; }
   .detail-poster-thumb, .detail-poster-fallback { width: 80px; }
-  .detail-body { padding: 16px 16px 40px; }
+  .detail-body  { padding: 16px 16px 40px; }
   .results-section { padding: 16px 16px 48px; }
   .error-banner { margin: 12px 16px; }
 }
 
-@media (max-width: 480px) {
-  .poster-grid { grid-template-columns: repeat(3, 1fr); }
-  .btn-search  { padding: 0 12px; }
+/* 小手機：navbar 變兩行，logo + 語言切換在上，搜尋列在下 */
+@media (max-width: 520px) {
+  :root { --nav-h: 100px; }
+
+  .navbar {
+    height: auto;
+    min-height: var(--nav-h);
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    gap: 6px;
+    align-items: center;
+  }
+  .logo           { order: 1; }
+  .navbar-controls {
+    order: 2;
+    margin-left: auto;
+    display: flex;
+  }
+  .segmented      { display: none; } /* provider filter 在手機上沒空間 */
+  .navbar-search  {
+    order: 3;
+    flex: 0 0 100%;
+    max-width: none;
+  }
+
+  .poster-grid  { grid-template-columns: repeat(3, 1fr); }
+  .btn-search   { padding: 0 14px; font-size: 0.82rem; }
+  .detail-body  { padding: 12px 12px 36px; }
+  .results-section { padding: 12px 12px 48px; }
 }
