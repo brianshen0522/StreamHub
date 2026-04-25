@@ -16,3 +16,5 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
+    environment:
+      - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-localhost}

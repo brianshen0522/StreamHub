@@ -9,7 +9,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Environment files
+# Environment files (.env.example is committed intentionally)
 .env
 .env.local
 .env.*.local
