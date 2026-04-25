@@ -1,6 +1,6 @@
 # StreamHub
 
-A self-hosted streaming aggregator that searches **movieffm** and **777tv** simultaneously, validates HLS sources, and plays them in-browser — no ads, no redirects.
+A self-hosted streaming aggregator that searches **movieffm**, **777tv**, and **dramasq** simultaneously, validates HLS sources, and plays them in-browser — no ads, no redirects.
 
 ![StreamHub UI](https://img.shields.io/badge/stack-React%20%2B%20Node.js-informational)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
@@ -9,12 +9,14 @@ A self-hosted streaming aggregator that searches **movieffm** and **777tv** simu
 
 ## Features
 
-- **Unified search** across movieffm.net and 777tv.ai in one query
+- **Unified search** across movieffm.net, 777tv.ai, and dramasq.io in one query
+- **Three providers** — movieffm & 777tv (movies + TV), dramasq (TV dramas, multiple CDN sources per episode)
 - **Strict stream validation** — checks HTTP status *and* reads m3u8 content (`#EXTM3U` + segment tags); HTML error pages no longer pass as valid
 - **In-browser HLS playback** via hls.js, with automatic fallback to the server proxy if direct play fails
 - **m3u8 proxy** that rewrites segment and `#EXT-X-KEY` URLs through the backend to bypass CORS and hotlinking
 - **Poster proxy** to bypass hotlink protection on cover images
 - **LRU caching** for search results, detail pages, stream checks, and media-type detection
+- **Fast search timeouts** — search requests time out at 8 s (configurable), detail/stream fetches at 20 s; slow providers never block fast ones
 - Traditional Chinese / English UI, language switch does not interrupt playback
 
 ---
@@ -69,6 +71,7 @@ browser
 | `src/cache.js` | Four LRU caches (search 5 min, detail 10 min, streamCheck 3 min, mediaType 10 min) |
 | `src/providers/movieffm.js` | Scraper for movieffm.net |
 | `src/providers/seventv.js` | Scraper for 777tv.ai |
+| `src/providers/dramasq.js` | Scraper for dramasq.io (TV only, uses `/drq/` JSON API for streams) |
 | `src/providers/index.js` | Provider registry |
 | `src/utils/http.js` | Shared `fetchText` / `fetchJson` with browser UA |
 
@@ -78,11 +81,21 @@ browser
 
 Single `App.jsx` component. UI flow:
 
-1. Search → grouped poster grid (skeleton shimmer while loading)
+1. Search → grouped poster grid per provider (skeleton shimmer while loading); each provider resolves independently
 2. Click poster → detail panel opens (poster + title on left, player on right)
 3. Select season → episode list loads
 4. Select episode → sources checked and listed as compact pills (green dot = direct, orange = proxy)
 5. Source selected → HLS plays; on fatal error auto-falls back to proxy URL
+
+---
+
+## Providers
+
+| Provider | Movies | TV | Stream method |
+|---|---|---|---|
+| movieffm | ✓ | ✓ | Scrapes embedded JSON from detail/episode pages |
+| 777tv | ✓ | ✓ | Scrapes `var player_*` JSON from play pages |
+| dramasq | — | ✓ | `/drq/{id}/{ep}` JSON API returns multiple CDN sources |
 
 ---
 
@@ -91,15 +104,14 @@ Single `App.jsx` component. UI flow:
 Standalone CLI tools in `PoC/` for scraping without the web UI:
 
 ```bash
-# movieffm
 pip install requests beautifulsoup4
-python3 PoC/movieffm_cli.py
 
-# 777tv
+python3 PoC/movieffm_cli.py
 python3 PoC/777tv_cli.py
+python3 PoC/dramasq_cli.py
 ```
 
-Both scripts apply the same strict m3u8 validation as the backend (reads first 4 KB, checks `#EXTM3U` + segment tags).
+All scripts apply the same strict m3u8 validation as the backend (reads first 4 KB, checks `#EXTM3U` + segment tags).
 
 ---
 
