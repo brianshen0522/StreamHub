@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { caches } from "../cache.js";
+import { SEARCH_TIMEOUT_MS } from "../config.js";
 import { fetchText, normalizeUrl } from "../utils/http.js";
 
 const BASE_URL = "https://777tv.ai";
@@ -44,6 +45,7 @@ export async function search777tv(keyword) {
       referer: `${BASE_URL}/`,
     },
     body: new URLSearchParams({ wd: keyword, submit: "" }).toString(),
+    timeout: SEARCH_TIMEOUT_MS,
   });
 
   const $ = cheerio.load(responseHtml);
@@ -67,16 +69,10 @@ export async function search777tv(keyword) {
       title: anchor.attr("title")?.trim() || anchor.text().trim().replace(/\s+/g, " "),
       url,
       posterUrl: thumb.attr("data-original")?.trim() || thumb.attr("data-src")?.trim() || "",
-      mediaType: "unknown",
       rawType: $(element).find(".pic-text").text().trim() || "Unknown",
+      mediaType: normalizeMediaType($(element).find(".pic-text").text().trim() || "Unknown"),
     });
   });
-
-  await Promise.all(
-    results.map(async (item) => {
-      item.mediaType = await detect777tvMediaType(item.url, item.rawType);
-    }),
-  );
 
   caches.search.set(cacheKey, results);
   return results;

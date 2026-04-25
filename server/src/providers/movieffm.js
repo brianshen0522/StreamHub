@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { caches } from "../cache.js";
+import { SEARCH_TIMEOUT_MS } from "../config.js";
 import { fetchText, normalizeUrl } from "../utils/http.js";
 
 const BASE_URL = "https://www.movieffm.net";
@@ -56,6 +57,7 @@ export async function searchMovieffm(keyword) {
     }
     const html = await fetchText(url, {
       headers: { referer: `${BASE_URL}/` },
+      timeout: SEARCH_TIMEOUT_MS,
     });
     const pageResults = parseSearchResults(html);
     if (pageResults.length === 0) {

@@ -99,6 +99,7 @@ function App() {
   const [providerFilter, setProviderFilter] = useState("all");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [pendingSearchProviders, setPendingSearchProviders] = useState([]);
   const [error, setError] = useState("");
   const [selectedItem, setSelectedItem] = useState(null);
   const [itemDetail, setItemDetail] = useState(null);
@@ -114,11 +115,16 @@ function App() {
   const videoRef = useRef(null);
   const tRef = useRef(t);
   const restoredFromUrlRef = useRef(false);
+  const searchRequestIdRef = useRef(0);
   useEffect(() => { tRef.current = t; }, [t]);
 
   const groupedResults = useMemo(
     () => results.filter((group) => group.items.length > 0),
     [results],
+  );
+  const visibleSearchGroups = useMemo(
+    () => results.filter((group) => group.items.length > 0 || pendingSearchProviders.includes(group.provider)),
+    [results, pendingSearchProviders],
   );
 
   useEffect(() => {
@@ -241,8 +247,13 @@ function App() {
   async function handleSearch(event) {
     event.preventDefault();
     if (!query.trim()) return;
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    const providerNames = providerFilter === "all" ? ["movieffm", "777tv"] : [providerFilter];
     setSearching(true);
+    setPendingSearchProviders(providerNames);
     setError("");
+    setResults(providerNames.map((provider) => ({ provider, items: [] })));
     setSelectedItem(null);
     setItemDetail(null);
     setEpisodes([]);
@@ -252,17 +263,45 @@ function App() {
     setActiveSource(null);
     setPlaybackMode("");
     history.replaceState(null, "", window.location.pathname);
-    try {
-      const response = await fetch(`/api/search?${toQuery({ q: query.trim(), provider: providerFilter })}`);
-      if (!response.ok) throw new Error("Search failed.");
-      const data = await response.json();
-      setResults(data.results || []);
-    } catch (searchError) {
-      setResults([]);
-      setError(searchError.message);
-    } finally {
-      setSearching(false);
-    }
+    const errors = [];
+    let finished = 0;
+    let hasAnyResults = false;
+    const searchQuery = query.trim();
+
+    providerNames.forEach(async (providerName) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const response = await fetch(`/api/search?${toQuery({ q: searchQuery, provider: providerName })}`, { signal: controller.signal });
+        if (!response.ok) throw new Error("Search failed.");
+        const data = await response.json();
+        if (searchRequestIdRef.current !== requestId) return;
+        const nextGroup = data.results?.[0] || { provider: providerName, items: [] };
+        if ((nextGroup.items || []).length > 0) {
+          hasAnyResults = true;
+        }
+        setResults((current) => current.map((group) => (
+          group.provider === providerName ? { provider: providerName, items: nextGroup.items || [] } : group
+        )));
+      } catch (searchError) {
+        if (searchRequestIdRef.current !== requestId) return;
+        errors.push(searchError.message);
+        setResults((current) => current.map((group) => (
+          group.provider === providerName ? { provider: providerName, items: [] } : group
+        )));
+      } finally {
+        clearTimeout(timeoutId);
+        if (searchRequestIdRef.current !== requestId) return;
+        finished += 1;
+        setPendingSearchProviders((current) => current.filter((provider) => provider !== providerName));
+        if (finished === providerNames.length) {
+          setSearching(false);
+          if (errors.length > 0 && !hasAnyResults) {
+            setError(errors[0]);
+          }
+        }
+      }
+    });
   }
 
   async function loadSourcesFromRawStreams(streams) {
@@ -435,26 +474,6 @@ function App() {
       {/* ── Main ─────────────────────────────────────────────── */}
       <main className="main-content">
 
-        {/* Search skeleton */}
-        {searching && (
-          <section className="results-section">
-            {(providerFilter === "all" ? ["movieffm", "777tv"] : [providerFilter]).map((p) => (
-              <div className="results-group" key={p}>
-                <div className="skeleton-heading" />
-                <div className="poster-grid">
-                  {Array.from({ length: 10 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="skeleton-card"
-                      style={{ animationDelay: `${i * 0.06}s` }}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </section>
-        )}
-
         {/* Hero — only when idle */}
         {!searching && groupedResults.length === 0 && !selectedItem && (
           <section className="hero-section">
@@ -600,38 +619,52 @@ function App() {
         )}
 
         {/* ── Results grid ───────────────────────────────────── */}
-        {groupedResults.length > 0 && (
+        {visibleSearchGroups.length > 0 && (
           <section className="results-section">
-            {groupedResults.map((group) => (
+            {visibleSearchGroups.map((group) => (
               <div className="results-group" key={group.provider}>
                 <div className="group-heading">
                   {group.provider}
-                  <span className="badge">{group.items.length}</span>
+                  {!pendingSearchProviders.includes(group.provider) && (
+                    <span className="badge">{group.items.length}</span>
+                  )}
                 </div>
-                <div className="poster-grid">
-                  {group.items.map((item) => (
-                    <button
-                      type="button"
-                      key={`${item.provider}:${item.url}`}
-                      className={`poster-card ${selectedItem?.url === item.url ? "active" : ""}`}
-                      onClick={() => handleSelectItem(item)}
-                    >
-                      <PosterImage
-                        src={item.posterUrl}
-                        alt={item.title}
-                        className="poster-img"
-                        fallbackClassName="poster-fallback"
+                {pendingSearchProviders.includes(group.provider) ? (
+                  <div className="poster-grid">
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="skeleton-card"
+                        style={{ animationDelay: `${i * 0.06}s` }}
                       />
-                      <div className="poster-overlay">
-                        <div className="overlay-chips">
-                          <span className="chip chip-accent">{item.provider}</span>
-                          <span className="chip">{normalizeMediaTypeLabel(item.mediaType, t)}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="poster-grid">
+                    {group.items.map((item) => (
+                      <button
+                        type="button"
+                        key={`${item.provider}:${item.url}`}
+                        className={`poster-card ${selectedItem?.url === item.url ? "active" : ""}`}
+                        onClick={() => handleSelectItem(item)}
+                      >
+                        <PosterImage
+                          src={item.posterUrl}
+                          alt={item.title}
+                          className="poster-img"
+                          fallbackClassName="poster-fallback"
+                        />
+                        <div className="poster-overlay">
+                          <div className="overlay-chips">
+                            <span className="chip chip-accent">{item.provider}</span>
+                            <span className="chip">{normalizeMediaTypeLabel(item.mediaType, t)}</span>
+                          </div>
+                          <p className="overlay-title">{item.title}</p>
                         </div>
-                        <p className="overlay-title">{item.title}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </section>
