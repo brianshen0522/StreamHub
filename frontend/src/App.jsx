@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 
-const providerOptions = ["all", "movieffm", "777tv"];
+const providerOptions = ["all", "movieffm", "777tv", "dramasq"];
 
 function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode }) {
   try {
@@ -249,7 +249,7 @@ function App() {
     if (!query.trim()) return;
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
-    const providerNames = providerFilter === "all" ? ["movieffm", "777tv"] : [providerFilter];
+    const providerNames = providerFilter === "all" ? providerOptions.filter((p) => p !== "all") : [providerFilter];
     setSearching(true);
     setPendingSearchProviders(providerNames);
     setError("");
@@ -392,7 +392,7 @@ function App() {
       setEpisodes(nextEpisodes);
       const episode = nextEpisodes.includes(targetEpisode) ? targetEpisode : nextEpisodes[0];
       if (episode) {
-        const sourceUrl = detail.provider === "777tv" ? detail.detailUrl : detail.seasonUrl;
+        const sourceUrl = detail.detailUrl ?? detail.seasonUrl;
         await loadEpisodeSources(detail.provider, sourceUrl, episode);
       }
     } catch (detailError) {
@@ -463,7 +463,7 @@ function App() {
                   className={providerFilter === option ? "active" : ""}
                   onClick={() => setProviderFilter(option)}
                 >
-                  {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : t.provider777tv}
+                  {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : option === "777tv" ? t.provider777tv : t.providerDramasq}
                 </button>
               ))}
             </div>

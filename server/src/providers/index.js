@@ -1,4 +1,10 @@
 import {
+  getDramasqEpisodeStreams,
+  getDramasqEpisodes,
+  getDramasqItem,
+  searchDramasq,
+} from "./dramasq.js";
+import {
   getMovieffmEpisodeStreams,
   getMovieffmItem,
   getMovieffmSeasonEpisodes,
@@ -23,5 +29,11 @@ export const providers = {
     getItem: get777tvItem,
     getEpisodes: get777tvEpisodes,
     getEpisodeStreams: get777tvEpisodeStreams,
+  },
+  dramasq: {
+    search: searchDramasq,
+    getItem: getDramasqItem,
+    getEpisodes: getDramasqEpisodes,
+    getEpisodeStreams: getDramasqEpisodeStreams,
   },
 };
