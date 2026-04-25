@@ -1,0 +1,18 @@
+services:
+  server:
+    build:
+      context: ./server
+    container_name: streamhub-server
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: streamhub-frontend
+    depends_on:
+      - server
+    ports:
+      - "8080:80"
+    restart: unless-stopped
