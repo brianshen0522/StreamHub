@@ -36,9 +36,16 @@ img,video { display:block; }
   align-items: center;
   gap: 16px;
   padding: 0 32px;
-  background: linear-gradient(to bottom, rgba(10,10,10,0.97), rgba(10,10,10,0.82));
-  backdrop-filter: blur(12px);
+  background: rgba(10,10,10,0.96);
   border-bottom: 1px solid var(--border);
+}
+
+@supports ((-webkit-backdrop-filter: blur(12px)) or (backdrop-filter: blur(12px))) {
+  .navbar {
+    background: linear-gradient(to bottom, rgba(10,10,10,0.97), rgba(10,10,10,0.82));
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
 }
 
 .logo {
@@ -219,11 +226,11 @@ img,video { display:block; }
   padding: 24px 32px 56px;
   align-items: start;
 }
-.detail-left  { display:flex; flex-direction:column; gap:22px; }
-.detail-right { /* player column */ }
+.detail-left  { display:flex; flex-direction:column; gap:22px; min-width:0; }
+.detail-right { min-width:0; /* player column */ }
 
 /* ── picker blocks ────────────────────────────────────────── */
-.picker-block { display:flex; flex-direction:column; gap:9px; }
+.picker-block { display:flex; flex-direction:column; gap:9px; min-width:0; }
 .picker-heading {
   display: flex;
   align-items: center;
@@ -236,7 +243,7 @@ img,video { display:block; }
 }
 .picker-heading .count { font-weight: 500; letter-spacing: 0; }
 
-.pill-row { display:flex; flex-wrap:wrap; gap:6px; }
+.pill-row { display:flex; flex-wrap:wrap; gap:6px; min-width:0; max-width:100%; }
 .pill-row button {
   padding: 6px 13px;
   border-radius: 999px;
@@ -250,7 +257,7 @@ img,video { display:block; }
 .pill-row button.active { background: var(--accent); color: #fff; border-color: transparent; }
 
 /* source items */
-.source-list { display:flex; flex-wrap:wrap; gap:6px; }
+.source-list { display:flex; flex-wrap:wrap; gap:6px; min-width:0; max-width:100%; }
 .source-item {
   display: inline-flex;
   align-items: center;
@@ -263,6 +270,7 @@ img,video { display:block; }
   font-size: 0.8rem;
   font-weight: 500;
   white-space: nowrap;
+  max-width: 100%;
   transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
 .source-item:hover  { background: var(--s3); color: var(--t1); }
@@ -487,13 +495,18 @@ img,video { display:block; }
   /* 集數/季節改橫向滾動，不 wrap — 方便快速切換 */
   .pill-row {
     flex-wrap: nowrap;
+    width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 4px;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
   }
   .pill-row::-webkit-scrollbar { display: none; }
   .pill-row button {
     flex-shrink: 0;
+    max-width: calc(100vw - 32px);
     min-height: 40px;
     padding: 0 16px;
     touch-action: manipulation;
@@ -501,13 +514,20 @@ img,video { display:block; }
 
   .source-list {
     flex-wrap: nowrap;
+    width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 4px;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
   }
   .source-list::-webkit-scrollbar { display: none; }
   .source-item {
     flex-shrink: 0;
+    max-width: min(75vw, 280px);
+    overflow: hidden;
+    text-overflow: ellipsis;
     min-height: 40px;
     touch-action: manipulation;
   }

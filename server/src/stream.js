@@ -1,4 +1,5 @@
 import { caches } from "./cache.js";
+import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -99,7 +100,7 @@ async function checkM3u8(url) {
         "user-agent": UA,
         range: "bytes=0-4095",
       },
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (response.status !== 200 && response.status !== 206) {
       return { ok: false, statusCode: response.status };
@@ -118,14 +119,14 @@ async function checkGeneric(url) {
       method: "HEAD",
       redirect: "follow",
       headers: { "user-agent": UA },
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if ([403, 405, 500, 501].includes(response.status)) {
       response = await fetch(url, {
         method: "GET",
         redirect: "follow",
         headers: { range: "bytes=0-0", "user-agent": UA },
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     }
     return {
@@ -165,7 +166,7 @@ export async function handleStreamProxy(request, response) {
       referer: new URL(target).origin + "/",
       range: request.get("range") || "",
     },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
   });
 
   if (!upstream.ok && upstream.status !== 206) {
@@ -220,7 +221,7 @@ export async function handlePosterProxy(request, response) {
       "user-agent": UA,
       referer: new URL(target).origin + "/",
     },
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!upstream.ok) {

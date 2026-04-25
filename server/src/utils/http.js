@@ -1,7 +1,9 @@
+import { REQUEST_TIMEOUT_MS } from "../config.js";
+
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-export const DEFAULT_TIMEOUT = 20_000;
+export const DEFAULT_TIMEOUT = REQUEST_TIMEOUT_MS;
 
 export async function fetchText(url, options = {}) {
   const response = await fetch(url, {

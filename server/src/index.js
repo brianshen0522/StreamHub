@@ -1,10 +1,11 @@
+import "dotenv/config";
 import express from "express";
 import morgan from "morgan";
+import { PORT } from "./config.js";
 import { providers } from "./providers/index.js";
 import { checkStream, handlePosterProxy, handleStreamProxy } from "./stream.js";
 
 const app = express();
-const PORT = process.env.PORT || 8787;
 
 app.use(morgan("dev"));
 app.use(express.json());
@@ -32,12 +33,24 @@ app.get("/api/search", async (request, response, next) => {
       return;
     }
     const providerNames = providerFilter === "all" ? Object.keys(providers) : [providerFilter];
-    const results = await Promise.all(
+    const settled = await Promise.allSettled(
       providerNames.map(async (providerName) => ({
         provider: providerName,
         items: await getProvider(providerName).search(q),
       })),
     );
+    const results = settled.map((result, index) => {
+      const provider = providerNames[index];
+      if (result.status === "fulfilled") {
+        return result.value;
+      }
+      console.error(`Search failed for provider ${provider}:`, result.reason);
+      return {
+        provider,
+        items: [],
+        error: result.reason?.message || "Search failed.",
+      };
+    });
     response.json({ query: q, results });
   } catch (error) {
     next(error);

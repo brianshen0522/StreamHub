@@ -3,6 +3,8 @@ services:
     build:
       context: ./server
     container_name: streamhub-server
+    env_file:
+      - ./.env
     ports:
       - "8787:8787"
     restart: unless-stopped
@@ -11,6 +13,8 @@ services:
     build:
       context: ./frontend
     container_name: streamhub-frontend
+    env_file:
+      - ./.env
     depends_on:
       - server
     ports:
