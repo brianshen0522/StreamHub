@@ -105,6 +105,10 @@ img,video { display:block; }
   gap: 10px;
 }
 
+.provider-filter-row {
+  display: contents;
+}
+
 /* ── segmented / lang ─────────────────────────────────────── */
 .segmented,
 .lang-switch {
@@ -542,7 +546,7 @@ img,video { display:block; }
 
 /* 小手機：navbar 變兩行，logo + 語言切換在上，搜尋列在下 */
 @media (max-width: 520px) {
-  :root { --nav-h: 100px; }
+  :root { --nav-h: 148px; }
 
   .navbar {
     height: auto;
@@ -558,11 +562,31 @@ img,video { display:block; }
     margin-left: auto;
     display: flex;
   }
-  .segmented      { display: none; } /* provider filter 在手機上沒空間 */
   .navbar-search  {
     order: 3;
     flex: 0 0 100%;
     max-width: none;
+  }
+  .provider-filter-row {
+    order: 4;
+    flex: 0 0 100%;
+    display: flex;
+    justify-content: center;
+  }
+  .segmented {
+    display: inline-flex;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 3px;
+    margin: 0 auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .segmented::-webkit-scrollbar { display: none; }
+  .segmented button {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .poster-grid  { grid-template-columns: repeat(3, 1fr); }

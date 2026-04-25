@@ -405,7 +405,17 @@ function App() {
         </form>
 
         <div className="navbar-controls">
-          {!selectedItem && (
+          <div className="lang-switch">
+            <button type="button" className={language === "zh-TW" ? "active" : ""} onClick={() => setLanguage("zh-TW")}>
+              繁中
+            </button>
+            <button type="button" className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")}>
+              EN
+            </button>
+          </div>
+        </div>
+        {!selectedItem && (
+          <div className="provider-filter-row">
             <div className="segmented">
               {providerOptions.map((option) => (
                 <button
@@ -418,16 +428,8 @@ function App() {
                 </button>
               ))}
             </div>
-          )}
-          <div className="lang-switch">
-            <button type="button" className={language === "zh-TW" ? "active" : ""} onClick={() => setLanguage("zh-TW")}>
-              繁中
-            </button>
-            <button type="button" className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")}>
-              EN
-            </button>
           </div>
-        </div>
+        )}
       </nav>
 
       {/* ── Main ─────────────────────────────────────────────── */}
