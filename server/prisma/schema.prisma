@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ProviderHealthStatus {
+  HEALTHY
+  DEGRADED
+  DOWN
+  DISABLED
+}
+
+model User {
+  id             String   @id @default(cuid())
+  username       String   @unique
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  role           UserRole
+  status         UserStatus @default(ACTIVE)
+  displayName    String   @map("display_name")
+  lastLoginAt    DateTime? @map("last_login_at")
+  lastSeenAt     DateTime? @map("last_seen_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  sessions       UserSession[]
+  favorites      Favorite[]
+  watchProgress  WatchProgress[]
+  watchHistory   WatchHistory[]
+  sourcePreferences UserSourcePreference[]
+  providerAccess UserProviderPermission[]
+  adminAuditLogs AuditLog[] @relation("AuditActor")
+
+  @@map("users")
+}
+
+model UserSession {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  refreshTokenHash String   @map("refresh_token_hash")
+  ip               String?
+  userAgent        String?  @map("user_agent")
+  lastSeenAt       DateTime? @map("last_seen_at")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+model Provider {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  name          String
+  isEnabled     Boolean  @default(true) @map("is_enabled")
+  sortOrder     Int      @default(0) @map("sort_order")
+  lastCheckedAt DateTime? @map("last_checked_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  healthChecks  ProviderHealthCheck[]
+  userAccess    UserProviderPermission[]
+
+  @@map("providers")
+}
+
+model UserProviderPermission {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  providerId String   @map("provider_id")
+  isEnabled  Boolean  @default(true) @map("is_enabled")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, providerId])
+  @@map("user_provider_permissions")
+}
+
+model Favorite {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  providerKey  String   @map("provider_key")
+  mediaType    String   @map("media_type")
+  title        String
+  posterUrl    String?  @map("poster_url")
+  itemUrl      String   @map("item_url")
+  detailUrl    String?  @map("detail_url")
+  seasonUrl    String   @default("") @map("season_url")
+  seasonLabel  String?  @map("season_label")
+  episodeLabel String   @default("") @map("episode_label")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@unique([userId, providerKey, itemUrl, seasonUrl, episodeLabel])
+  @@map("favorites")
+}
+
+model WatchProgress {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  providerKey     String   @map("provider_key")
+  mediaType       String   @map("media_type")
+  title           String
+  posterUrl       String?  @map("poster_url")
+  itemUrl         String   @map("item_url")
+  detailUrl       String?  @map("detail_url")
+  seasonUrl       String   @default("") @map("season_url")
+  seasonLabel     String?  @map("season_label")
+  episodeLabel    String   @default("") @map("episode_label")
+  sourceLabel     String?  @map("source_label")
+  durationSeconds Int      @default(0) @map("duration_seconds")
+  positionSeconds Int      @default(0) @map("position_seconds")
+  progressPercent Float    @default(0) @map("progress_percent")
+  isCompleted     Boolean  @default(false) @map("is_completed")
+  lastWatchedAt   DateTime @default(now()) @map("last_watched_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, lastWatchedAt])
+  @@unique([userId, providerKey, itemUrl, seasonUrl, episodeLabel])
+  @@map("watch_progress")
+}
+
+model WatchHistory {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  providerKey     String   @map("provider_key")
+  mediaType       String   @map("media_type")
+  title           String
+  posterUrl       String?  @map("poster_url")
+  itemUrl         String   @map("item_url")
+  detailUrl       String?  @map("detail_url")
+  seasonUrl       String?  @map("season_url")
+  seasonLabel     String?  @map("season_label")
+  episodeLabel    String?  @map("episode_label")
+  sourceLabel     String?  @map("source_label")
+  watchedAt       DateTime @default(now()) @map("watched_at")
+  positionSeconds Int      @default(0) @map("position_seconds")
+  durationSeconds Int      @default(0) @map("duration_seconds")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, watchedAt])
+  @@map("watch_history")
+}
+
+model UserSourcePreference {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  providerKey String  @map("provider_key")
+  mediaType  String   @map("media_type")
+  title      String
+  sourceLabel String  @map("source_label")
+  lastSelectedAt DateTime @default(now()) @map("last_selected_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, providerKey, mediaType, title])
+  @@index([userId, title])
+  @@map("user_source_preferences")
+}
+
+model ProviderHealthCheck {
+  id             String               @id @default(cuid())
+  providerId     String               @map("provider_id")
+  status         ProviderHealthStatus
+  success        Boolean
+  responseTimeMs Int?                 @map("response_time_ms")
+  errorMessage   String?              @map("error_message")
+  checkedAt      DateTime             @default(now()) @map("checked_at")
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, checkedAt])
+  @@map("provider_health_checks")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String   @map("actor_user_id")
+  targetUserId String?  @map("target_user_id")
+  action       String
+  payload      Json?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  actorUser User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@map("audit_logs")
+}

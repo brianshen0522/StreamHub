@@ -13,6 +13,10 @@ export const caches = {
     max: 1000,
     ttl: 1000 * 60 * 3,
   }),
+  streamMetadata: new LRUCache({
+    max: 1000,
+    ttl: 1000 * 60 * 10,
+  }),
   mediaType: new LRUCache({
     max: 500,
     ttl: 1000 * 60 * 10,

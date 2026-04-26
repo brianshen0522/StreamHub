@@ -91,6 +91,114 @@ function isValidM3u8Content(text) {
   );
 }
 
+function parseM3u8DurationSeconds(text) {
+  const matches = text.matchAll(/#EXTINF:([\d.]+)/g);
+  let total = 0;
+  let count = 0;
+  for (const match of matches) {
+    const seconds = Number.parseFloat(match[1]);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      total += seconds;
+      count += 1;
+    }
+  }
+  return count > 0 ? Math.round(total) : null;
+}
+
+function extractVariantPlaylistUrls(sourceUrl, text) {
+  const lines = text.split("\n");
+  const urls = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith("#EXT-X-STREAM-INF")) {
+      continue;
+    }
+    const nextLine = lines[index + 1]?.trim();
+    if (!nextLine || nextLine.startsWith("#")) {
+      continue;
+    }
+    try {
+      urls.push(new URL(nextLine, sourceUrl).toString());
+    } catch {}
+  }
+  return urls;
+}
+
+async function fetchTextSnippet(url, maxBytes = 256_000) {
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "user-agent": UA,
+      range: `bytes=0-${Math.max(1024, maxBytes - 1)}`,
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (response.status !== 200 && response.status !== 206) {
+    throw new Error(`Upstream responded ${response.status}`);
+  }
+  return readLimited(response.body, maxBytes);
+}
+
+async function inspectM3u8Metadata(url, depth = 0) {
+  const text = await fetchTextSnippet(url);
+  if (!isValidM3u8Content(text)) {
+    return { durationSeconds: null, playlistType: "invalid" };
+  }
+
+  const durationSeconds = parseM3u8DurationSeconds(text);
+  if (durationSeconds !== null) {
+    return { durationSeconds, playlistType: "media" };
+  }
+
+  if (depth >= 1) {
+    return { durationSeconds: null, playlistType: "master" };
+  }
+
+  const variantUrls = extractVariantPlaylistUrls(url, text);
+  if (variantUrls.length === 0) {
+    return { durationSeconds: null, playlistType: "master" };
+  }
+
+  const inspectedVariants = await Promise.all(
+    variantUrls.slice(0, 5).map(async (variantUrl) => {
+      try {
+        const variant = await inspectM3u8Metadata(variantUrl, depth + 1);
+        return variant.durationSeconds;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const longest = inspectedVariants.reduce((current, value) => (
+    Number.isFinite(value) && value > (current ?? -1) ? value : current
+  ), null);
+
+  return { durationSeconds: longest, playlistType: "master" };
+}
+
+export async function getStreamMetadata(stream) {
+  const cached = caches.streamMetadata.get(stream.url);
+  if (cached) {
+    return { ...stream, ...cached };
+  }
+
+  let metadata = { durationSeconds: null };
+  if (stream.url.toLowerCase().includes(".m3u8")) {
+    try {
+      const inspected = await inspectM3u8Metadata(stream.url);
+      metadata = {
+        durationSeconds: Number.isFinite(inspected.durationSeconds) ? inspected.durationSeconds : null,
+      };
+    } catch {
+      metadata = { durationSeconds: null };
+    }
+  }
+
+  caches.streamMetadata.set(stream.url, metadata);
+  return { ...stream, ...metadata };
+}
+
 async function checkM3u8(url) {
   let response;
   try {
@@ -150,6 +258,33 @@ export async function checkStream(stream) {
 
   caches.streamCheck.set(stream.url, result);
   return { ...stream, ...result };
+}
+
+export async function streamCheckedSources(rawStreams, preferredLabel, onSource) {
+  if (rawStreams.length === 0) return;
+
+  async function processOne(stream) {
+    const enriched = await getStreamMetadata(stream);
+    const checked = await checkStream(enriched);
+    if (checked.ok) {
+      onSource({
+        ...checked,
+        directUrl: checked.url,
+        proxyUrl: `/api/stream?target=${encodeURIComponent(checked.url)}`,
+      });
+    }
+  }
+
+  // Preferred stream gets the first slot so it enters the event loop first
+  const preferred = preferredLabel
+    ? rawStreams.find((s) => s.sourceLabel === preferredLabel)
+    : null;
+  const rest = preferred ? rawStreams.filter((s) => s !== preferred) : rawStreams;
+
+  await Promise.all([
+    ...(preferred ? [processOne(preferred)] : []),
+    ...rest.map((s) => processOne(s)),
+  ]);
 }
 
 export async function handleStreamProxy(request, response) {

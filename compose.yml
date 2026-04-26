@@ -1,10 +1,27 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: streamhub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-streamhub}
+      POSTGRES_USER: ${POSTGRES_USER:-streamhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhub}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   server:
     build:
       context: ./server
     container_name: streamhub-server
     env_file:
       - ./.env
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-streamhub}:${POSTGRES_PASSWORD:-streamhub}@postgres:5432/${POSTGRES_DB:-streamhub}?schema=public
     ports:
       - "8787:8787"
     restart: unless-stopped
@@ -22,3 +39,6 @@ services:
     restart: unless-stopped
     environment:
       - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-localhost}
+
+volumes:
+  postgres-data:
