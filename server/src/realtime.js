@@ -15,6 +15,11 @@ import { verifyAccessToken } from "./auth.js";
 const AUTH_TIMEOUT_MS = 5_000;
 const HEARTBEAT_MS = 30_000;
 
+/** Close codes the client understands. */
+const CLOSE_AUTH_TIMEOUT = 4001;
+const CLOSE_TOKEN_EXPIRED = 4002;
+const CLOSE_UNAUTHORIZED = 4003;
+
 /** userId -> Set<WebSocket> */
 const clients = new Map();
 
@@ -54,36 +59,51 @@ export function attachRealtime(server) {
     socket.isAlive = true;
     socket.on("pong", () => { socket.isAlive = true; });
 
+    let expiryTimer = null;
+
     const authTimer = setTimeout(() => {
-      if (!userId) socket.close(4001, "Authentication timeout.");
+      if (!userId) socket.close(CLOSE_AUTH_TIMEOUT, "Authentication timeout.");
     }, AUTH_TIMEOUT_MS);
 
     socket.on("message", (raw) => {
       // The only frame a client may send is its initial auth.
       if (userId) return;
+      let expiresAt = null;
       try {
         const message = JSON.parse(String(raw));
         if (message?.type !== "auth" || !message.token) throw new Error("bad frame");
-        userId = String(verifyAccessToken(message.token).sub);
+        const claims = verifyAccessToken(message.token);
+        userId = String(claims.sub);
+        expiresAt = Number(claims.exp) * 1000;
       } catch {
         clearTimeout(authTimer);
-        socket.close(4003, "Unauthorized.");
+        socket.close(CLOSE_UNAUTHORIZED, "Unauthorized.");
         return;
       }
       clearTimeout(authTimer);
       register(userId, socket);
-      socket.send(JSON.stringify({ type: "ready" }));
+
+      // The token is only checked at handshake, so hold the connection no
+      // longer than the token itself is valid. The client refreshes and
+      // reconnects when it sees this code.
+      if (Number.isFinite(expiresAt)) {
+        expiryTimer = setTimeout(
+          () => socket.close(CLOSE_TOKEN_EXPIRED, "Access token expired."),
+          Math.max(0, expiresAt - Date.now()),
+        );
+      }
+
+      socket.send(JSON.stringify({ type: "ready", expiresAt }));
     });
 
-    socket.on("close", () => {
+    const cleanup = () => {
       clearTimeout(authTimer);
+      clearTimeout(expiryTimer);
       if (userId) unregister(userId, socket);
-    });
+    };
 
-    socket.on("error", () => {
-      clearTimeout(authTimer);
-      if (userId) unregister(userId, socket);
-    });
+    socket.on("close", cleanup);
+    socket.on("error", cleanup);
   });
 
   // Drop sockets that stopped answering so `clients` cannot grow unbounded.

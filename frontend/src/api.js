@@ -97,6 +97,11 @@ async function performRefresh() {
   return nextSession;
 }
 
+/** Force a token renewal (used when the realtime socket is closed as expired). */
+export async function refreshSession() {
+  return ensureFreshSession();
+}
+
 async function ensureFreshSession() {
   if (!refreshPromise) {
     refreshPromise = performRefresh().finally(() => {

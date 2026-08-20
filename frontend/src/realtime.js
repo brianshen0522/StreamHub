@@ -1,4 +1,4 @@
-import { getAccessToken } from "./api.js";
+import { getAccessToken, refreshSession } from "./api.js";
 
 /**
  * Live library updates.
@@ -11,6 +11,9 @@ import { getAccessToken } from "./api.js";
 
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+
+/** Server closes with this once the access token behind the handshake lapses. */
+const CLOSE_TOKEN_EXPIRED = 4002;
 
 const listeners = new Set();
 
@@ -82,8 +85,20 @@ function connect() {
     if (payload?.type) emit(payload);
   });
 
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (event) => {
     if (socket === ws) socket = null;
+    if (closedByUs || !listeners.size) return;
+
+    // The socket is only authenticated at handshake, so the server drops it
+    // when the token lapses. Renew first, otherwise every retry reconnects
+    // with the same dead token.
+    if (event.code === CLOSE_TOKEN_EXPIRED) {
+      attempts = 0;
+      refreshSession()
+        .then(() => connect())
+        .catch(() => scheduleReconnect());
+      return;
+    }
     scheduleReconnect();
   });
 
