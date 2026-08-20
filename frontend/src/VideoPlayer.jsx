@@ -156,8 +156,12 @@ export default function VideoPlayer({
     const onVolume = () => { setVolume(videoEl.volume); setMuted(videoEl.muted); };
     const onRate = () => setRate(videoEl.playbackRate);
     const onEnded = () => setPlaying(false);
-    const onEnterPip = () => setPip(true);
-    const onLeavePip = () => setPip(false);
+    // The PiP session can end without a usable event — swapping episodes empties
+    // the element mid-session — so reconcile against the DOM rather than
+    // trusting enter/leave alone, otherwise the control stays lit over a window
+    // the OS has already closed.
+    const syncPip = () => setPip(document.pictureInPictureElement === videoEl);
+    const onCanPlay = () => { setWaiting(false); syncPip(); };
 
     videoEl.addEventListener("play", onPlay);
     videoEl.addEventListener("pause", onPause);
@@ -167,12 +171,14 @@ export default function VideoPlayer({
     videoEl.addEventListener("loadedmetadata", onMeta);
     videoEl.addEventListener("waiting", onWaiting);
     videoEl.addEventListener("playing", onPlaying);
-    videoEl.addEventListener("canplay", () => setWaiting(false));
+    videoEl.addEventListener("canplay", onCanPlay);
     videoEl.addEventListener("volumechange", onVolume);
     videoEl.addEventListener("ratechange", onRate);
     videoEl.addEventListener("ended", onEnded);
-    videoEl.addEventListener("enterpictureinpicture", onEnterPip);
-    videoEl.addEventListener("leavepictureinpicture", onLeavePip);
+    videoEl.addEventListener("emptied", syncPip);
+    videoEl.addEventListener("loadstart", syncPip);
+    videoEl.addEventListener("enterpictureinpicture", syncPip);
+    videoEl.addEventListener("leavepictureinpicture", syncPip);
 
     // Apply the persisted preferences to a freshly mounted element.
     videoEl.volume = volume;
@@ -187,17 +193,21 @@ export default function VideoPlayer({
       videoEl.removeEventListener("loadedmetadata", onMeta);
       videoEl.removeEventListener("waiting", onWaiting);
       videoEl.removeEventListener("playing", onPlaying);
+      videoEl.removeEventListener("canplay", onCanPlay);
       videoEl.removeEventListener("volumechange", onVolume);
       videoEl.removeEventListener("ratechange", onRate);
       videoEl.removeEventListener("ended", onEnded);
-      videoEl.removeEventListener("enterpictureinpicture", onEnterPip);
-      videoEl.removeEventListener("leavepictureinpicture", onLeavePip);
+      videoEl.removeEventListener("emptied", syncPip);
+      videoEl.removeEventListener("loadstart", syncPip);
+      videoEl.removeEventListener("enterpictureinpicture", syncPip);
+      videoEl.removeEventListener("leavepictureinpicture", syncPip);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoEl]);
 
   // A new source resets duration/position until metadata lands again.
   useEffect(() => {
+    setPip(!!videoEl && document.pictureInPictureElement === videoEl);
     setReady(false);
     setDuration(0);
     setCurrentTime(0);
@@ -206,7 +216,8 @@ export default function VideoPlayer({
     setCurrentLevel(-1);
     setSubtitles([]);
     setSubtitleTrack(-1);
-  }, [hls]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hls, videoEl]);
 
   /* ── hls.js: quality levels + subtitle tracks ─────────────── */
 
@@ -315,6 +326,7 @@ export default function VideoPlayer({
 
   const togglePip = useCallback(async () => {
     if (!videoEl || !document.pictureInPictureEnabled) return;
+    setPip(document.pictureInPictureElement === videoEl);
     try {
       if (document.pictureInPictureElement === videoEl) await document.exitPictureInPicture();
       else await videoEl.requestPictureInPicture();
