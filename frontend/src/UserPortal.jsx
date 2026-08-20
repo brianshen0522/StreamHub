@@ -397,33 +397,77 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
 function HistoryPage({ setTopbar }) {
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState(() => new Set());
 
-  useEffect(() => {
-    apiJson("/api/me/history")
-      .then((payload) => setHistory(payload.history || []))
-      .catch((loadError) => { setError(loadError.message); setHistory([]); });
+  const load = useCallback(async () => {
+    try {
+      const payload = await apiJson("/api/me/history");
+      setHistory(payload.history || []);
+      setError("");
+    } catch (loadError) {
+      setError(loadError.message);
+      setHistory([]);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useLiveRefresh(useCallback((event) => event.type === "history" || event.history, []), load);
+
+  // One row per title. Every pause, source switch and completion writes a
+  // history record, so a single film otherwise fills the page with near
+  // identical entries.
+  const titles = useMemo(() => {
+    if (!history) return [];
+    const byTitle = new Map();
+    for (const entry of history) {
+      const key = `${entry.providerKey}|${entry.itemUrl}`;
+      let group = byTitle.get(key);
+      if (!group) {
+        group = { key, latest: entry, sessions: 0, episodes: new Map() };
+        byTitle.set(key, group);
+      }
+      group.sessions += 1;
+      if (new Date(entry.watchedAt) > new Date(group.latest.watchedAt)) group.latest = entry;
+
+      const episodeKey = entry.episodeLabel || "";
+      const seen = group.episodes.get(episodeKey);
+      if (!seen || new Date(entry.watchedAt) > new Date(seen.watchedAt)) {
+        group.episodes.set(episodeKey, entry);
+      }
+    }
+    return [...byTitle.values()].sort(
+      (a, b) => new Date(b.latest.watchedAt) - new Date(a.latest.watchedAt),
+    );
+  }, [history]);
+
+  const days = useMemo(() => {
+    const groups = new Map();
+    for (const title of titles) {
+      const label = dayBucket(title.latest.watchedAt);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(title);
+    }
+    return [...groups.entries()].map(([label, items]) => ({ label, items }));
+  }, [titles]);
 
   useEffect(() => {
     setTopbar({
       title: "History",
-      count: history?.length,
-      sub: "Recorded on pause, source switch, and completion · newest first",
+      count: titles.length,
+      sub: history
+        ? `${titles.length} ${titles.length === 1 ? "title" : "titles"} · ${history.length} sessions`
+        : "Everything you have played",
     });
-  }, [setTopbar, history]);
+  }, [setTopbar, titles, history]);
 
-  // History is chronological, so group it by day rather than dumping a poster
-  // wall where the same series repeats once per episode.
-  const days = useMemo(() => {
-    if (!history) return [];
-    const groups = new Map();
-    for (const entry of history) {
-      const label = dayBucket(entry.watchedAt);
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(entry);
-    }
-    return [...groups.entries()].map(([label, entries]) => ({ label, entries }));
-  }, [history]);
+  function toggle(key) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   if (history === null) {
     return (
@@ -442,34 +486,73 @@ function HistoryPage({ setTopbar }) {
         <section key={day.label} className="usr-day">
           <div className="usr-day-label">{day.label}</div>
           <div className="usr-rows">
-            {day.entries.map((entry) => (
-              <Link key={entry.id} to={playbackHref(entry)} className="usr-row">
-                <div className="usr-row-thumb"><Thumb src={entry.posterUrl} alt={entry.title} /></div>
-                <div className="usr-row-main">
-                  <div className="usr-row-title">{entry.title}</div>
-                  <div className="usr-row-meta">
-                    <span className="usr-chip usr-chip-accent">{entry.providerKey}</span>
-                    {entry.episodeLabel ? <span>{entry.episodeLabel}</span> : null}
-                    {entry.sourceLabel ? <><span className="usr-dot-sep">·</span><span>{entry.sourceLabel}</span></> : null}
-                    {entry.durationSeconds > 0 ? (
-                      <>
-                        <span className="usr-dot-sep">·</span>
-                        <span>{Math.round((entry.positionSeconds / entry.durationSeconds) * 100)}% watched</span>
-                      </>
-                    ) : null}
-                  </div>
+            {day.items.map((title) => {
+              const entry = title.latest;
+              const isOpen = expanded.has(title.key);
+              const percent = entry.durationSeconds > 0
+                ? Math.round((entry.positionSeconds / entry.durationSeconds) * 100)
+                : null;
+              const episodeCount = [...title.episodes.keys()].filter(Boolean).length;
+
+              return (
+                <div key={title.key} className="usr-hist">
+                  <Link to={playbackHref(entry)} className="usr-row usr-hist-main">
+                    <div className="usr-row-thumb"><Thumb src={entry.posterUrl} alt={entry.title} /></div>
+                    <div className="usr-row-main">
+                      <div className="usr-row-title">{entry.title}</div>
+                      <div className="usr-row-meta">
+                        <span className="usr-chip usr-chip-accent">{entry.providerKey}</span>
+                        {entry.episodeLabel ? <span>{entry.episodeLabel}</span> : null}
+                        {percent !== null ? (
+                          <><span className="usr-dot-sep">·</span><span>{percent}% watched</span></>
+                        ) : null}
+                        {episodeCount > 1 ? (
+                          <><span className="usr-dot-sep">·</span><span>{episodeCount} episodes</span></>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="usr-row-time" title={new Date(entry.watchedAt).toLocaleString()}>
+                      {formatClock(entry.watchedAt)}
+                    </div>
+                  </Link>
+
+                  {title.sessions > 1 ? (
+                    <button
+                      type="button"
+                      className="usr-hist-toggle"
+                      aria-expanded={isOpen}
+                      onClick={() => toggle(title.key)}
+                    >
+                      {isOpen ? "Hide" : `${title.sessions} sessions`}
+                    </button>
+                  ) : null}
+
+                  {isOpen ? (
+                    <div className="usr-hist-detail">
+                      {[...title.episodes.values()]
+                        .sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt))
+                        .map((episode) => (
+                          <Link key={episode.id} to={playbackHref(episode)} className="usr-hist-line">
+                            <span>{episode.episodeLabel || entry.title}</span>
+                            <span className="usr-row-time">
+                              {episode.durationSeconds > 0
+                                ? `${Math.round((episode.positionSeconds / episode.durationSeconds) * 100)}% · `
+                                : ""}
+                              {formatRelative(episode.watchedAt)}
+                            </span>
+                          </Link>
+                        ))}
+                    </div>
+                  ) : null}
                 </div>
-                <div className="usr-row-time" title={new Date(entry.watchedAt).toLocaleString()}>
-                  {formatClock(entry.watchedAt)}
-                </div>
-              </Link>
-            ))}
+              );
+            })}
           </div>
         </section>
       )) : (
         <Empty
           title="No watch history"
-          description="Once you play something, every session shows up here grouped by day."
+          description="Once you play something, every session shows up here grouped by title."
           action={<Link to="/" className="usr-btn usr-btn-primary">Browse titles</Link>}
         />
       )}
