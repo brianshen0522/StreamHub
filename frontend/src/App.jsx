@@ -3,6 +3,7 @@ import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome } from "./portal-chrome.js";
+import VideoPlayer from "./VideoPlayer.jsx";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -197,12 +198,10 @@ function App() {
   const [favoriteEntries, setFavoriteEntries] = useState([]);
   const [resumeProgress, setResumeProgress] = useState(null);
   const [markBulkDialog, setMarkBulkDialog] = useState(null);
-  const [bufferedAhead, setBufferedAhead] = useState(0);
   const [nextEpPrompt, setNextEpPrompt] = useState(null);
   const [isPromptDismissed, setIsPromptDismissed] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [hlsInstance, setHlsInstance] = useState(null);
   const videoRef = useRef(null);
-  const videoFrameRef = useRef(null);
   const tRef = useRef(t);
   const restoredFromUrlRef = useRef(false);
   const searchRequestIdRef = useRef(0);
@@ -265,6 +264,7 @@ function App() {
 
     function loadNative(url, mode) {
       setMode(mode);
+      setHlsInstance(null);
       video.src = url;
       void video.play().catch(() => {});
     }
@@ -272,6 +272,7 @@ function App() {
     function loadWithHls(url, mode, onFatalError) {
       const hls = new Hls();
       setMode(mode);
+      setHlsInstance(hls);
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -281,6 +282,31 @@ function App() {
         if (data.fatal) onFatalError?.(hls);
       });
       return hls;
+    }
+
+    // hls.js first: Chrome/Edge on macOS answer "maybe" to canPlayType for
+    // HLS but cannot actually demux it, so trusting the native check strands
+    // playback on DEMUXER_ERROR_COULD_NOT_PARSE. Native is the fallback for
+    // engines without MSE (notably iOS Safari), which really do play HLS.
+    if (Hls.isSupported()) {
+      let fallbackHls = null;
+      const primaryHls = loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+        instance.destroy();
+        if (proxyUrl && directUrl && directUrl !== proxyUrl) {
+          setPlayerError(tRef.current.playbackFallback);
+          fallbackHls = loadWithHls(proxyUrl, "proxy", (proxyInstance) => {
+            setPlayerError(tRef.current.statusError);
+            proxyInstance.destroy();
+          });
+        } else {
+          setPlayerError(tRef.current.statusError);
+        }
+      });
+      return () => {
+        setHlsInstance(null);
+        primaryHls.destroy();
+        fallbackHls?.destroy();
+      };
     }
 
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {
@@ -294,26 +320,6 @@ function App() {
         }
       };
       return () => { video.onerror = null; };
-    }
-
-    if (Hls.isSupported()) {
-      let fallbackHls = null;
-      const primaryHls = loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
-        instance.destroy();
-        if (proxyUrl && directUrl && directUrl !== proxyUrl) {
-          setPlayerError(t.playbackFallback);
-          fallbackHls = loadWithHls(proxyUrl, "proxy", (proxyInstance) => {
-            setPlayerError(tRef.current.statusError);
-            proxyInstance.destroy();
-          });
-        } else {
-          setPlayerError(tRef.current.statusError);
-        }
-      });
-      return () => {
-        primaryHls.destroy();
-        fallbackHls?.destroy();
-      };
     }
 
     setPlayerError(t.statusError);
@@ -402,29 +408,6 @@ function App() {
     video.addEventListener("loadedmetadata", doSeek, { once: true });
     return () => video.removeEventListener("loadedmetadata", doSeek);
   }, [resumeProgress, activeSource]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return undefined;
-    setBufferedAhead(0);
-    function update() {
-      const cur = video.currentTime;
-      const buf = video.buffered;
-      for (let i = 0; i < buf.length; i++) {
-        if (buf.start(i) <= cur + 0.5 && cur <= buf.end(i)) {
-          setBufferedAhead(Math.max(0, buf.end(i) - cur));
-          return;
-        }
-      }
-      setBufferedAhead(0);
-    }
-    video.addEventListener("progress", update);
-    video.addEventListener("timeupdate", update);
-    return () => {
-      video.removeEventListener("progress", update);
-      video.removeEventListener("timeupdate", update);
-    };
-  }, [activeSource]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -517,6 +500,43 @@ function App() {
     };
   }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt]);
 
+  const episodeNeighbours = useMemo(() => {
+    if (itemDetail?.mediaType !== "tv" || !episodes.length) return { prev: null, next: null };
+    const index = episodes.indexOf(selectedEpisode);
+    if (index === -1) return { prev: null, next: null };
+
+    const prev = index > 0 ? { episode: episodes[index - 1], season: null, label: episodes[index - 1] } : null;
+    if (index < episodes.length - 1) {
+      const label = episodes[index + 1];
+      return { prev, next: { episode: label, season: null, label } };
+    }
+
+    // Last episode of a movieffm season rolls over into the next season.
+    if (itemDetail.provider === "movieffm" && Array.isArray(itemDetail.seasons)) {
+      const seasonIndex = itemDetail.seasons.findIndex((season) => season.url === selectedSeason?.url);
+      const nextSeason = itemDetail.seasons[seasonIndex + 1];
+      if (seasonIndex !== -1 && nextSeason) {
+        return { prev, next: { episode: null, season: nextSeason, label: nextSeason.label } };
+      }
+    }
+    return { prev, next: null };
+  }, [itemDetail, episodes, selectedEpisode, selectedSeason]);
+
+  async function goToNeighbour(target) {
+    if (!target || !itemDetail) return;
+    if (target.episode) {
+      await loadEpisodeSources(
+        itemDetail.provider,
+        selectedSeason?.url || itemDetail.seasonUrl || itemDetail.detailUrl,
+        target.episode,
+        itemDetail.title,
+        itemDetail.mediaType,
+      );
+    } else if (target.season) {
+      await handleSelectSeason(target.season);
+    }
+  }
+
   async function handleTriggerNextEpisode(prompt) {
     if (!itemDetail) return;
 
@@ -571,28 +591,6 @@ function App() {
       await handleSelectSeason(prompt.season);
     }
   }
-
-  function handleToggleFullscreen() {
-    const frame = videoFrameRef.current;
-    if (!frame) return;
-    if (!document.fullscreenElement) {
-      void frame.requestFullscreen().catch(() => {});
-    } else {
-      void document.exitFullscreen().catch(() => {});
-    }
-  }
-
-  useEffect(() => {
-    function handleFullscreenChange() {
-      setIsFullscreen(document.fullscreenElement === videoFrameRef.current);
-    }
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    handleFullscreenChange();
-    return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-    };
-  }, []);
 
   // Countdown effect for auto-play
   useEffect(() => {
@@ -1365,52 +1363,42 @@ function App() {
               {/* Player */}
               <div className="detail-right">
                 <div className="player-card">
-                  <div className="video-frame" ref={videoFrameRef} onDoubleClick={handleToggleFullscreen}>
-                    <video ref={videoRef} controls controlsList="nofullscreen" playsInline />
-                    {nextEpPrompt && (
+                  <VideoPlayer
+                    videoRef={videoRef}
+                    hls={hlsInstance}
+                    t={t}
+                    title={itemDetail?.title || selectedItem.title}
+                    subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}
+                    onPrev={itemDetail?.mediaType === "tv" ? () => goToNeighbour(episodeNeighbours.prev) : null}
+                    onNext={itemDetail?.mediaType === "tv" ? () => goToNeighbour(episodeNeighbours.next) : null}
+                    prevLabel={episodeNeighbours.prev?.label}
+                    nextLabel={episodeNeighbours.next?.label}
+                    blocked={!activeSource ? (
+                      <>
+                        {sourcesLoading && <div className="spinner" />}
+                        <p>{sourcesLoading ? t.loadingSources : t.noSources}</p>
+                      </>
+                    ) : null}
+                    overlay={nextEpPrompt ? (
                       <div className="autoplay-prompt">
                         <div className="prompt-header">
                           <span className="prompt-title">{t.upNext}: {nextEpPrompt.episode || nextEpPrompt.season?.label}</span>
                           <button type="button" className="prompt-close" onClick={() => { setNextEpPrompt(null); setIsPromptDismissed(true); }}>×</button>
                         </div>
                         <div className="prompt-progress">
-                          <div
-                            className="prompt-progress-bar"
-                            style={{ width: `${(nextEpPrompt.countdown / 120) * 100}%` }}
-                          />
+                          <div className="prompt-progress-bar" style={{ width: `${(nextEpPrompt.countdown / 120) * 100}%` }} />
                         </div>
                         <div className="prompt-actions">
-                          <button
-                            type="button"
-                            className="btn-play-now"
-                            onClick={() => handleTriggerNextEpisode(nextEpPrompt)}
-                          >
+                          <button type="button" className="btn-play-now" onClick={() => handleTriggerNextEpisode(nextEpPrompt)}>
                             {t.playNow} ({nextEpPrompt.countdown}s)
                           </button>
-                          <button
-                            type="button"
-                            className="btn-cancel-autoplay"
-                            onClick={() => { setNextEpPrompt(null); setIsPromptDismissed(true); }}
-                          >
+                          <button type="button" className="btn-cancel-autoplay" onClick={() => { setNextEpPrompt(null); setIsPromptDismissed(true); }}>
                             {t.cancelAutoPlay}
                           </button>
                         </div>
                       </div>
-                    )}
-                    {!activeSource && (
-                      <div className="video-blocked">
-                        {sourcesLoading && <div className="spinner" />}
-                        <p>{sourcesLoading ? t.loadingSources : t.noSources}</p>
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-fullscreen-toggle"
-                    onClick={handleToggleFullscreen}
-                  >
-                    {isFullscreen ? t.exitFullscreen : t.enterFullscreen}
-                  </button>
+                    ) : null}
+                  />
                   {playerError && <div className="error-box">{playerError}</div>}
                   {activeSource ? (
                     <div className="player-meta">
@@ -1425,9 +1413,6 @@ function App() {
                       <p>
                         {t.playbackMode}: {playbackMode === "proxy" ? t.playbackProxy : t.playbackDirect}
                       </p>
-                      {bufferedAhead > 0 && (
-                        <p>{t.bufferedAhead}: {formatSourceDuration(bufferedAhead, t)}</p>
-                      )}
                       <button
                         type="button"
                         className={`btn-mark-watched ${currentEpIsCompleted ? "is-completed" : ""}`}
