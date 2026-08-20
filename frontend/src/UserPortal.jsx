@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { PortalChromeContext } from "./portal-chrome.js";
+import { subscribeRealtime } from "./realtime.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import "./portal.css";
 
@@ -111,6 +112,16 @@ function posterProxyUrl(url) {
   } catch {
     return "";
   }
+}
+
+/**
+ * Refetch when another tab (or another device) changes the library. The server
+ * only says what changed, so reloading is simpler and always correct.
+ */
+function useLiveRefresh(matches, reload) {
+  useEffect(() => subscribeRealtime((event) => {
+    if (matches(event)) reload();
+  }), [matches, reload]);
 }
 
 /* ── primitives ────────────────────────────────────────────── */
@@ -247,6 +258,7 @@ function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useLiveRefresh(useCallback((event) => event.type === "favorites", []), load);
   useEffect(() => {
     setTopbar({
       title: "Favorites",
@@ -313,6 +325,7 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useLiveRefresh(useCallback((event) => event.type === "progress", []), load);
   useEffect(() => {
     setTopbar({
       title: "Continue watching",
@@ -633,6 +646,9 @@ export default function UserPortal({ session, setSession, onLogout }) {
   }, []);
 
   useEffect(() => { loadCounts(); }, [loadCounts]);
+  useEffect(() => subscribeRealtime((event) => {
+    if (event.type === "favorites" || event.type === "progress") loadCounts();
+  }), [loadCounts]);
 
   const chromeValue = useMemo(() => ({ setChrome }), []);
 

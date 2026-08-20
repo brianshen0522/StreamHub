@@ -1,4 +1,5 @@
 import "dotenv/config";
+import http from "node:http";
 import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
@@ -18,6 +19,7 @@ import {
 import { prisma } from "./db.js";
 import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./middleware.js";
 import { startMonitoring } from "./monitoring.js";
+import { attachRealtime, broadcast } from "./realtime.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
   adminResetPasswordSchema,
@@ -348,6 +350,7 @@ app.post("/api/me/favorites", requireAuth(), forbidAdminPlayback(), asyncHandler
       episodeLabel: sanitizeKeyString(payload.episodeLabel),
     },
   });
+  broadcast(request.auth.user.id, { type: "favorites", action: "added", id: favorite.id });
   response.status(201).json({ favorite });
 }));
 
@@ -358,6 +361,7 @@ app.delete("/api/me/favorites/:id", requireAuth(), forbidAdminPlayback(), asyncH
       userId: request.auth.user.id,
     },
   });
+  broadcast(request.auth.user.id, { type: "favorites", action: "removed", id: request.params.id });
   response.json({ ok: true });
 }));
 
@@ -461,6 +465,7 @@ app.delete("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandle
   await prisma.watchProgress.deleteMany({
     where: { userId: request.auth.user.id, providerKey, itemUrl, seasonUrl, episodeLabel },
   });
+  broadcast(request.auth.user.id, { type: "progress", action: "removed" });
   response.json({ ok: true });
 }));
 
@@ -528,6 +533,13 @@ app.put("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(a
     });
   }
 
+  broadcast(request.auth.user.id, {
+    type: "progress",
+    action: "updated",
+    // A history row is only written for meaningful events, so tell listeners
+    // whether the history view needs refreshing too.
+    history: payload.event !== "progress" || positionSeconds >= 60,
+  });
   response.json({ progress });
 }));
 
@@ -1085,7 +1097,10 @@ app.use((error, _request, response, _next) => {
 async function main() {
   await ensureBootstrapped();
   startMonitoring();
-  app.listen(PORT, () => {
+
+  const server = http.createServer(app);
+  attachRealtime(server);
+  server.listen(PORT, () => {
     console.log(`StreamHub server listening on port ${PORT}`);
   });
 }

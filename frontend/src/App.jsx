@@ -5,6 +5,7 @@ import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome } from "./portal-chrome.js";
 import VideoPlayer from "./VideoPlayer.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
+import { subscribeRealtime } from "./realtime.js";
 import { canStreamToDisk, downloadStream } from "./download.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
@@ -467,6 +468,20 @@ function App() {
       cancelled = true;
     };
   }, [currentPlaybackPayload]);
+
+  // Another tab (or device) may star this title or clear its progress; keep the
+  // heart and the resume point in step without a reload.
+  useEffect(() => subscribeRealtime((event) => {
+    if (event.type !== "favorites" && event.type !== "progress") return;
+    apiJson("/api/me/favorites")
+      .then((data) => setFavoriteEntries(data.favorites || []))
+      .catch(() => {});
+    if (selectedItem) {
+      fetchItemProgress(selectedItem.provider, selectedItem.url)
+        .then(setItemProgressMap)
+        .catch(() => {});
+    }
+  }), [selectedItem]);
 
   useEffect(() => {
     const video = videoRef.current;
