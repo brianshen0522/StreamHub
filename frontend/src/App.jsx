@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
+import { usePortalChrome } from "./portal-chrome.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -1156,51 +1157,54 @@ function App() {
     setFavoriteEntries((current) => [data.favorite, ...current.filter((entry) => entry.id !== data.favorite.id)]);
   }
 
-  return (
-    <div className="app-shell">
-
-      {/* ── Navbar ───────────────────────────────────────────── */}
-      <nav className="navbar">
-        <button type="button" className="logo" onClick={handleGoHome}>StreamHub</button>
-
-        <form className="navbar-search" onSubmit={handleSearch}>
+  // The portal owns the only top bar; Browse projects its controls into it.
+  usePortalChrome(() => (
+    <div className="usr-chrome">
+      <form className="usr-searchform" onSubmit={handleSearch}>
+        <div className="usr-searchbox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m20 20-3.6-3.6" />
+          </svg>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t.searchPlaceholder}
+            aria-label={t.searchPlaceholder}
           />
-          <button type="submit" className="btn-search" disabled={searching}>
-            {searching ? t.loadingResults : t.searchButton}
-          </button>
-        </form>
-
-        <div className="navbar-controls">
-          <div className="lang-switch">
-            <button type="button" className={language === "zh-TW" ? "active" : ""} onClick={() => setLanguage("zh-TW")}>
-              繁中
-            </button>
-            <button type="button" className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")}>
-              EN
-            </button>
-          </div>
         </div>
-        {!selectedItem && (
-          <div className="provider-filter-row">
-            <div className="segmented">
-              {providerFilterOptions.map((option) => (
-                <button
-                  type="button"
-                  key={option}
-                  className={providerFilter === option ? "active" : ""}
-                  onClick={() => setProviderFilter(option)}
-                >
-                  {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : option === "777tv" ? t.provider777tv : t.providerDramasq}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </nav>
+        <button type="submit" className="usr-btn usr-btn-primary" disabled={searching}>
+          {searching ? t.loadingResults : t.searchButton}
+        </button>
+      </form>
+
+      <div className="usr-topbar-spacer" />
+
+      {!selectedItem && providerFilterOptions.length > 1 && (
+        <div className="usr-seg" role="group" aria-label={t.providerFilter}>
+          {providerFilterOptions.map((option) => (
+            <button
+              type="button"
+              key={option}
+              className={providerFilter === option ? "is-active" : ""}
+              onClick={() => setProviderFilter(option)}
+            >
+              {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : option === "777tv" ? t.provider777tv : t.providerDramasq}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="usr-lang" role="group" aria-label="Language">
+        <button type="button" className={language === "zh-TW" ? "is-active" : ""} onClick={() => setLanguage("zh-TW")}>繁中</button>
+        <button type="button" className={language === "en" ? "is-active" : ""} onClick={() => setLanguage("en")}>EN</button>
+      </div>
+    </div>
+  ), [query, searching, selectedItem, providerFilter, providerFilterOptions, language, t]);
+
+  return (
+    <div className="app-shell">
+
 
       {/* ── Main ─────────────────────────────────────────────── */}
       <main className="main-content">
@@ -1468,22 +1472,24 @@ function App() {
                       <button
                         type="button"
                         key={`${item.provider}:${item.url}`}
-                        className={`poster-card ${selectedItem?.url === item.url ? "active" : ""}`}
+                        className={`result-card ${selectedItem?.url === item.url ? "active" : ""}`}
                         onClick={() => handleSelectItem(item)}
                       >
-                        <PosterImage
-                          src={item.posterUrl}
-                          alt={item.title}
-                          className="poster-img"
-                          fallbackClassName="poster-fallback"
-                        />
-                        <div className="poster-overlay">
-                          <div className="overlay-chips">
+                        <span className="result-card-art">
+                          <PosterImage
+                            src={item.posterUrl}
+                            alt={item.title}
+                            className="poster-img"
+                            fallbackClassName="poster-fallback"
+                          />
+                          <span className="result-card-chips">
                             <span className="chip chip-accent">{item.provider}</span>
-                            <span className="chip">{normalizeMediaTypeLabel(item.mediaType, t)}</span>
-                          </div>
-                          <p className="overlay-title">{item.title}</p>
-                        </div>
+                          </span>
+                        </span>
+                        <span className="result-card-text">
+                          <span className="result-card-title">{item.title}</span>
+                          <span className="result-card-meta">{normalizeMediaTypeLabel(item.mediaType, t)}</span>
+                        </span>
                       </button>
                     ))}
                   </div>

@@ -58,6 +58,12 @@ export const translations = {
     markNextConfirm: "是否同時將之後所有集數標記為未看？",
     yes: "是",
     no: "否",
+    navBrowse: "瀏覽",
+    navContinue: "繼續觀看",
+    navFavorites: "我的收藏",
+    navHistory: "觀看紀錄",
+    navProfile: "個人資料",
+    logout: "登出",
   },
   en: {
     appTag: "Search and play across providers",
@@ -118,6 +124,12 @@ export const translations = {
     markNextConfirm: "Also mark all following episodes as unwatched?",
     yes: "Yes",
     no: "No",
+    navBrowse: "Browse",
+    navContinue: "Continue",
+    navFavorites: "Favorites",
+    navHistory: "History",
+    navProfile: "Profile",
+    logout: "Sign out",
   },
 };
 
