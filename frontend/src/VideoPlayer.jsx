@@ -27,6 +27,8 @@ const IconChevronLeft = () => <svg {...sp}><path d="M14.5 5 8 12l6.5 7" /></svg>
 const IconChevronRight = () => <svg {...sp}><path d="M9.5 5 16 12l-6.5 7" /></svg>;
 const IconKeyboard = () => <svg {...sp}><rect x="2" y="6" width="20" height="12" rx="2.5" /><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.6h.01M9.5 13.6h5M18 13.6h.01" /></svg>;
 const IconClose = () => <svg {...sp}><path d="M18 6 6 18M6 6l12 12" /></svg>;
+const IconDownload = () => <svg {...sp}><path d="M12 3.5v11M7.8 10.5 12 14.7l4.2-4.2" /><path d="M4.5 16v2.5A2 2 0 0 0 6.5 20.5h11a2 2 0 0 0 2-2V16" /></svg>;
+const IconStop = () => <svg {...sp}><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" /></svg>;
 
 /* ── helpers ───────────────────────────────────────────────── */
 
@@ -78,6 +80,9 @@ export default function VideoPlayer({
   nextLabel,
   adCuts,
   onCreatePreview,
+  onDownload,
+  download,
+  downloadStreamsToDisk,
   t,
 }) {
   const frameRef = useRef(null);
@@ -595,6 +600,13 @@ export default function VideoPlayer({
         </div>
       ) : null}
 
+      {download && !download.active && (download.label || download.error) ? (
+        <div className={`vp-dl-note${download.error ? " is-error" : ""}`}>
+          {download.error ? <IconClose /> : <IconDownload />}
+          <span>{download.error || download.label}</span>
+        </div>
+      ) : null}
+
       <div className="vp-controls" onPointerMove={wake}>
         <div
           ref={seekRef}
@@ -851,7 +863,20 @@ export default function VideoPlayer({
             ) : null}
           </div>
 
-
+          {onDownload ? (
+            <button
+              type="button"
+              className={`vp-btn${download?.active ? " vp-btn-wide is-on" : ""}`}
+              onClick={onDownload}
+              title={download?.active
+                ? t.dlCancel
+                : downloadStreamsToDisk ? t.dlDownload : t.dlDownloadMemory}
+              aria-label={download?.active ? t.dlCancel : t.dlDownload}
+            >
+              {download?.active ? <IconStop /> : <IconDownload />}
+              {download?.active ? <span>{download.label}</span> : null}
+            </button>
+          ) : null}
 
           {document.pictureInPictureEnabled ? (
             <button type="button" className={`vp-btn vp-hide-sm${pip ? " is-on" : ""}`} onClick={togglePip} title={`${t.vpPip} (P)`} aria-label={t.vpPip}>

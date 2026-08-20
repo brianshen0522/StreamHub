@@ -5,6 +5,7 @@ import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome } from "./portal-chrome.js";
 import VideoPlayer from "./VideoPlayer.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
+import { canStreamToDisk, downloadStream } from "./download.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -273,6 +274,8 @@ function App() {
   const [isPromptDismissed, setIsPromptDismissed] = useState(false);
   const [hlsInstance, setHlsInstance] = useState(null);
   const [adCuts, setAdCuts] = useState([]);
+  const [download, setDownload] = useState(null);
+  const downloadAbortRef = useRef(null);
   const videoRef = useRef(null);
   const tRef = useRef(t);
   const restoredFromUrlRef = useRef(false);
@@ -576,6 +579,66 @@ function App() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt]);
+
+  const handleDownload = useCallback(async () => {
+    if (download?.active) {
+      downloadAbortRef.current?.abort();
+      return;
+    }
+    if (!activeSource) return;
+
+    const url = activeSource.directUrl || activeSource.url || activeSource.proxyUrl;
+    if (!url) return;
+
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
+    setDownload({ active: true, percent: 0, label: t.dlPreparing });
+
+    const name = [
+      itemDetail?.title || selectedItem?.title,
+      selectedEpisode,
+      activeSource.sourceLabel,
+    ].filter(Boolean).join(" ");
+
+    try {
+      const result = await downloadStream({
+        url,
+        fileName: name,
+        signal: controller.signal,
+        onProgress: ({ phase, done, total, bytes }) => {
+          if (phase === "playlist") {
+            setDownload({ active: true, percent: 0, label: t.dlPreparing });
+            return;
+          }
+          const percent = total ? Math.round((done / total) * 100) : 0;
+          setDownload({
+            active: phase !== "done",
+            percent,
+            label: `${percent}% · ${(bytes / 1048576).toFixed(0)} MB`,
+          });
+        },
+      });
+      setDownload({
+        active: false,
+        percent: 100,
+        label: result.removedSeconds
+          ? t.dlDoneNoAds.replace("{s}", Math.round(result.removedSeconds))
+          : t.dlDone,
+      });
+    } catch (error) {
+      // A cancelled save-picker or an aborted transfer is not a failure.
+      const cancelled = error?.name === "AbortError" || error?.name === "NotAllowedError";
+      setDownload(cancelled ? null : { active: false, percent: 0, error: error.message });
+    } finally {
+      downloadAbortRef.current = null;
+    }
+  }, [download, activeSource, itemDetail, selectedItem, selectedEpisode, t]);
+
+  // Clear any finished/failed notice when the episode or source changes.
+  useEffect(() => {
+    downloadAbortRef.current?.abort();
+    setDownload(null);
+  }, [activeSource]);
 
   // Builds the scrub-preview stream. Kept here because App owns hls.js and the
   // ad filter — the preview must use the *same* filter or its timeline would be
@@ -1502,6 +1565,9 @@ function App() {
                     hls={hlsInstance}
                     adCuts={adCuts}
                     onCreatePreview={createPreview}
+                    onDownload={handleDownload}
+                    download={download}
+                    downloadStreamsToDisk={canStreamToDisk()}
                     t={t}
                     title={itemDetail?.title || selectedItem.title}
                     subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}
