@@ -533,7 +533,7 @@ app.put("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(a
 
 app.get("/api/admin/dashboard", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (_request, response) => {
   const onlineThreshold = getOnlineThresholdDate();
-  const [providerRows, recentChecks, userCounts, onlineUsers, activeSessions, recentWatching, recentLogins] = await Promise.all([
+  const [providerRows, recentChecks, userCounts, onlineUsers, activeSessions, onlineUserList, recentWatching, recentLogins] = await Promise.all([
     prisma.provider.findMany({
       include: {
         healthChecks: {
@@ -598,7 +598,7 @@ app.get("/api/admin/dashboard", requireAuth(), requireRole(UserRole.ADMIN), asyn
         lastSeenAt: true,
         status: true,
       },
-      orderBy: { lastLoginAt: "desc" },
+      orderBy: { lastLoginAt: { sort: "desc", nulls: "last" } },
       take: 10,
     }),
   ]);
@@ -620,7 +620,7 @@ app.get("/api/admin/dashboard", requireAuth(), requireRole(UserRole.ADMIN), asyn
       online: onlineUsers,
       activeSessions,
     },
-    onlineUsers,
+    onlineUsers: onlineUserList,
     recentProviderChecks: recentChecks,
     recentWatching,
     recentLogins,
