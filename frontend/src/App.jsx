@@ -48,9 +48,18 @@ function normalizeMediaTypeLabel(mediaType, t) {
   return mediaType === "movie" ? t.typeMovie : t.typeTv;
 }
 
+/**
+ * Providers sometimes list one stream under two labels, so a source is only
+ * identified by label *and* URL together — comparing URLs alone highlighted
+ * both rows as playing.
+ */
+function sourceKey(source) {
+  return source ? `${source.sourceLabel}:${source.url}` : "";
+}
+
 function getSourcePlaybackMode(source, activeSource, playbackMode) {
   if (!source) return "";
-  if (activeSource?.url === source.url) return playbackMode || "direct";
+  if (sourceKey(activeSource) === sourceKey(source)) return playbackMode || "direct";
   return "direct";
 }
 
@@ -139,13 +148,74 @@ function getResumeEpisode(episodes, seasonUrl, progressMap) {
   return last.episodeLabel;
 }
 
+// Most sources for an episode are the same encode, so the most common runtime
+// is the true content length. Sources that run longer are carrying ads the
+// playlist filter could not identify (they serve ad segments from the same
+// directory as the feature), and shorter ones are truncated rips.
+const MIN_MODAL_AGREEMENT = 2;
+const SOURCE_PICK_GRACE_MS = 2500;
+
+function modalDuration(list) {
+  const counts = new Map();
+  for (const source of list) {
+    const seconds = source.durationSeconds;
+    if (Number.isFinite(seconds) && seconds > 0) counts.set(seconds, (counts.get(seconds) || 0) + 1);
+  }
+  let best = null;
+  let bestCount = 0;
+  for (const [seconds, count] of counts) {
+    if (count > bestCount || (count === bestCount && best !== null && seconds < best)) {
+      best = seconds;
+      bestCount = count;
+    }
+  }
+  return bestCount >= MIN_MODAL_AGREEMENT ? best : null;
+}
+
 function insertSourceSorted(prev, source) {
   const next = [...prev, source];
+  const modal = modalDuration(next);
   return next.sort((a, b) => {
+    if (modal) {
+      const aOff = Math.abs((Number.isFinite(a.durationSeconds) ? a.durationSeconds : 0) - modal);
+      const bOff = Math.abs((Number.isFinite(b.durationSeconds) ? b.durationSeconds : 0) - modal);
+      if (aOff !== bOff) return aOff - bOff;
+      // Same distance from the consensus: proven-clean ahead of presumed-clean.
+      const aProven = (a.adSeconds || 0) > 0 ? 0 : 1;
+      const bProven = (b.adSeconds || 0) > 0 ? 0 : 1;
+      if (aProven !== bProven) return aProven - bProven;
+    }
     const aDur = Number.isFinite(a.durationSeconds) ? a.durationSeconds : -1;
     const bDur = Number.isFinite(b.durationSeconds) ? b.durationSeconds : -1;
     return bDur - aDur;
   });
+}
+
+/**
+ * `arrived` keeps stream order so ties resolve to whichever responded first.
+ *
+ * Matching the modal runtime is the primary gate: a source carrying ads the
+ * filter cannot see runs longer than the consensus, and that holds even for
+ * sources where *some* ads were detected — 5 of 18 sampled still sat 12-15s
+ * above the modal after stripping, so `adSeconds > 0` alone is not a safe
+ * signal. Within the modal group it does earn a tiebreak though: ads seen and
+ * removed is proof of a clean result, where `adSeconds === 0` is only an
+ * absence of evidence.
+ */
+function pickAutoSource(arrived, preferredLabel) {
+  if (preferredLabel) {
+    const preferred = arrived.find((source) => source.sourceLabel === preferredLabel);
+    if (preferred) return { source: preferred, fromPreference: true };
+  }
+  const modal = modalDuration(arrived);
+  if (modal) {
+    const onModal = arrived.filter((source) => source.durationSeconds === modal);
+    if (onModal.length) {
+      const proven = onModal.find((source) => (source.adSeconds || 0) > 0);
+      return { source: proven || onModal[0], fromPreference: false };
+    }
+  }
+  return { source: arrived[0] || null, fromPreference: false };
 }
 
 function posterProxyUrl(url) {
@@ -766,8 +836,22 @@ function App() {
     setAutoSelectedFromPreference(false);
 
     const preferredLabel = await fetchPreferredSourceLabel(provider, mediaType, title);
-    let firstSource = null;
+    // Give slow-but-clean sources a brief chance to arrive before committing,
+    // instead of always playing whichever responded first.
+    const arrived = [];
     let activeSelected = false;
+    let graceTimer = null;
+
+    function commitSelection() {
+      if (activeSelected || controller.signal.aborted || !arrived.length) return;
+      activeSelected = true;
+      window.clearTimeout(graceTimer);
+      const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+      if (source) {
+        setActiveSource(source);
+        setAutoSelectedFromPreference(fromPreference);
+      }
+    }
 
     try {
       await apiNdjsonStream(
@@ -775,23 +859,21 @@ function App() {
         { method: "POST", body: JSON.stringify({ streams, provider, preferredLabel }), signal: controller.signal },
         (source) => {
           const normalized = normalizeSourceItem(source);
+          arrived.push(normalized);
           setSources((prev) => insertSourceSorted(prev, normalized));
-          if (!firstSource) firstSource = normalized;
-          if (!activeSelected) {
-            if (!preferredLabel || normalized.sourceLabel === preferredLabel) {
-              setActiveSource(normalized);
-              setAutoSelectedFromPreference(!!preferredLabel);
-              activeSelected = true;
-            }
+          // An exact preference hit needs no further waiting.
+          if (preferredLabel && normalized.sourceLabel === preferredLabel) {
+            commitSelection();
+            return;
           }
+          if (!graceTimer) graceTimer = window.setTimeout(commitSelection, SOURCE_PICK_GRACE_MS);
         },
       );
-      if (!activeSelected && firstSource) {
-        setActiveSource(firstSource);
-      }
+      commitSelection();
     } catch (sourceError) {
       if (sourceError.name !== "AbortError") setError(sourceError.message);
     } finally {
+      window.clearTimeout(graceTimer);
       setSourcesLoading(false);
     }
   }
@@ -811,8 +893,22 @@ function App() {
     setAutoSelectedFromPreference(false);
 
     const preferredLabel = await fetchPreferredSourceLabel(provider, mediaType, title);
-    let firstSource = null;
+    // Give slow-but-clean sources a brief chance to arrive before committing,
+    // instead of always playing whichever responded first.
+    const arrived = [];
     let activeSelected = false;
+    let graceTimer = null;
+
+    function commitSelection() {
+      if (activeSelected || controller.signal.aborted || !arrived.length) return;
+      activeSelected = true;
+      window.clearTimeout(graceTimer);
+      const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+      if (source) {
+        setActiveSource(source);
+        setAutoSelectedFromPreference(fromPreference);
+      }
+    }
 
     try {
       await apiNdjsonStream(
@@ -820,23 +916,21 @@ function App() {
         { signal: controller.signal },
         (source) => {
           const normalized = normalizeSourceItem(source);
+          arrived.push(normalized);
           setSources((prev) => insertSourceSorted(prev, normalized));
-          if (!firstSource) firstSource = normalized;
-          if (!activeSelected) {
-            if (!preferredLabel || normalized.sourceLabel === preferredLabel) {
-              setActiveSource(normalized);
-              setAutoSelectedFromPreference(!!preferredLabel);
-              activeSelected = true;
-            }
+          // An exact preference hit needs no further waiting.
+          if (preferredLabel && normalized.sourceLabel === preferredLabel) {
+            commitSelection();
+            return;
           }
+          if (!graceTimer) graceTimer = window.setTimeout(commitSelection, SOURCE_PICK_GRACE_MS);
         },
       );
-      if (!activeSelected && firstSource) {
-        setActiveSource(firstSource);
-      }
+      commitSelection();
     } catch (sourceError) {
       if (sourceError.name !== "AbortError") setError(sourceError.message);
     } finally {
+      window.clearTimeout(graceTimer);
       setSourcesLoading(false);
     }
   }
@@ -1353,8 +1447,8 @@ function App() {
                       return (
                         <button
                           type="button"
-                          key={`${source.sourceLabel}:${source.url}`}
-                          className={`source-item ${activeSource?.url === source.url ? "active" : ""}`}
+                          key={sourceKey(source)}
+                          className={`source-item ${sourceKey(activeSource) === sourceKey(source) ? "active" : ""}`}
                           onClick={() => handleSelectSource(source)}
                         >
                           <span className={`mode-dot ${mode === "proxy" ? "proxy" : "direct"}`} />
