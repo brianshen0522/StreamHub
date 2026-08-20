@@ -1,5 +1,6 @@
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
+import { analyzePlaylist } from "./utils/adfilter.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -142,39 +143,51 @@ async function fetchTextSnippet(url, maxBytes = 256_000) {
 async function inspectM3u8Metadata(url, depth = 0) {
   const text = await fetchTextSnippet(url);
   if (!isValidM3u8Content(text)) {
-    return { durationSeconds: null, playlistType: "invalid" };
+    return { durationSeconds: null, adSeconds: 0, playlistType: "invalid" };
   }
 
   const durationSeconds = parseM3u8DurationSeconds(text);
   if (durationSeconds !== null) {
-    return { durationSeconds, playlistType: "media" };
+    // Match the player, which strips spliced ad segments before playback —
+    // otherwise the source list advertises a longer runtime than the timeline.
+    const { contentSeconds, adSeconds } = analyzePlaylist(text, url);
+    return {
+      durationSeconds: adSeconds > 0 ? Math.round(contentSeconds) : durationSeconds,
+      adSeconds: Math.round(adSeconds),
+      playlistType: "media",
+    };
   }
 
   if (depth >= 1) {
-    return { durationSeconds: null, playlistType: "master" };
+    return { durationSeconds: null, adSeconds: 0, playlistType: "master" };
   }
 
   const variantUrls = extractVariantPlaylistUrls(url, text);
   if (variantUrls.length === 0) {
-    return { durationSeconds: null, playlistType: "master" };
+    return { durationSeconds: null, adSeconds: 0, playlistType: "master" };
   }
 
   const inspectedVariants = await Promise.all(
     variantUrls.slice(0, 5).map(async (variantUrl) => {
       try {
-        const variant = await inspectM3u8Metadata(variantUrl, depth + 1);
-        return variant.durationSeconds;
+        return await inspectM3u8Metadata(variantUrl, depth + 1);
       } catch {
         return null;
       }
     }),
   );
 
-  const longest = inspectedVariants.reduce((current, value) => (
-    Number.isFinite(value) && value > (current ?? -1) ? value : current
+  const longest = inspectedVariants.filter(Boolean).reduce((current, variant) => (
+    Number.isFinite(variant.durationSeconds) && variant.durationSeconds > (current?.durationSeconds ?? -1)
+      ? variant
+      : current
   ), null);
 
-  return { durationSeconds: longest, playlistType: "master" };
+  return {
+    durationSeconds: longest?.durationSeconds ?? null,
+    adSeconds: longest?.adSeconds ?? 0,
+    playlistType: "master",
+  };
 }
 
 export async function getStreamMetadata(stream) {
@@ -183,15 +196,16 @@ export async function getStreamMetadata(stream) {
     return { ...stream, ...cached };
   }
 
-  let metadata = { durationSeconds: null };
+  let metadata = { durationSeconds: null, adSeconds: 0 };
   if (stream.url.toLowerCase().includes(".m3u8")) {
     try {
       const inspected = await inspectM3u8Metadata(stream.url);
       metadata = {
         durationSeconds: Number.isFinite(inspected.durationSeconds) ? inspected.durationSeconds : null,
+        adSeconds: inspected.adSeconds || 0,
       };
     } catch {
-      metadata = { durationSeconds: null };
+      metadata = { durationSeconds: null, adSeconds: 0 };
     }
   }
 

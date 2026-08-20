@@ -418,6 +418,7 @@ a { color: inherit; }
 .player-meta { display:flex; flex-direction:column; gap:4px; }
 .player-meta p { font-size: 0.8rem; color: var(--t3); }
 .player-meta strong { color: var(--t2); }
+.meta-ad-note { color: #ffc400; }
 
 .error-box {
   padding: 11px 15px;

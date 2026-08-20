@@ -1419,6 +1419,11 @@ function App() {
                       </p>
                       <p>
                         {formatSourceDuration(activeSource.durationSeconds, t)}
+                        {activeSource.adSeconds > 0 ? (
+                          <span className="meta-ad-note">
+                            {" · "}{t.metaAdsExcluded.replace("{s}", activeSource.adSeconds)}
+                          </span>
+                        ) : null}
                       </p>
                       <p>
                         {t.playbackMode}: {playbackMode === "proxy" ? t.playbackProxy : t.playbackDirect}
