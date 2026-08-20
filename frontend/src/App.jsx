@@ -577,6 +577,37 @@ function App() {
     };
   }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt]);
 
+  // Builds the scrub-preview stream. Kept here because App owns hls.js and the
+  // ad filter — the preview must use the *same* filter or its timeline would be
+  // offset from the main one by the stripped ad seconds.
+  const createPreview = useCallback((video) => {
+    if (!activeSource) return null;
+    const directUrl = activeSource.directUrl || activeSource.url;
+    const proxyUrl = activeSource.proxyUrl;
+    const url = playbackMode === "proxy" ? (proxyUrl || directUrl) : (directUrl || proxyUrl);
+    if (!url) return null;
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        pLoader: createAdFilterLoader(Hls, () => {}),
+        // Preview only ever seeks, so keep it from buffering ahead.
+        maxBufferLength: 4,
+        maxMaxBufferLength: 6,
+        backBufferLength: 0,
+        startLevel: 0,
+      });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      return () => { try { hls.destroy(); } catch { /* already destroyed */ } };
+    }
+
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = url;
+      return () => { video.removeAttribute("src"); video.load(); };
+    }
+    return null;
+  }, [activeSource, playbackMode]);
+
   const episodeNeighbours = useMemo(() => {
     if (itemDetail?.mediaType !== "tv" || !episodes.length) return { prev: null, next: null };
     const index = episodes.indexOf(selectedEpisode);
@@ -1470,6 +1501,7 @@ function App() {
                     videoRef={videoRef}
                     hls={hlsInstance}
                     adCuts={adCuts}
+                    onCreatePreview={createPreview}
                     t={t}
                     title={itemDetail?.title || selectedItem.title}
                     subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}

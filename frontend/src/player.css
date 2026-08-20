@@ -381,8 +381,39 @@
   font-weight: 600;
   white-space: nowrap;
   pointer-events: none;
+  text-align: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
 }
 
+.vp-seek-tip.is-visible { opacity: 1; visibility: visible; }
+
+.vp-seek-tip.has-preview {
+  padding: 4px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.92);
+}
+
+.vp-seek-thumb-box {
+  width: 160px;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 3px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+}
+
+.vp-seek-thumb-box[hidden] { display: none; }
+
+.vp-seek-thumb-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vp-seek-tip-time { line-height: 1.4; }
 
 /* ── volume ────────────────────────────────────────────────── */
 

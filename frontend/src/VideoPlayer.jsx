@@ -77,6 +77,7 @@ export default function VideoPlayer({
   prevLabel,
   nextLabel,
   adCuts,
+  onCreatePreview,
   t,
 }) {
   const frameRef = useRef(null);
@@ -84,6 +85,10 @@ export default function VideoPlayer({
   const idleTimer = useRef(null);
   const flashTimer = useRef(null);
   const tapRef = useRef({ time: 0, side: null });
+  const previewVideoRef = useRef(null);
+  const previewCleanupRef = useRef(null);
+  const previewSeekTimer = useRef(null);
+  const previewIdleTimer = useRef(null);
 
   const [videoEl, setVideoEl] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -110,6 +115,8 @@ export default function VideoPlayer({
   const [autoLevel, setAutoLevel] = useState(-1);
   const [subtitles, setSubtitles] = useState([]);
   const [subtitleTrack, setSubtitleTrack] = useState(-1);
+  const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
 
   const attachRef = useCallback((node) => {
     videoRef.current = node;
@@ -386,6 +393,58 @@ export default function VideoPlayer({
   }, [videoEl, togglePlay, seekBy, seekTo, applyVolume, toggleMute, toggleFullscreen, togglePip,
       selectSubtitle, subtitles.length, subtitleTrack, applyRate, rate, menu, showHelp, wake, showFlash]);
 
+  /* ── hover scrub preview ──────────────────────────────────── */
+
+  // These streams carry no I-frame or image playlist, so a preview frame can
+  // only come from decoding the media itself. A second, muted video element
+  // is attached lazily on first mouse hover and seeked to the hovered time.
+
+  const PREVIEW_SNAP_SECONDS = 2;
+  const PREVIEW_DEBOUNCE_MS = 120;
+  const PREVIEW_IDLE_MS = 20_000;
+
+  const teardownPreview = useCallback(() => {
+    window.clearTimeout(previewSeekTimer.current);
+    window.clearTimeout(previewIdleTimer.current);
+    try { previewCleanupRef.current?.(); } catch { /* already gone */ }
+    previewCleanupRef.current = null;
+    setPreviewEnabled(false);
+    setPreviewFailed(false);
+  }, []);
+
+  // A new source means a new preview stream.
+  useEffect(() => teardownPreview, [onCreatePreview, teardownPreview]);
+
+  const ensurePreview = useCallback(() => {
+    if (!onCreatePreview || previewFailed) return;
+
+    window.clearTimeout(previewIdleTimer.current);
+    previewIdleTimer.current = window.setTimeout(teardownPreview, PREVIEW_IDLE_MS);
+
+    if (previewCleanupRef.current || !previewVideoRef.current) return;
+    try {
+      const cleanup = onCreatePreview(previewVideoRef.current);
+      if (!cleanup) { setPreviewFailed(true); return; }
+      previewCleanupRef.current = cleanup;
+      setPreviewEnabled(true);
+    } catch {
+      setPreviewFailed(true);
+    }
+  }, [onCreatePreview, previewFailed, teardownPreview]);
+
+  const seekPreview = useCallback((seconds) => {
+    const video = previewVideoRef.current;
+    // Gate on the ref, not the state flag: ensurePreview() sets the ref
+    // synchronously, so the very first hover can already seek.
+    if (!video || !previewCleanupRef.current) return;
+    window.clearTimeout(previewSeekTimer.current);
+    previewSeekTimer.current = window.setTimeout(() => {
+      const snapped = Math.round(seconds / PREVIEW_SNAP_SECONDS) * PREVIEW_SNAP_SECONDS;
+      if (!Number.isFinite(snapped)) return;
+      try { video.currentTime = Math.max(0, snapped); } catch { /* not seekable yet */ }
+    }, PREVIEW_DEBOUNCE_MS);
+  }, []);
+
   /* ── seek bar interaction ─────────────────────────────────── */
 
   const fractionFromEvent = useCallback((event) => {
@@ -406,7 +465,11 @@ export default function VideoPlayer({
     const fraction = fractionFromEvent(event);
     setHoverX(fraction);
     if (dragging) setDragTime(fraction * duration);
-  }, [duration, dragging, fractionFromEvent]);
+    if (event.pointerType === "mouse") {
+      ensurePreview();
+      seekPreview(fraction * duration);
+    }
+  }, [duration, dragging, fractionFromEvent, ensurePreview, seekPreview]);
 
   const onSeekPointerUp = useCallback((event) => {
     if (!dragging) return;
@@ -443,6 +506,17 @@ export default function VideoPlayer({
     const tolerance = duration * 0.015;
     return adCuts.find((cut) => Math.abs(cut.at - hoverX * duration) <= tolerance) || null;
   }, [hoverX, duration, adCuts]);
+
+  // Keep the (wide) preview tooltip inside the bar instead of letting it
+  // hang off either end.
+  const tipLeft = useMemo(() => {
+    if (hoverX === null) return "50%";
+    const barWidth = seekRef.current?.getBoundingClientRect().width || 0;
+    if (!barWidth) return `${hoverX * 100}%`;
+    const half = (previewEnabled ? 168 : 46) / 2;
+    const clamped = Math.min(barWidth - half, Math.max(half, hoverX * barWidth));
+    return `${clamped}px`;
+  }, [hoverX, previewEnabled]);
 
   const shownTime = dragging ? dragTime : currentTime;
   const playedFraction = duration > 0 ? Math.min(1, shownTime / duration) : 0;
@@ -562,15 +636,18 @@ export default function VideoPlayer({
               ))
             : null}
           <div className="vp-seek-thumb" style={{ left: `${playedFraction * 100}%` }} />
-          {hoverX !== null && duration > 0 ? (
-            <div className="vp-seek-tip" style={{ left: `${hoverX * 100}%` }}>
-              {formatTime(hoverX * duration)}
-              {hoveredCut ? (
-                <span className="vp-seek-tip-ad">{t.vpAdRemoved.replace("{s}", Math.round(hoveredCut.removed))}</span>
-              ) : null}
+          <div
+            className={`vp-seek-tip${hoverX !== null && duration > 0 ? " is-visible" : ""}${previewEnabled ? " has-preview" : ""}`}
+            style={{ left: tipLeft }}
+          >
+            <div className="vp-seek-thumb-box" hidden={!previewEnabled}>
+              <video ref={previewVideoRef} muted playsInline preload="auto" tabIndex={-1} />
             </div>
-          ) : null}
-
+            <div className="vp-seek-tip-time">{formatTime((hoverX ?? 0) * duration)}</div>
+            {hoveredCut ? (
+              <span className="vp-seek-tip-ad">{t.vpAdRemoved.replace("{s}", Math.round(hoveredCut.removed))}</span>
+            ) : null}
+          </div>
         </div>
 
         <div className="vp-row">
