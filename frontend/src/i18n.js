@@ -102,6 +102,7 @@ export const translations = {
     vpKeyPip: "子母畫面",
     vpKeyCaptions: "字幕開關",
     vpKeySpeed: "調整速度",
+    vpAdRemoved: "已移除 {s} 秒廣告",
   },
   en: {
     appTag: "Search and play across providers",
@@ -206,6 +207,7 @@ export const translations = {
     vpKeyPip: "Picture in picture",
     vpKeyCaptions: "Toggle subtitles",
     vpKeySpeed: "Change speed",
+    vpAdRemoved: "{s}s of ads removed",
   },
 };
 

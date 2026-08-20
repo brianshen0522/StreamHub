@@ -76,6 +76,7 @@ export default function VideoPlayer({
   onNext,
   prevLabel,
   nextLabel,
+  adCuts,
   t,
 }) {
   const frameRef = useRef(null);
@@ -435,6 +436,14 @@ export default function VideoPlayer({
 
   /* ── derived ──────────────────────────────────────────────── */
 
+  // Any cut within ~1.5% of the cursor counts as hovered, so the thin tick
+  // does not require pixel-perfect aim.
+  const hoveredCut = useMemo(() => {
+    if (hoverX === null || !duration || !adCuts?.length) return null;
+    const tolerance = duration * 0.015;
+    return adCuts.find((cut) => Math.abs(cut.at - hoverX * duration) <= tolerance) || null;
+  }, [hoverX, duration, adCuts]);
+
   const shownTime = dragging ? dragTime : currentTime;
   const playedFraction = duration > 0 ? Math.min(1, shownTime / duration) : 0;
   const hasHls = !!hls && levels.length > 1;
@@ -541,10 +550,27 @@ export default function VideoPlayer({
             ))}
             <div className="vp-seek-played" style={{ width: `${playedFraction * 100}%` }} />
           </div>
+          {/* Rendered outside the track so the marker is not clipped to 4px. */}
+          {duration > 0 && adCuts?.length
+            ? adCuts.map((cut, index) => (
+                <div
+                  key={`${cut.at}-${index}`}
+                  className="vp-seek-adcut"
+                  style={{ left: `${Math.min(99.7, (cut.at / duration) * 100)}%` }}
+                  title={t.vpAdRemoved.replace("{s}", Math.round(cut.removed))}
+                />
+              ))
+            : null}
           <div className="vp-seek-thumb" style={{ left: `${playedFraction * 100}%` }} />
           {hoverX !== null && duration > 0 ? (
-            <div className="vp-seek-tip" style={{ left: `${hoverX * 100}%` }}>{formatTime(hoverX * duration)}</div>
+            <div className="vp-seek-tip" style={{ left: `${hoverX * 100}%` }}>
+              {formatTime(hoverX * duration)}
+              {hoveredCut ? (
+                <span className="vp-seek-tip-ad">{t.vpAdRemoved.replace("{s}", Math.round(hoveredCut.removed))}</span>
+              ) : null}
+            </div>
           ) : null}
+
         </div>
 
         <div className="vp-row">
@@ -747,6 +773,8 @@ export default function VideoPlayer({
               </div>
             ) : null}
           </div>
+
+
 
           {document.pictureInPictureEnabled ? (
             <button type="button" className={`vp-btn vp-hide-sm${pip ? " is-on" : ""}`} onClick={togglePip} title={`${t.vpPip} (P)`} aria-label={t.vpPip}>

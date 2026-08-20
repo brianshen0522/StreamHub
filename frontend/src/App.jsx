@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome } from "./portal-chrome.js";
 import VideoPlayer from "./VideoPlayer.jsx";
+import { createAdFilterLoader } from "./adfilter.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -201,6 +202,7 @@ function App() {
   const [nextEpPrompt, setNextEpPrompt] = useState(null);
   const [isPromptDismissed, setIsPromptDismissed] = useState(false);
   const [hlsInstance, setHlsInstance] = useState(null);
+  const [adCuts, setAdCuts] = useState([]);
   const videoRef = useRef(null);
   const tRef = useRef(t);
   const restoredFromUrlRef = useRef(false);
@@ -256,6 +258,7 @@ function App() {
 
     setPlayerError("");
     setPlaybackMode("");
+    setAdCuts([]);
 
     const directUrl = activeSource.directUrl || activeSource.url;
     const proxyUrl = activeSource.proxyUrl;
@@ -270,7 +273,11 @@ function App() {
     }
 
     function loadWithHls(url, mode, onFatalError) {
-      const hls = new Hls();
+      // Strips spliced ad segments out of each media playlist before hls.js
+      // parses it, so they are never fetched and never reach the timeline.
+      const hls = new Hls({
+        pLoader: createAdFilterLoader(Hls, (result) => setAdCuts(result.cuts)),
+      });
       setMode(mode);
       setHlsInstance(hls);
       hls.loadSource(url);
@@ -1165,6 +1172,8 @@ function App() {
             <path d="m20 20-3.6-3.6" />
           </svg>
           <input
+            name="q"
+            type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t.searchPlaceholder}
@@ -1366,6 +1375,7 @@ function App() {
                   <VideoPlayer
                     videoRef={videoRef}
                     hls={hlsInstance}
+                    adCuts={adCuts}
                     t={t}
                     title={itemDetail?.title || selectedItem.title}
                     subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}
