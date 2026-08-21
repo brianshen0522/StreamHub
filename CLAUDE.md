@@ -42,8 +42,13 @@ npx prisma studio
 npm run seed          # providers + bootstrap admin
 ```
 
-**There are no test suites, no linter, and no type checking.** Verify changes by
-running the affected surface.
+**The server and web app have no test suites, no linter and no type checking** —
+verify changes there by running the affected surface. The Android `:core` module
+is the exception and does have JVM unit tests:
+
+```bash
+cd android && ./gradlew :core:testDebugUnitTest
+```
 
 ## Repository layout
 
@@ -52,7 +57,7 @@ running the affected surface.
 | `server/` | Express API, scrapers, stream proxy |
 | `frontend/` | React SPA (the web client) served by nginx in production |
 | `shared/` | Code and contract notes used by more than one client |
-| `android/` | Gradle project: `:core` data layer, `:mobile` phone app, `:tv` Android TV app. Builds; the UI is a placeholder |
+| `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` and `:tv` apps whose UI is still a placeholder |
 | `ios/` | Native client — README only so far |
 | `PoC/` | Standalone Python scrapers used for provider spelunking; not part of the app |
 

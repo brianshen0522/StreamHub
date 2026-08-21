@@ -17,9 +17,32 @@ screen rather than later on every content screen.
 
 | Module | Type | Role |
 |---|---|---|
-| `:core` | library | API client, token storage and refresh, models, local database, resume rules |
+| `:core` | library | API client, token storage and refresh, models, resume rules |
 | `:mobile` | application | Phone UI — Material 3 with dynamic color |
 | `:tv` | application | Android TV UI — Compose for TV, built around D-pad focus |
+
+### What `:core` holds now
+
+`StreamHubApi` covers auth, search, item detail, episodes, the NDJSON source
+stream, manifest and poster URLs, and the library routes. Three parts are worth
+knowing before changing anything:
+
+- **`TokenAuthenticator` serialises refreshes.** The server rotates the refresh
+  token on every use, so two concurrent refreshes destroy the session. A caller
+  that finds the stored token already changed while it waited reuses it instead
+  of refreshing again. There is a test that fails if that guard is removed.
+- **`ItemDetail` is a sealed type parsed by inspection.** `/api/item` answers a
+  different shape per provider with no type field; which key is present —
+  `seasons`, `episodes` or `streams` — is the discriminator.
+- **`SessionStore` is an interface** so the encrypted implementation can be
+  swapped and so tests can run on the JVM. Note that
+  `EncryptedSharedPreferences` is deprecated as of security-crypto 1.1.0 with no
+  drop-in replacement; it is still the battle-tested option, and replacing it
+  with an AES/GCM store over the Android keystore is a one-file change.
+
+```bash
+./gradlew :core:testDebugUnitTest
+```
 
 Two application modules means two APKs with two application IDs, which can be
 installed side by side. Everything that is not a screen belongs in `:core`; if
