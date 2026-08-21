@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
-import { usePortalChrome } from "./portal-chrome.js";
+import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
 import VideoPlayer from "./VideoPlayer.jsx";
+import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { canStreamToDisk, downloadStream } from "./download.js";
@@ -205,11 +206,18 @@ function insertSourceSorted(prev, source) {
  * absence of evidence.
  */
 function pickAutoSource(arrived, preferredLabel) {
+  const modal = modalDuration(arrived);
+
   if (preferredLabel) {
     const preferred = arrived.find((source) => source.sourceLabel === preferredLabel);
-    if (preferred) return { source: preferred, fromPreference: true };
+    // Honour the saved choice unless it runs longer than the consensus, which
+    // means it carries ads the filter cannot see. Picking it once should not
+    // pin every later episode to an ad-laden source.
+    if (preferred && (!modal || (preferred.durationSeconds ?? 0) <= modal)) {
+      return { source: preferred, fromPreference: true };
+    }
   }
-  const modal = modalDuration(arrived);
+
   if (modal) {
     const onModal = arrived.filter((source) => source.durationSeconds === modal);
     if (onModal.length) {
@@ -246,7 +254,12 @@ function PosterImage({ src, alt, className, fallbackClassName }) {
 }
 
 function App() {
-  const [language, setLanguage] = useState(resolveLanguage());
+  // The portal owns the language so the sidebar and the other pages follow the
+  // switch rendered here; the local state is only the standalone fallback.
+  const portalLanguage = usePortalLanguage();
+  const [localLanguage, setLocalLanguage] = useState(resolveLanguage());
+  const language = portalLanguage?.language ?? localLanguage;
+  const setLanguage = portalLanguage?.setLanguage ?? setLocalLanguage;
   const t = translations[language];
   const [query, setQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
@@ -708,6 +721,65 @@ function App() {
     return { prev, next: null };
   }, [itemDetail, episodes, selectedEpisode, selectedSeason]);
 
+  // ── watch-panel rows ────────────────────────────────────────
+  // WatchPanels stays presentational, so the progress bookkeeping and the two
+  // provider-specific TV shapes are resolved into plain rows here.
+  const seasonOptions = useMemo(() => {
+    const seasons = itemDetail?.mediaType === "tv" && itemDetail?.provider === "movieffm"
+      ? itemDetail.seasons || []
+      : [];
+    return seasons.map((season) => {
+      const status = getSeasonStatus(season.url, itemProgressMap);
+      const mark = status === "pill-completed" ? "✓ " : status === "pill-in-progress" ? "▸ " : "";
+      return { url: season.url, label: season.label, optionLabel: `${mark}${season.label}` };
+    });
+  }, [itemDetail, itemProgressMap]);
+
+  const activeSeasonUrl = itemDetail?.provider === "movieffm"
+    ? (selectedSeason?.url || itemDetail?.seasonUrl || null)
+    : (itemDetail?.seasonUrl || null);
+
+  const episodeRows = useMemo(() => {
+    if (itemDetail?.mediaType !== "tv") return [];
+    return episodes.map((label) => {
+      const progress = itemProgressMap[progressKey(activeSeasonUrl, label)];
+      const remaining = progress && !progress.isCompleted
+        ? Math.max(0, (progress.durationSeconds || 0) - (progress.positionSeconds || 0))
+        : 0;
+      return {
+        label,
+        // Only worth showing once there is more than a minute left to resume.
+        title: remaining > 60
+          ? t.timeLeft.replace("{t}", t.minutesShort.replace("{n}", Math.round(remaining / 60)))
+          : "",
+        isActive: selectedEpisode === label,
+        isCompleted: !!progress?.isCompleted,
+        percent: progress?.isCompleted ? 100 : (progress?.progressPercent || 0),
+      };
+    });
+  }, [itemDetail, episodes, activeSeasonUrl, selectedEpisode, itemProgressMap, t]);
+
+  const sourceRows = useMemo(() => sources.map((source) => ({
+    key: sourceKey(source),
+    source,
+    label: source.sourceLabel,
+    duration: formatSourceDuration(source.durationSeconds, t),
+    mode: getSourcePlaybackMode(source, activeSource, playbackMode),
+  })), [sources, activeSource, playbackMode, t]);
+
+  const showRail = itemDetail?.mediaType === "tv" && (episodeRows.length > 0 || seasonOptions.length > 0);
+
+  function handleSelectEpisodeLabel(label) {
+    if (!itemDetail) return;
+    loadEpisodeSources(
+      itemDetail.provider,
+      itemDetail.provider === "777tv" ? itemDetail.detailUrl : (selectedSeason?.url || itemDetail.seasonUrl),
+      label,
+      itemDetail.title,
+      itemDetail.mediaType,
+    );
+  }
+
   async function goToNeighbour(target) {
     if (!target || !itemDetail) return;
     if (target.episode) {
@@ -951,15 +1023,37 @@ function App() {
     let activeSelected = false;
     let graceTimer = null;
 
+    let committed = null;
+    let committedAutomatically = false;
+
     function commitSelection() {
       if (activeSelected || controller.signal.aborted || !arrived.length) return;
       activeSelected = true;
       window.clearTimeout(graceTimer);
       const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+      committed = source;
+      committedAutomatically = !fromPreference;
       if (source) {
         setActiveSource(source);
         setAutoSelectedFromPreference(fromPreference);
       }
+    }
+
+    /**
+     * The grace window commits on whatever has arrived, so on a slow link the
+     * consensus can be drawn from a handful of sources. Once the stream ends,
+     * recompute over the full set and correct an off-consensus pick — but only
+     * while it is still automatic and playback has barely begun.
+     */
+    function reconcileSelection() {
+      if (controller.signal.aborted || !committedAutomatically || !committed) return;
+      const modal = modalDuration(arrived);
+      if (!modal || committed.durationSeconds === modal) return;
+      const { source } = pickAutoSource(arrived, preferredLabel);
+      if (!source || source === committed) return;
+      if ((videoRef.current?.currentTime ?? 0) > 10) return;
+      // Functional update so a manual pick made in the meantime always wins.
+      setActiveSource((current) => (current === committed ? source : current));
     }
 
     try {
@@ -979,6 +1073,7 @@ function App() {
         },
       );
       commitSelection();
+      reconcileSelection();
     } catch (sourceError) {
       if (sourceError.name !== "AbortError") setError(sourceError.message);
     } finally {
@@ -1008,15 +1103,37 @@ function App() {
     let activeSelected = false;
     let graceTimer = null;
 
+    let committed = null;
+    let committedAutomatically = false;
+
     function commitSelection() {
       if (activeSelected || controller.signal.aborted || !arrived.length) return;
       activeSelected = true;
       window.clearTimeout(graceTimer);
       const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+      committed = source;
+      committedAutomatically = !fromPreference;
       if (source) {
         setActiveSource(source);
         setAutoSelectedFromPreference(fromPreference);
       }
+    }
+
+    /**
+     * The grace window commits on whatever has arrived, so on a slow link the
+     * consensus can be drawn from a handful of sources. Once the stream ends,
+     * recompute over the full set and correct an off-consensus pick — but only
+     * while it is still automatic and playback has barely begun.
+     */
+    function reconcileSelection() {
+      if (controller.signal.aborted || !committedAutomatically || !committed) return;
+      const modal = modalDuration(arrived);
+      if (!modal || committed.durationSeconds === modal) return;
+      const { source } = pickAutoSource(arrived, preferredLabel);
+      if (!source || source === committed) return;
+      if ((videoRef.current?.currentTime ?? 0) > 10) return;
+      // Functional update so a manual pick made in the meantime always wins.
+      setActiveSource((current) => (current === committed ? source : current));
     }
 
     try {
@@ -1036,6 +1153,7 @@ function App() {
         },
       );
       commitSelection();
+      reconcileSelection();
     } catch (sourceError) {
       if (sourceError.name !== "AbortError") setError(sourceError.message);
     } finally {
@@ -1433,147 +1551,9 @@ function App() {
         {selectedItem && (
           <section className="detail-view">
             {/* Body: poster+pickers on left, player on right */}
-            <div className="detail-body">
-              <div className="detail-left">
-                {/* Poster + meta */}
-                <div className="detail-header">
-                  <PosterImage
-                    src={selectedItem.posterUrl}
-                    alt={selectedItem.title}
-                    className="detail-poster-thumb"
-                    fallbackClassName="detail-poster-fallback"
-                  />
-                  <div className="detail-meta">
-                    <div className="chip-row">
-                      <span className="chip chip-accent">{selectedItem.provider}</span>
-                      <span className="chip">{normalizeMediaTypeLabel(selectedItem.mediaType, t)}</span>
-                      {!detailLoading && (
-                        <button
-                          type="button"
-                          className={`favorite-toggle ${isCurrentFavorite ? "active" : ""}`}
-                          onClick={handleToggleFavorite}
-                          aria-label={isCurrentFavorite ? "Remove from favorites" : "Add to favorites"}
-                          title={isCurrentFavorite ? "Remove from favorites" : "Add to favorites"}
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M12 21 3.8 12.8A5.6 5.6 0 0 1 11.7 4.9L12 5.2l.3-.3a5.6 5.6 0 1 1 7.9 7.9z" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                    <h2>{selectedItem.title}</h2>
-                    {detailLoading && <p className="detail-hint">{t.loadingDetails}</p>}
-                    {!detailLoading && resumeProgress?.positionSeconds > 30 && (
-                      <p className="detail-hint">
-                        {t.resumeFrom} {Math.floor(Math.max(0, resumeProgress.positionSeconds - 30) / 60)}m {Math.max(0, resumeProgress.positionSeconds - 30) % 60}s
-                      </p>
-                    )}
-                  </div>
-                </div>
-                {/* Seasons */}
-                {itemDetail?.mediaType === "tv" && itemDetail?.provider === "movieffm" && itemDetail?.seasons?.length > 0 && (
-                  <div className="picker-block">
-                    <div className="picker-heading"><span>{t.seasons}</span></div>
-                    <div className="pill-row">
-                      {itemDetail.seasons.map((season) => {
-                        const isActiveSeason = selectedSeason?.url === season.url;
-                        const seasonStatusClass = isActiveSeason ? "active" : getSeasonStatus(season.url, itemProgressMap);
-                        return (
-                          <button
-                            type="button"
-                            key={season.url}
-                            className={seasonStatusClass}
-                            onClick={() => handleSelectSeason(season)}
-                          >
-                            {season.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Episodes */}
-                {itemDetail?.mediaType === "tv" && episodes.length > 0 && (
-                  <div className="picker-block">
-                    <div className="picker-heading">
-                      <span>{t.episodes}</span>
-                      <span className="count">{episodes.length}</span>
-                    </div>
-                    <div className="pill-row">
-                      {episodes.map((episode) => {
-                        const epSeasonUrl = itemDetail.provider === "movieffm"
-                          ? (selectedSeason?.url || itemDetail.seasonUrl || null)
-                          : (itemDetail.seasonUrl || null);
-                        const epProg = itemProgressMap[progressKey(epSeasonUrl, episode)];
-                        const isActiveEp = selectedEpisode === episode;
-                        const epStatusClass = isActiveEp ? "active"
-                          : epProg?.isCompleted ? "pill-completed"
-                          : (epProg?.progressPercent || 0) > 0 ? "pill-in-progress"
-                          : "";
-                        return (
-                          <button
-                            type="button"
-                            key={episode}
-                            className={epStatusClass}
-                            style={epStatusClass === "pill-in-progress"
-                              ? { "--ep-progress": `${Math.round(epProg.progressPercent)}%` }
-                              : undefined}
-                            onClick={() =>
-                              loadEpisodeSources(
-                                itemDetail.provider,
-                                itemDetail.provider === "777tv"
-                                  ? itemDetail.detailUrl
-                                  : selectedSeason?.url || itemDetail.seasonUrl,
-                                episode,
-                                itemDetail.title,
-                                itemDetail.mediaType,
-                              )
-                            }
-                          >
-                            {episode}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Sources */}
-                <div className="picker-block">
-                  <div className="picker-heading">
-                    <span>{t.availableSources}</span>
-                    {!sourcesLoading && <span className="count">{sources.length}</span>}
-                  </div>
-                  {autoSelectedFromPreference && !sourcesLoading && (
-                    <span className="pref-auto-note">{t.preferenceAutoSelected}</span>
-                  )}
-                  {sourcesLoading && sources.length === 0 && <p className="inline-note">{t.loadingSources}</p>}
-                  {!sourcesLoading && sources.length === 0 && <p className="inline-note">{t.noSources}</p>}
-                  <div className="source-list">
-                    {sources.map((source) => {
-                      const mode = getSourcePlaybackMode(source, activeSource, playbackMode);
-                      return (
-                        <button
-                          type="button"
-                          key={sourceKey(source)}
-                          className={`source-item ${sourceKey(activeSource) === sourceKey(source) ? "active" : ""}`}
-                          onClick={() => handleSelectSource(source)}
-                        >
-                          <span className={`mode-dot ${mode === "proxy" ? "proxy" : "direct"}`} />
-                          <span className="source-item-text">
-                            <span className="source-item-label">{source.sourceLabel}</span>
-                            <span className="source-item-duration">{formatSourceDuration(source.durationSeconds, t)}</span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Player */}
-              <div className="detail-right">
+            {/* Player leads; season/episode rail is secondary. */}
+            <div className={`watch-layout${showRail ? "" : " no-rail"}`}>
+              <div className="watch-main">
                 <div className="player-card">
                   <VideoPlayer
                     videoRef={videoRef}
@@ -1617,37 +1597,97 @@ function App() {
                     ) : null}
                   />
                   {playerError && <div className="error-box">{playerError}</div>}
-                  {activeSource ? (
-                    <div className="player-meta">
-                      <p>
-                        <strong>{activeSource.sourceLabel}</strong>
-                        {" · "}
-                        {activeSource.episodeLabel}
-                      </p>
-                      <p>
-                        {formatSourceDuration(activeSource.durationSeconds, t)}
-                        {activeSource.adSeconds > 0 ? (
-                          <span className="meta-ad-note">
-                            {" · "}{t.metaAdsExcluded.replace("{s}", activeSource.adSeconds)}
+                </div>
+
+                <div className="watch-info">
+                  <div className="watch-title-row">
+                    <PosterImage
+                      src={selectedItem.posterUrl}
+                      alt={selectedItem.title}
+                      className="watch-poster"
+                      fallbackClassName="watch-poster-fallback"
+                    />
+                    <div className="watch-title-text">
+                      <h2>{itemDetail?.title || selectedItem.title}</h2>
+                      <div className="watch-chips">
+                        <span className="chip chip-accent">{selectedItem.provider}</span>
+                        <span className="chip">{normalizeMediaTypeLabel(selectedItem.mediaType, t)}</span>
+                        {selectedEpisode ? <span className="chip">{selectedEpisode}</span> : null}
+                        {activeSource ? (
+                          <span className="watch-mode">
+                            {t.playbackMode}: {playbackMode === "proxy" ? t.playbackProxy : t.playbackDirect}
                           </span>
                         ) : null}
-                      </p>
-                      <p>
-                        {t.playbackMode}: {playbackMode === "proxy" ? t.playbackProxy : t.playbackDirect}
-                      </p>
-                      <button
-                        type="button"
-                        className={`btn-mark-watched ${currentEpIsCompleted ? "is-completed" : ""}`}
-                        onClick={handleToggleCurrentEpisodeStatus}
-                      >
-                        {currentEpIsCompleted ? t.markUnwatched : t.markWatched}
-                      </button>
+                      </div>
+                      {detailLoading && <p className="detail-hint">{t.loadingDetails}</p>}
+                      {!detailLoading && resumeProgress?.positionSeconds > 30 && (
+                        <p className="detail-hint">
+                          {t.resumeFrom} {Math.floor(Math.max(0, resumeProgress.positionSeconds - 30) / 60)}m {Math.max(0, resumeProgress.positionSeconds - 30) % 60}s
+                        </p>
+                      )}
                     </div>
-                  ) : (
-                    !sourcesLoading && <p className="inline-note">{t.noSources}</p>
-                  )}
+                    <div className="watch-title-actions">
+                      {activeSource ? (
+                        <button
+                          type="button"
+                          className={`btn-mark-watched ${currentEpIsCompleted ? "is-completed" : ""}`}
+                          onClick={handleToggleCurrentEpisodeStatus}
+                        >
+                          {currentEpIsCompleted ? t.markUnwatched : t.markWatched}
+                        </button>
+                      ) : null}
+                      {!detailLoading && (
+                        <button
+                          type="button"
+                          className={`favorite-toggle ${isCurrentFavorite ? "active" : ""}`}
+                          onClick={handleToggleFavorite}
+                          aria-label={isCurrentFavorite ? "Remove from favorites" : "Add to favorites"}
+                          title={isCurrentFavorite ? "Remove from favorites" : "Add to favorites"}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 21 3.8 12.8A5.6 5.6 0 0 1 11.7 4.9L12 5.2l.3-.3a5.6 5.6 0 1 1 7.9 7.9z" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <SourceSelect
+                    label={t.availableSources}
+                    rows={sourceRows}
+                    activeKey={sourceKey(activeSource)}
+                    onSelect={handleSelectSource}
+                    loading={sourcesLoading}
+                    loadingText={t.loadingSources}
+                    emptyText={t.noSources}
+                    note={autoSelectedFromPreference && !sourcesLoading ? t.preferenceAutoSelected : ""}
+                    adNote={activeSource?.adSeconds > 0
+                      ? t.metaAdsExcluded.replace("{s}", activeSource.adSeconds)
+                    : ""}
+                  />
                 </div>
               </div>
+
+              {showRail ? (
+                <aside className="watch-rail">
+                  <SeasonSelect
+                    label={t.seasons}
+                    options={seasonOptions}
+                    value={selectedSeason?.url}
+                    onChange={(url) => {
+                      const season = (itemDetail?.seasons || []).find((entry) => entry.url === url);
+                      if (season) handleSelectSeason(season);
+                    }}
+                  />
+                  <EpisodeRail
+                    heading={t.episodes}
+                    rows={episodeRows}
+                    onSelect={handleSelectEpisodeLabel}
+                    watchedLabel={t.watched}
+                    nowPlayingLabel={t.nowPlaying}
+                  />
+                </aside>
+              ) : null}
             </div>
           </section>
         )}

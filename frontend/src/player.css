@@ -13,6 +13,9 @@
   --vp-line: rgba(255, 255, 255, 0.12);
 
   position: relative;
+  /* Controls adapt to the player's own width: it is a grid column, so a wide
+     viewport says nothing about how much room the control bar actually has. */
+  container-type: inline-size;
   width: 100%;
   aspect-ratio: 16 / 9;
   border-radius: 14px;
@@ -689,4 +692,19 @@
   /* Hover-reveal volume is useless on touch; hide the slider entirely. */
   .vp-volume-slider { display: none; }
   .vp-hide-sm { display: none; }
+}
+
+@container (max-width: 560px) {
+  .vp-volume-slider { display: none; }
+  .vp-hide-sm { display: none; }
+}
+
+@container (max-width: 440px) {
+  /* Speed lives in the settings menu too. Download hides unless it is
+     running — that button is the only way to cancel an active download. */
+  .vp-speed { display: none; }
+  .vp-hide-xs:not(.is-on) { display: none; }
+  .vp-row { gap: 2px; }
+  .vp-btn { width: 32px; height: 32px; }
+  .vp-time { padding: 0 4px; font-size: 11.5px; }
 }

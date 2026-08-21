@@ -769,7 +769,7 @@ export default function VideoPlayer({
           <div className="vp-spacer" />
 
           {rate !== 1 ? (
-            <button type="button" className="vp-btn vp-btn-wide" onClick={() => setMenu("speed")} title={t.vpSpeed}>
+            <button type="button" className="vp-btn vp-btn-wide vp-speed" onClick={() => setMenu("speed")} title={t.vpSpeed}>
               {rate}×
             </button>
           ) : null}
@@ -923,7 +923,7 @@ export default function VideoPlayer({
           {onDownload ? (
             <button
               type="button"
-              className={`vp-btn${download?.active ? " vp-btn-wide is-on" : ""}`}
+              className={`vp-btn vp-hide-xs${download?.active ? " vp-btn-wide is-on" : ""}`}
               onClick={onDownload}
               title={download?.active
                 ? t.dlCancel
