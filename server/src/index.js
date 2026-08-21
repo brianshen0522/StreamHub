@@ -4,7 +4,8 @@ import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
-import { CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
+import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
+import { rateLimit } from "./rate-limit.js";
 import { providers } from "./providers/index.js";
 import { streamCheckedSources, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
@@ -35,6 +36,11 @@ import {
 } from "./validators.js";
 
 const app = express();
+
+// One hop: nginx in front of this container. Without it every request appears
+// to come from the proxy, which makes the recorded session IP useless and would
+// have one noisy caller rate-limit everybody.
+app.set("trust proxy", 1);
 
 const API_VERSION = 1;
 const VERSION_PREFIX = `/api/v${API_VERSION}`;
@@ -197,12 +203,32 @@ async function ensureBootstrapped() {
   });
 
   if (!existingAdmin) {
+    // Seeding an administrator whose password is "admin" on a box that is about
+    // to be reachable from the internet is not a default worth having. This only
+    // fires on a brand new database; an instance that already has an admin is
+    // unaffected.
+    if (!ADMIN_PASSWORD || ADMIN_PASSWORD === "admin" || ADMIN_PASSWORD.length < 8) {
+      console.error(
+        [
+          "",
+          "StreamHub will not start: there is no administrator yet, and",
+          "ADMIN_PASSWORD is missing or too weak to create one with.",
+          "",
+          "Set it in .env before first boot:",
+          "",
+          "  ADMIN_PASSWORD=$(openssl rand -base64 24)",
+          "",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
+
     await prisma.user.create({
       data: {
         username: "admin",
         email: "admin@local",
         displayName: "Administrator",
-        passwordHash: await hashPassword(process.env.ADMIN_PASSWORD || "admin"),
+        passwordHash: await hashPassword(ADMIN_PASSWORD),
         role: UserRole.ADMIN,
       },
     });
@@ -213,7 +239,14 @@ app.get("/api/health", (_request, response) => {
   response.json({ ok: true, apiVersion: API_VERSION });
 });
 
-app.post("/api/auth/login", asyncHandler(async (request, response) => {
+// The only unauthenticated ways in, and the only ones worth guessing at. Only
+// failures count: everyone in a household shares one public address, so a
+// successful sign-in must not spend anyone else's allowance.
+const failed = (status) => status === 401 || status === 403;
+const loginLimiter = rateLimit({ name: "login", windowMs: 15 * 60_000, max: 20, countWhen: failed });
+const refreshLimiter = rateLimit({ name: "refresh", windowMs: 15 * 60_000, max: 20, countWhen: failed });
+
+app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response) => {
   const payload = loginSchema.parse(request.body || {});
   const login = payload.login.trim();
 
@@ -252,7 +285,7 @@ app.post("/api/auth/login", asyncHandler(async (request, response) => {
   });
 }));
 
-app.post("/api/auth/refresh", asyncHandler(async (request, response) => {
+app.post("/api/auth/refresh", refreshLimiter, asyncHandler(async (request, response) => {
   const refreshToken = String(request.body?.refreshToken || "");
   if (!refreshToken) {
     response.status(400).json({ error: "Missing refresh token." });

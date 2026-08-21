@@ -29,7 +29,7 @@ class FavoritesViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             // Favouriting on the web or the TV should show up here without a
             // manual reload; the event says only that something changed.
-            container.realtimeEvents().collect { event ->
+            container.realtimeEvents.collect { event ->
                 if (event is RealtimeEvent.Favorites) refresh()
             }
         }
@@ -39,7 +39,7 @@ class FavoritesViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = it.items.isEmpty(), error = null) }
             try {
-                _state.update { it.copy(loading = false, items = container.api().favorites()) }
+                _state.update { it.copy(loading = false, items = container.api.favorites()) }
             } catch (error: StreamHubException) {
                 _state.update { it.copy(loading = false, error = error.message) }
             } catch (error: Exception) {
@@ -51,7 +51,7 @@ class FavoritesViewModel(private val container: AppContainer) : ViewModel() {
     fun remove(favorite: Favorite) {
         viewModelScope.launch {
             _state.update { current -> current.copy(items = current.items.filterNot { it.id == favorite.id }) }
-            runCatching { container.api().removeFavorite(favorite.id) }.onFailure { refresh() }
+            runCatching { container.api.removeFavorite(favorite.id) }.onFailure { refresh() }
         }
     }
 }
@@ -70,7 +70,7 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
     init {
         refresh()
         viewModelScope.launch {
-            container.realtimeEvents().collect { event ->
+            container.realtimeEvents.collect { event ->
                 // Only some progress events append history, and the server says
                 // which — refetching on every tick would be wasted work.
                 if (event is RealtimeEvent.Progress && event.historyChanged) refresh()
@@ -82,7 +82,7 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = it.items.isEmpty(), error = null) }
             try {
-                _state.update { it.copy(loading = false, items = container.api().history()) }
+                _state.update { it.copy(loading = false, items = container.api.history()) }
             } catch (error: StreamHubException) {
                 _state.update { it.copy(loading = false, error = error.message) }
             } catch (error: Exception) {

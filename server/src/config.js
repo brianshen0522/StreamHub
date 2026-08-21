@@ -23,5 +23,52 @@ export const CONTINUE_SCAN_LIMIT = parsePositiveInt(process.env.CONTINUE_SCAN_LI
 
 export const PROVIDER_CHECK_INTERVAL_MS = parseDurationMs(process.env.PROVIDER_CHECK_INTERVAL_MS, 30_000);
 export const PROVIDER_POLL_QUERY = String(process.env.PROVIDER_POLL_QUERY || "the");
-export const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "admin");
-export const JWT_SECRET = process.env.JWT_SECRET || "streamhub-dev-secret";
+export const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "");
+
+/**
+ * Placeholders that have appeared in this repository's own examples, plus the
+ * usual suspects. A secret from this list is public knowledge.
+ */
+const WEAK_SECRETS = new Set([
+  "",
+  "streamhub-dev-secret",
+  "change-me",
+  "changeme",
+  "secret",
+  "password",
+]);
+
+export function isWeakSecret(value) {
+  return WEAK_SECRETS.has(String(value || "").trim()) || String(value || "").trim().length < 32;
+}
+
+/**
+ * The signing key is the whole authentication system: anyone who knows it can
+ * mint a token for any account, including the admin. It used to fall back to a
+ * value committed to this repository, which is survivable on a laptop and not
+ * survivable on a public domain — and nothing would have said so.
+ */
+function readJwtSecret() {
+  const secret = String(process.env.JWT_SECRET || "").trim();
+  if (!isWeakSecret(secret)) return secret;
+
+  console.error(
+    [
+      "",
+      "StreamHub will not start: JWT_SECRET is missing or too weak.",
+      "",
+      "It signs every access token, so a known value lets anyone issue a token",
+      "for any account, including the administrator.",
+      "",
+      "Generate one and put it in .env:",
+      "",
+      "  JWT_SECRET=$(openssl rand -base64 48)",
+      "",
+      "Changing it signs everyone out, which is the intended effect.",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+
+export const JWT_SECRET = readJwtSecret();

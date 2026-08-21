@@ -63,11 +63,11 @@ class DetailViewModel(
                 // after would mean opening the wrong one and correcting it.
                 progress = ResumeRules.progressMap(
                     runCatching {
-                        container.api().progress(selection.provider, selection.itemUrl)
+                        container.api.progress(selection.provider, selection.itemUrl)
                     }.getOrDefault(emptyList())
                 )
 
-                when (val detail = container.api().item(
+                when (val detail = container.api.item(
                     provider = selection.provider,
                     url = selection.itemUrl,
                     title = selection.title,
@@ -136,7 +136,7 @@ class DetailViewModel(
         }
         viewModelScope.launch {
             try {
-                val episodes = container.api().episodes(selection.provider, season.url)
+                val episodes = container.api.episodes(selection.provider, season.url)
                 _state.update {
                     it.copy(
                         loadingEpisodes = false,
@@ -162,10 +162,10 @@ class DetailViewModel(
         sourcesJob = viewModelScope.launch {
             try {
                 val preferred = runCatching {
-                    container.api().sourcePreference(selection.provider, _state.value.title, selection.mediaType)
+                    container.api.sourcePreference(selection.provider, _state.value.title, selection.mediaType)
                 }.getOrNull()
 
-                container.api()
+                container.api
                     .sources(selection.provider, season?.url.orEmpty(), episode, preferred)
                     .collect { source ->
                         // Sources land one at a time as each health probe finishes,
@@ -184,7 +184,7 @@ class DetailViewModel(
         sourcesJob = viewModelScope.launch {
             _state.update { it.copy(loadingSources = true, sourcesFinished = false) }
             try {
-                container.api().checkSources(selection.provider, movieStreams)
+                container.api.checkSources(selection.provider, movieStreams)
                     .collect { source ->
                         _state.update { it.copy(sources = it.sources + source, loadingSources = false) }
                     }

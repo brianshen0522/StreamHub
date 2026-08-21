@@ -34,7 +34,7 @@ fun PlayerScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    val api = container.api()
+    val api = container.api
 
     val player = remember(request.directUrl) {
         // Media requests go through the same authenticated client the rest of the

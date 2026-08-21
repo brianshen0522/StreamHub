@@ -26,8 +26,15 @@ A self-hosted streaming aggregator that searches **movieffm**, **777tv**, and **
 ### Docker (recommended)
 
 ```bash
+cp .env.example .env
+# JWT_SECRET and ADMIN_PASSWORD are required — the server refuses to start
+# without them. See the comments in .env.example.
 docker compose up --build
 ```
+
+Behind a reverse proxy on a public domain, set `PUBLIC_DOMAIN` to match (nginx
+allows CORS for that origin only) and make sure the proxy forwards WebSocket
+upgrades — `/api/realtime` is one.
 
 | Service  | URL |
 |---|---|

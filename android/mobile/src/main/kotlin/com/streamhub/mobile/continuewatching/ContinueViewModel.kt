@@ -32,7 +32,7 @@ class ContinueViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = it.items.isEmpty(), error = null) }
             try {
-                val items = container.api().continueWatching()
+                val items = container.api.continueWatching()
                 _state.update { it.copy(loading = false, items = items) }
             } catch (error: StreamHubException) {
                 _state.update { it.copy(loading = false, error = error.message) }
@@ -49,7 +49,7 @@ class ContinueViewModel(private val container: AppContainer) : ViewModel() {
      */
     private fun watchForChanges() {
         viewModelScope.launch {
-            container.realtimeEvents().collect { event ->
+            container.realtimeEvents.collect { event ->
                 if (event is RealtimeEvent.Progress) refresh()
             }
         }
@@ -62,7 +62,7 @@ class ContinueViewModel(private val container: AppContainer) : ViewModel() {
             // reconcile anything that goes wrong.
             _state.update { current -> current.copy(items = current.items.filterNot { it.sameTitle(item) }) }
             runCatching {
-                container.api().deleteProgress(
+                container.api.deleteProgress(
                     com.streamhub.core.model.ProgressDelete(
                         providerKey = item.providerKey,
                         // "title" scope deletes the whole show and ignores itemUrl,

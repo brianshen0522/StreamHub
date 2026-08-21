@@ -63,6 +63,12 @@ Send it anyway even though the rule is enforced server-side, and still check
 the refusal, and a client that forgets it gets the old behaviour: a valid
 session and an app that fails on every screen.
 
+Login and refresh answer **`429`** once 20 attempts have failed from the same
+address inside 15 minutes, with a `Retry-After` header and a message naming the
+wait. Successful sign-ins do not count towards it. Show the message — there is
+nothing for the client to retry around, and a household shares one address, so
+the person seeing it may not be the one who caused it.
+
 `requireAuth` cannot distinguish an expired token from a malformed one; both are
 a plain `401`. The correct client behaviour is to attempt one refresh on any
 `401` and retry the request once, then give up and sign out.

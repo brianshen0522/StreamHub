@@ -1,13 +1,20 @@
 import { REQUEST_TIMEOUT_MS } from "../config.js";
+import { safeFetch } from "./safe-fetch.js";
 
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export const DEFAULT_TIMEOUT = REQUEST_TIMEOUT_MS;
 
+/**
+ * Every provider fetch goes through here, and several of the URLs come straight
+ * from a query parameter — /api/item, /api/episodes and /api/sources all take
+ * one. That makes this the same open door as the media proxies, so it uses the
+ * same guard: each hop has to resolve to a public address. Provider sites are on
+ * the public internet, so nothing legitimate is lost.
+ */
 export async function fetchText(url, options = {}) {
-  const response = await fetch(url, {
-    redirect: "follow",
+  const { response } = await safeFetch(url, {
     ...options,
     headers: {
       "user-agent": USER_AGENT,

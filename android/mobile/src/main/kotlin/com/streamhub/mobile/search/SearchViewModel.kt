@@ -39,7 +39,7 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(loading = true, error = null, submitted = query) }
         viewModelScope.launch {
             try {
-                val response = container.api().search(query)
+                val response = container.api.search(query)
                 // A provider that failed is reported inside a 200, so results and
                 // failures arrive together and both are worth showing.
                 _state.update { it.copy(loading = false, results = response.results) }

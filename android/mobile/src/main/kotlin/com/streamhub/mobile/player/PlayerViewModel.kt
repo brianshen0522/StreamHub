@@ -26,7 +26,7 @@ class PlayerViewModel(
         // chosen tends to be ready before the rest.
         viewModelScope.launch {
             runCatching {
-                container.api().rememberSourcePreference(
+                container.api.rememberSourcePreference(
                     providerKey = request.providerKey,
                     title = request.title,
                     mediaType = request.mediaType,
@@ -47,7 +47,7 @@ class PlayerViewModel(
 
         viewModelScope.launch {
             runCatching {
-                container.api().putProgress(
+                container.api.putProgress(
                     ProgressUpdate(
                         providerKey = request.providerKey,
                         mediaType = request.mediaType,

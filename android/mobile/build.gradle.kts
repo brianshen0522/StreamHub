@@ -18,6 +18,17 @@ fun gitSha(): String = runCatching {
     process.inputStream.bufferedReader().readText().trim().ifEmpty { "unknown" }
 }.getOrDefault("unknown")
 
+/**
+ * The server this build talks to. There is one deployment, so asking every user
+ * for its address was a setup step with exactly one correct answer.
+ *
+ * Override for local work — a debug build may use http, a release build may not:
+ *   ./gradlew :mobile:installDebug -Pstreamhub.serverUrl=http://10.0.2.2:58787
+ */
+fun serverUrl(): String =
+    (findProperty("streamhub.serverUrl") as String?)?.trimEnd('/')
+        ?: "https://streamhub.gugulu.tw"
+
 android {
     namespace = "com.streamhub.mobile"
     compileSdk = 37
@@ -30,6 +41,7 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "GIT_SHA", "\"${gitSha()}\"")
+        buildConfigField("String", "SERVER_URL", "\"${serverUrl()}\"")
     }
 
     buildTypes {

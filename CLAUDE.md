@@ -180,6 +180,29 @@ pointed back at the endpoint so whichever one the player picks arrives cleaned.
 Unlike `/api/stream`, the body carries no access token, because the segment URLs
 are the CDN's own.
 
+## Exposed to the internet
+
+The instance runs on a public domain, which changes what the code has to assume.
+
+- **`JWT_SECRET` and `ADMIN_PASSWORD` are required.** The server refuses to start
+  on a placeholder secret or one shorter than 32 characters, and refuses to seed
+  a first administrator with a weak password. Both used to fall back to values
+  committed to this repository.
+- **Every outbound fetch is address-checked.** `src/utils/safe-fetch.js` resolves
+  each hop and refuses anything that is not a public unicast address, following
+  redirects by hand so a target cannot pass the check and then bounce inward.
+  It guards the three media proxies *and* `fetchText`/`fetchJson`, because
+  `/api/item`, `/api/episodes` and `/api/check-sources` all take URLs straight
+  from the request. Without it any signed-in account could read internal
+  services through the server.
+- **`app.set("trust proxy", 1)`** — one hop, the nginx in front. Session IPs and
+  rate limiting are meaningless without it.
+- **Login and refresh are rate limited** to 20 *failures* per 15 minutes per
+  address (`src/rate-limit.js`). Successes are not counted, because a household
+  shares one public address and one person's typo must not lock out the rest.
+- Postgres is not published to the host; it is reachable only over the compose
+  network.
+
 ## Gotchas
 
 - **`App.jsx` is not the application root.** `RootApp.jsx` is. `App.jsx` is the

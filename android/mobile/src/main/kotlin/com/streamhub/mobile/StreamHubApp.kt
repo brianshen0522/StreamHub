@@ -73,7 +73,7 @@ fun StreamHubApp(container: AppContainer) {
     setSingletonImageLoaderFactory { context ->
         ImageLoader.Builder(context)
             .components {
-                add(OkHttpNetworkFetcherFactory(callFactory = { container.api().authenticatedClient }))
+                add(OkHttpNetworkFetcherFactory(callFactory = { container.api.authenticatedClient }))
             }
             .build()
     }
@@ -86,7 +86,7 @@ fun StreamHubApp(container: AppContainer) {
     // server address either, and building an API client without one throws.
     LaunchedEffect(container, session != null) {
         if (session == null) return@LaunchedEffect
-        container.api().sessionEnded.collect { session = null }
+        container.api.sessionEnded.collect { session = null }
     }
 
     val current = session
@@ -112,7 +112,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
     val scope = rememberCoroutineScope()
 
     val posterUrl: (String) -> String? = { target ->
-        target.takeIf { it.isNotBlank() }?.let { container.api().posterUrl(it) }
+        target.takeIf { it.isNotBlank() }?.let { container.api.posterUrl(it) }
     }
 
     // The detail screen and the player are full-screen; a tab bar under them
@@ -245,14 +245,14 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.PROFILE.route) {
                 ProfileScreen(
                     user = session.user,
-                    serverUrl = container.settings.baseUrl,
+                    serverUrl = container.serverUrl,
                     buildId = BuildConfig.GIT_SHA,
                     statusSection = {
                         StatusSection(viewModel = viewModel { StatusViewModel(container) })
                     },
                     onSignOut = {
                         scope.launch {
-                            runCatching { container.api().logout() }
+                            runCatching { container.api.logout() }
                             onSignedOut()
                         }
                     },

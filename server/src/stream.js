@@ -2,6 +2,7 @@ import { getBearerToken } from "./auth.js";
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 import { analyzePlaylist, stripAds } from "./utils/adfilter.js";
+import { BlockedTargetError, assertPublicUrl, safeFetch } from "./utils/safe-fetch.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -209,6 +210,7 @@ export async function getStreamMetadata(stream) {
   let metadata = { durationSeconds: null, adSeconds: 0 };
   if (stream.url.toLowerCase().includes(".m3u8")) {
     try {
+      await assertPublicUrl(stream.url);
       const inspected = await inspectM3u8Metadata(stream.url);
       metadata = {
         durationSeconds: Number.isFinite(inspected.durationSeconds) ? inspected.durationSeconds : null,
@@ -276,6 +278,17 @@ export async function checkStream(stream) {
   const cached = caches.streamCheck.get(stream.url);
   if (cached) return { ...stream, ...cached };
 
+  // /api/check-sources takes the stream list from the request body, so these
+  // URLs are whatever the caller sent. One that points inside the network fails
+  // its check and is never emitted, rather than being fetched to find out.
+  try {
+    await assertPublicUrl(stream.url);
+  } catch {
+    const blocked = { ok: false, statusCode: null };
+    caches.streamCheck.set(stream.url, blocked);
+    return { ...stream, ...blocked };
+  }
+
   const result = stream.url.toLowerCase().includes(".m3u8")
     ? await checkM3u8(stream.url)
     : await checkGeneric(stream.url);
@@ -313,20 +326,28 @@ export async function streamCheckedSources(rawStreams, preferredLabel, onSource)
 
 export async function handleStreamProxy(request, response) {
   const target = request.query.target;
-  if (typeof target !== "string" || !target.startsWith("http")) {
+  if (typeof target !== "string") {
     response.status(400).json({ error: "Invalid target URL." });
     return;
   }
 
-  const upstream = await fetch(target, {
-    redirect: "follow",
-    headers: {
-      "user-agent": UA,
-      referer: new URL(target).origin + "/",
-      range: request.get("range") || "",
-    },
-    signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
-  });
+  let upstream;
+  try {
+    ({ response: upstream } = await safeFetch(target, {
+      headers: {
+        "user-agent": UA,
+        referer: new URL(target).origin + "/",
+        range: request.get("range") || "",
+      },
+      signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
+    }));
+  } catch (error) {
+    if (error instanceof BlockedTargetError) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 
   if (!upstream.ok && upstream.status !== 206) {
     response.status(upstream.status).send(await upstream.text());
@@ -337,7 +358,10 @@ export async function handleStreamProxy(request, response) {
   copyHeaders(upstream.headers, response);
   response.status(upstream.status);
   response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("cache-control", "public, max-age=60");
+  // Private, not public: rewritePlaylist writes this user's access token into
+  // segment URLs, and a shared cache in front of a public domain would keep the
+  // document — token and all — for the next person through.
+  response.setHeader("cache-control", "private, max-age=60");
 
   if (contentType.includes("mpegurl") || target.toLowerCase().includes(".m3u8")) {
     const content = await upstream.text();
@@ -440,22 +464,26 @@ function rewriteMasterPlaylist(sourceUrl, content) {
  */
 export async function handleCleanManifest(request, response) {
   const target = request.query.target;
-  if (typeof target !== "string" || !target.startsWith("http")) {
+  if (typeof target !== "string") {
     response.status(400).json({ error: "Invalid target URL." });
     return;
   }
 
   let upstream;
+  let landedOn;
   try {
-    upstream = await fetch(target, {
-      redirect: "follow",
+    ({ response: upstream, finalUrl: landedOn } = await safeFetch(target, {
       headers: {
         "user-agent": UA,
         referer: new URL(target).origin + "/",
       },
       signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
-    });
-  } catch {
+    }));
+  } catch (error) {
+    if (error instanceof BlockedTargetError) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
     response.status(502).json({ error: "Upstream playlist unreachable." });
     return;
   }
@@ -472,8 +500,9 @@ export async function handleCleanManifest(request, response) {
   }
 
   // Relative URIs resolve against wherever the redirect chain landed, not
-  // against the URL we asked for.
-  const baseUrl = upstream.url || target;
+  // against the URL we asked for. Redirects are followed by hand so each hop can
+  // be checked, so this comes back from safeFetch rather than from response.url.
+  const baseUrl = landedOn || target;
 
   response.type("application/vnd.apple.mpegurl");
   // No credentials in the body, but the route is per-user gated, so keep it out
@@ -495,19 +524,27 @@ export async function handleCleanManifest(request, response) {
 
 export async function handlePosterProxy(request, response) {
   const target = request.query.target;
-  if (typeof target !== "string" || !target.startsWith("http")) {
+  if (typeof target !== "string") {
     response.status(400).json({ error: "Invalid target URL." });
     return;
   }
 
-  const upstream = await fetch(target, {
-    redirect: "follow",
-    headers: {
-      "user-agent": UA,
-      referer: new URL(target).origin + "/",
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  let upstream;
+  try {
+    ({ response: upstream } = await safeFetch(target, {
+      headers: {
+        "user-agent": UA,
+        referer: new URL(target).origin + "/",
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }));
+  } catch (error) {
+    if (error instanceof BlockedTargetError) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 
   if (!upstream.ok) {
     response.status(upstream.status).send(await upstream.text());

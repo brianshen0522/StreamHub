@@ -50,21 +50,6 @@ fun LoginScreen(viewModel: LoginViewModel, onSignedIn: () -> Unit) {
             )
 
             OutlinedTextField(
-                value = state.serverUrl,
-                onValueChange = viewModel::onServerUrlChange,
-                label = { Text("Server address") },
-                placeholder = { Text("192.168.1.10:8787") },
-                singleLine = true,
-                supportingText = { Text("Where your StreamHub server is reachable.") },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
-                    autoCorrectEnabled = false,
-                    imeAction = ImeAction.Next,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            OutlinedTextField(
                 value = state.login,
                 onValueChange = viewModel::onLoginChange,
                 label = { Text("Username or email") },
@@ -119,6 +104,14 @@ fun LoginScreen(viewModel: LoginViewModel, onSignedIn: () -> Unit) {
                     Text("Sign in")
                 }
             }
+
+            // Which deployment this build talks to. Not adjustable, but worth
+            // being able to see when something is not behaving.
+            Text(
+                text = viewModel.serverUrl,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

@@ -40,10 +40,10 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
         // only opened while something is collecting, so without this the status
         // screen would report "not connected" whenever no other screen happened
         // to be listening — a check has to exercise what it reports on.
-        viewModelScope.launch { container.realtimeEvents().collect { } }
+        viewModelScope.launch { container.realtimeEvents.collect { } }
 
         viewModelScope.launch {
-            container.realtime().connected.collect { connected ->
+            container.realtime.connected.collect { connected ->
                 _state.update { it.copy(realtimeConnected = connected) }
             }
         }
@@ -54,7 +54,7 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
             _state.update { it.copy(checking = true, serverError = null) }
 
             val startedAt = System.currentTimeMillis()
-            val health = runCatching { container.api().health() }
+            val health = runCatching { container.api.health() }
             val elapsed = System.currentTimeMillis() - startedAt
 
             if (health.isFailure) {
@@ -66,7 +66,7 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
                         // Nothing else can be judged if the server is unreachable,
                         // so stale provider rows would be actively misleading.
                         providers = emptyList(),
-                        serverError = "No response from ${container.settings.baseUrl}",
+                        serverError = "No response from ${container.serverUrl}",
                     )
                 }
                 return@launch
@@ -80,7 +80,7 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
 
-            val providers = runCatching { container.api().providers(includeUnavailable = true) }
+            val providers = runCatching { container.api.providers(includeUnavailable = true) }
             _state.update {
                 it.copy(
                     checking = false,

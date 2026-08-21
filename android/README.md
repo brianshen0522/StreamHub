@@ -67,6 +67,17 @@ cd android
 ./gradlew :tv:installDebug       # TV, over adb
 ```
 
+The server address is compiled in — there is one deployment, so asking for it
+was a setup step with exactly one right answer. It defaults to
+`https://streamhub.gugulu.tw`; point a debug build somewhere else with:
+
+```bash
+./gradlew :mobile:installDebug -Pstreamhub.serverUrl=http://10.0.2.2:58787
+```
+
+Only debug builds can use plain http. The release build's network security
+config refuses cleartext outright, since the deployment is HTTPS.
+
 Open the `android/` directory in Android Studio and it will import as-is.
 
 `local.properties` is required and deliberately not committed, because it
