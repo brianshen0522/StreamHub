@@ -115,6 +115,8 @@ export const translations = {
     dlDone: "下載完成",
     dlDoneNoAds: "下載完成，已移除 {s} 秒廣告",
     metaAdsExcluded: "已扣除 {s} 秒廣告",
+    srcAdsStripped: "免廣告",
+    srcAdsStrippedTitle: "此片源夾帶 {s} 秒廣告，播放時會自動略過",
 
     /* ── portal shell & pages ── */
     justNow: "剛剛",
@@ -321,6 +323,8 @@ export const translations = {
     dlDone: "Download complete",
     dlDoneNoAds: "Downloaded, {s}s of ads removed",
     metaAdsExcluded: "{s}s of ads excluded",
+    srcAdsStripped: "ad-free",
+    srcAdsStrippedTitle: "This source carries {s}s of ads, skipped on playback",
 
     /* ── portal shell & pages ── */
     justNow: "just now",
