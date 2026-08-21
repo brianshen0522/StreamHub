@@ -290,6 +290,11 @@ function App() {
   const [nextEpPrompt, setNextEpPrompt] = useState(null);
   const [isPromptDismissed, setIsPromptDismissed] = useState(false);
   const [hlsInstance, setHlsInstance] = useState(null);
+  const hlsRef = useRef(null);
+  // Read by the fatal-error handler, which outlives the render that made it:
+  // a reused instance keeps its first handler, and without this it would fall
+  // back to the previous episode's proxy.
+  const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null });
   const [adCuts, setAdCuts] = useState([]);
   const [download, setDownload] = useState(null);
   const downloadAbortRef = useRef(null);
@@ -340,6 +345,16 @@ function App() {
     ));
   }, [favoriteEntries, selectedItem, selectedSeason, itemDetail, selectedEpisode]);
 
+  // Destroying hls.js is what ends a Picture-in-Picture session: destroy()
+  // detaches the media element, an emptied element closes the PiP window, and
+  // the browser does not always say so. Doing it on every source change meant
+  // continuing to the next episode killed the window while the control stayed
+  // lit over nothing. It is torn down here instead — once, when the page goes.
+  useEffect(() => () => {
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || (!activeSource?.directUrl && !activeSource?.proxyUrl)) {
@@ -360,6 +375,7 @@ function App() {
 
     const directUrl = activeSource.directUrl || activeSource.url;
     const proxyUrl = activeSource.proxyUrl;
+    sourceUrlsRef.current = { directUrl, proxyUrl };
 
     function setMode(mode) { setPlaybackMode(mode); }
 
@@ -378,6 +394,7 @@ function App() {
       });
       setMode(mode);
       setHlsInstance(hls);
+      hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -394,24 +411,42 @@ function App() {
     // playback on DEMUXER_ERROR_COULD_NOT_PARSE. Native is the fallback for
     // engines without MSE (notably iOS Safari), which really do play HLS.
     if (Hls.isSupported()) {
-      let fallbackHls = null;
-      const primaryHls = loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+      const existing = hlsRef.current;
+
+      // Still attached to this element: point it at the new stream rather than
+      // replacing it. loadSource keeps the media attached, so anything holding
+      // on to the element — a Picture-in-Picture window above all — survives
+      // the change of episode.
+      if (existing && existing.media === video) {
+        setMode(directUrl ? "direct" : "proxy");
+        existing.loadSource(directUrl || proxyUrl);
+        void video.play().catch(() => {});
+        return undefined;
+      }
+
+      // Attached to an element that has since gone — leaving the watch page
+      // and coming back to another title. Nothing is holding it now.
+      if (existing) {
+        existing.destroy();
+        hlsRef.current = null;
+      }
+
+      loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+        const urls = sourceUrlsRef.current;
         instance.destroy();
-        if (proxyUrl && directUrl && directUrl !== proxyUrl) {
+        hlsRef.current = null;
+        if (urls.proxyUrl && urls.directUrl && urls.directUrl !== urls.proxyUrl) {
           setPlayerError(tRef.current.playbackFallback);
-          fallbackHls = loadWithHls(proxyUrl, "proxy", (proxyInstance) => {
+          loadWithHls(urls.proxyUrl, "proxy", (proxyInstance) => {
             setPlayerError(tRef.current.statusError);
             proxyInstance.destroy();
+            hlsRef.current = null;
           });
         } else {
           setPlayerError(tRef.current.statusError);
         }
       });
-      return () => {
-        setHlsInstance(null);
-        primaryHls.destroy();
-        fallbackHls?.destroy();
-      };
+      return undefined;
     }
 
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {

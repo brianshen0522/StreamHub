@@ -207,6 +207,12 @@ export default function VideoPlayer({
     videoEl.addEventListener("loadstart", syncPip);
     videoEl.addEventListener("enterpictureinpicture", syncPip);
     videoEl.addEventListener("leavepictureinpicture", syncPip);
+    // Also on the document, because the window can outlive the element that
+    // opened it: if the session ends after this element is gone, the listeners
+    // above have already been removed and the control would stay lit. These
+    // events bubble, so the document sees them either way.
+    document.addEventListener("enterpictureinpicture", syncPip, true);
+    document.addEventListener("leavepictureinpicture", syncPip, true);
 
     // Apply the persisted preferences to a freshly mounted element.
     videoEl.volume = volume;
@@ -229,6 +235,8 @@ export default function VideoPlayer({
       videoEl.removeEventListener("loadstart", syncPip);
       videoEl.removeEventListener("enterpictureinpicture", syncPip);
       videoEl.removeEventListener("leavepictureinpicture", syncPip);
+      document.removeEventListener("enterpictureinpicture", syncPip, true);
+      document.removeEventListener("leavepictureinpicture", syncPip, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoEl]);
