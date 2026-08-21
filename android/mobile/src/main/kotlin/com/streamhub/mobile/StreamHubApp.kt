@@ -49,6 +49,8 @@ import com.streamhub.mobile.detail.DetailScreen
 import com.streamhub.mobile.detail.DetailViewModel
 import com.streamhub.mobile.devices.DevicesSection
 import com.streamhub.mobile.devices.DevicesViewModel
+import com.streamhub.mobile.devices.PairTvSection
+import com.streamhub.mobile.devices.PairTvViewModel
 import com.streamhub.mobile.library.FavoritesScreen
 import com.streamhub.mobile.library.FavoritesViewModel
 import com.streamhub.mobile.library.HistoryScreen
@@ -388,6 +390,10 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 )
             }
             composable(Destination.PROFILE.route) {
+                // Hoisted out of the slot so pairing can refresh it: the
+                // television signs itself in a moment later and should appear
+                // in the list below without anyone having to ask.
+                val devicesViewModel = viewModel { DevicesViewModel(container) }
                 ProfileScreen(
                     user = session.user,
                     serverUrl = container.serverUrl,
@@ -396,9 +402,15 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     statusSection = {
                         StatusSection(viewModel = viewModel { StatusViewModel(container) })
                     },
+                    pairTvSection = {
+                        PairTvSection(
+                            viewModel = viewModel { PairTvViewModel(container) },
+                            onPaired = devicesViewModel::refresh,
+                        )
+                    },
                     devicesSection = {
                         DevicesSection(
-                            viewModel = viewModel { DevicesViewModel(container) },
+                            viewModel = devicesViewModel,
                             onSignedOutHere = onSignedOut,
                         )
                     },

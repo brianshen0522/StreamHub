@@ -257,6 +257,16 @@ The instance runs on a public domain, which changes what the code has to assume.
   stamps the request's address, user agent and client kind onto the pending row,
   and the session is minted from *those* rather than from the phone that
   approves it, so the account's device list names the television.
+- **Never rewrite a code field's text to insert the separator while it is being
+  typed.** Both phone apps did, and both silently corrupted the pairing code:
+  Compose reordered it (`3vxja5wj` → `3VXJ-5WJA`) and SwiftUI dropped the
+  character typed at the group boundary (`5EH5XHS3` → `5EH5HS3`). Inserting a
+  character mid-string moves the caret somewhere the keyboard is not expecting.
+  The handler may only *remove* — uppercase, drop invalid characters, cap the
+  length. Android draws the break with a `VisualTransformation`, which leaves
+  the value alone; iOS has no equivalent and simply does not show one while
+  typing. A code one transposition out fails as "expired", which sends people
+  to look at the television rather than at the field.
 - **The QR on the TV sign-in screen must not be sized off its container's
   width.** A 1080p television is 540dp tall; a width-derived square overflowed
   the safe area, and a Compose `Column` that runs out of height crushes its last

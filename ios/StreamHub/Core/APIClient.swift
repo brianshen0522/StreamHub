@@ -329,6 +329,37 @@ actor APIClient {
         return try await get(url(["me", "sessions"]) as URL, decode: Response.self).sessions
     }
 
+    // MARK: - Approving a television
+
+    /// Looks up what is asking, so it can be named before anything is granted.
+    ///
+    /// Throws 404 for a code that has expired, has been used, or never existed.
+    /// One answer for all three, because they mean the same thing to somebody
+    /// holding a phone: fetch a fresh code off the television.
+    func pendingDevice(code: String) async throws -> PendingDevice {
+        try await get(url(["auth", "device", "pending"], query: [
+            URLQueryItem(name: "code", value: UserCode.normalise(code)),
+        ]) as URL, decode: PendingDevice.self)
+    }
+
+    /// Hands this account to the television holding `code`.
+    func approveDevice(code: String) async throws {
+        try await decideDevice(action: "approve", code: code)
+    }
+
+    /// Says it was not mine. The code stops working.
+    func denyDevice(code: String) async throws {
+        try await decideDevice(action: "deny", code: code)
+    }
+
+    private func decideDevice(action: String, code: String) async throws {
+        var request = authorizedRequest(url(["auth", "device", action]))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["code": UserCode.normalise(code)])
+        _ = try await send(request)
+    }
+
     // MARK: - Plumbing
 
     private nonisolated var decoder: JSONDecoder {
