@@ -21,6 +21,7 @@ import { prisma } from "./db.js";
 import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./middleware.js";
 import { startMonitoring } from "./monitoring.js";
 import { attachRealtime, broadcast } from "./realtime.js";
+import { describeDevice } from "./devices.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
   adminResetPasswordSchema,
@@ -79,31 +80,6 @@ function getClientKind(request) {
 
 const ADMIN_CLIENT_REFUSAL =
   "Administrator accounts cannot sign in to a playback client. Use a viewer account.";
-
-/**
- * Something a person would recognise as one of their own devices.
- *
- * The native clients send a user agent naming the hardware; browsers send a
- * fingerprint nobody wants to read, so those are reduced to the browser name.
- */
-function describeDevice(session) {
-  const agent = String(session.userAgent || "");
-
-  const native = /^StreamHub-\w+\/\S+ \(([^)]+)\)/.exec(agent);
-  if (native) return native[1];
-
-  for (const [pattern, name] of [
-    [/\bEdg\//, "Microsoft Edge"],
-    [/\bOPR\//, "Opera"],
-    [/\bFirefox\//, "Firefox"],
-    [/\bChrome\//, "Chrome"],
-    [/\bSafari\//, "Safari"],
-  ]) {
-    if (pattern.test(agent)) return name;
-  }
-
-  return session.clientKind ? `StreamHub (${session.clientKind})` : "Unknown device";
-}
 
 function getProvider(name) {
   const provider = providers[name];

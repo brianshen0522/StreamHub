@@ -1,5 +1,8 @@
 package com.streamhub.core.net
 
+import com.streamhub.core.model.CastCommand
+import com.streamhub.core.model.CastPlaybackState
+import com.streamhub.core.model.CastReceiver
 import com.streamhub.core.model.Session
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.awaitClose
@@ -15,6 +18,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -53,6 +57,44 @@ class RealtimeClient(
      * being unreachable, and they should not look the same.
      */
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
+
+    private val _sessionId = MutableStateFlow<String?>(null)
+
+    /**
+     * This connection's own session id, as the server sees it.
+     *
+     * The receiver list includes every announced device on the account — this
+     * one among them once it announces. Without knowing its own id a device
+     * would offer itself as a target to cast to.
+     */
+    val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
+
+    /**
+     * The socket currently carrying events, for the frames a client sends after
+     * the handshake. Volatile because commands are sent from whichever thread
+     * the UI is on, while this is assigned by the socket's own callback thread.
+     */
+    @Volatile
+    private var live: WebSocket? = null
+
+    /**
+     * Tells the account's other devices what this one is playing, or that it is
+     * idle. Sending this at all is what makes a device appear as a cast target,
+     * so a television calls it once on startup with a null state.
+     *
+     * Returns false when there is no live socket — the caller decides whether
+     * that is worth surfacing.
+     */
+    fun publishPlayback(state: CastPlaybackState?): Boolean {
+        val socket = live ?: return false
+        return socket.send(json.encodeToString(PlaybackFrame(type = "playback", state = state)))
+    }
+
+    /** Sends a command to one of the account's other devices. */
+    fun sendCommand(to: String, command: CastCommand): Boolean {
+        val socket = live ?: return false
+        return socket.send(json.encodeToString(CommandFrame(type = "command", to = to, command = command)))
+    }
 
     fun events(): Flow<RealtimeEvent> = channelFlow {
         var attempts = 0
@@ -103,6 +145,7 @@ class RealtimeClient(
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                live = webSocket
                 // Auth travels in the first frame rather than the query string,
                 // so access tokens stay out of proxy logs. The server allows
                 // five seconds for it.
@@ -115,6 +158,11 @@ class RealtimeClient(
                 if (type == READY) {
                     sawReady = true
                     _connected.value = true
+                    _sessionId.value = frame["sessionId"]?.jsonPrimitive?.contentOrNull
+                    // The handshake carries the receivers already connected, so
+                    // a phone that opens second still sees the television
+                    // without waiting for it to report again.
+                    receiversOf(frame)?.let { onEvent(RealtimeEvent.Receivers(it)) }
                     return
                 }
                 onEvent(toEvent(type, frame))
@@ -140,7 +188,14 @@ class RealtimeClient(
             Outcome(closeCode = closed.await(), sawReady = sawReady, token = token, noSession = false)
         } finally {
             socket.cancel()
+            live = null
+            _sessionId.value = null
         }
+    }
+
+    private fun receiversOf(frame: JsonObject): List<CastReceiver>? {
+        val array = frame["receivers"] ?: return null
+        return runCatching { json.decodeFromJsonElement<List<CastReceiver>>(array) }.getOrNull()
     }
 
     private fun toEvent(type: String, frame: JsonObject): RealtimeEvent {
@@ -151,6 +206,19 @@ class RealtimeClient(
                 action = action,
                 historyChanged = frame["history"]?.jsonPrimitive?.booleanOrNull ?: false,
             )
+            "receivers" -> RealtimeEvent.Receivers(receiversOf(frame).orEmpty())
+            "command" -> {
+                // An action this build does not implement decodes to nothing;
+                // an older client should ignore it, not drop the connection.
+                val command = frame["command"]
+                    ?.let { runCatching { json.decodeFromJsonElement<CastCommand>(it) }.getOrNull() }
+                if (command == null) RealtimeEvent.Unknown(type)
+                else RealtimeEvent.Command(
+                    from = frame["from"]?.jsonPrimitive?.contentOrNull,
+                    fromName = frame["fromName"]?.jsonPrimitive?.contentOrNull,
+                    command = command,
+                )
+            }
             else -> RealtimeEvent.Unknown(type)
         }
     }
@@ -170,6 +238,16 @@ class RealtimeClient(
      */
     @Serializable
     private data class AuthFrame(val type: String, val token: String)
+
+    /**
+     * No defaults here either, and for the same reason: a `state` that defaulted
+     * to null would be omitted from the frame entirely.
+     */
+    @Serializable
+    private data class PlaybackFrame(val type: String, val state: CastPlaybackState?)
+
+    @Serializable
+    private data class CommandFrame(val type: String, val to: String, val command: CastCommand)
 
     private companion object {
         const val READY = "ready"
