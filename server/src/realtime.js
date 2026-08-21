@@ -175,6 +175,10 @@ function sanitizeCommand(raw) {
           posterUrl: text(playback.posterUrl),
           episodeLabel: text(playback.episodeLabel, 120),
           episodeUrl: text(playback.episodeUrl),
+          // Without this a cast receiver has no idea what comes next, and a
+          // television loses its own next-episode control the moment a phone
+          // starts something on it.
+          nextEpisodeLabel: text(playback.nextEpisodeLabel, 120),
           positionMs: Math.max(0, Math.round(Number(playback.positionMs) || 0)),
         },
       };

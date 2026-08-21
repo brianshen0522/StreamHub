@@ -121,6 +121,7 @@ class CastController(
                     posterUrl = request.posterUrl,
                     episodeLabel = request.episodeLabel,
                     episodeUrl = request.seasonUrl,
+                    nextEpisodeLabel = request.nextEpisodeLabel,
                     // The receiver resumes where this account left off, so
                     // handing a title to the television lands in the same place
                     // it would have on the phone.

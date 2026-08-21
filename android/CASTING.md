@@ -3,8 +3,10 @@
 How the phone drives a television, what the television has to implement to be
 driven, and what is and is not possible for waking a closed app.
 
-The phone half is built and verified. The television half is a contract this
-document specifies; `:tv` implements it.
+Both halves are built and verified against each other on two emulators: the
+phone lists the television, starts a title on it, pauses, seeks, and sees its
+reported position; the television obeys, says which phone is driving it, and
+writes progress the phone's Continue row picks up.
 
 ---
 
@@ -113,6 +115,10 @@ An action the build does not know must be ignored, not treated as an error.
 `streamUrl` is the provider's direct URL. The receiver resolves its own
 `/api/manifest` or `/api/stream` URL from it with its own token — the phone
 never sends credentials across.
+
+`nextEpisodeLabel` is worth sending. Without it a receiver has no idea what
+follows, so a television loses its own next-episode control the moment a phone
+starts something on it.
 
 ### On Kotlin
 

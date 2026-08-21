@@ -23,6 +23,14 @@ private val StreamHubTvDark = darkColorScheme(
     secondaryContainer = StreamHubColors.S2,
     onSecondaryContainer = StreamHubColors.T1,
 
+    // Green carries "ads were found and removed". It has to be set explicitly:
+    // an unset role falls back to Material's default pink, which on this
+    // palette reads as a warning about the very thing that went right.
+    tertiary = StreamHubColors.Green,
+    onTertiary = StreamHubColors.Bg,
+    tertiaryContainer = StreamHubColors.Green,
+    onTertiaryContainer = StreamHubColors.Bg,
+
     background = StreamHubColors.Bg,
     onBackground = StreamHubColors.T1,
 
@@ -31,10 +39,10 @@ private val StreamHubTvDark = darkColorScheme(
     surfaceVariant = StreamHubColors.S2,
     onSurfaceVariant = StreamHubColors.T2,
 
-    // TV Material calls these border rather than outline. The focused-card
-    // border is the single most important affordance on this platform, so it
-    // gets the accent rather than a grey.
-    border = StreamHubColors.Accent,
+    // TV Material calls these border rather than outline. White, not the
+    // accent: focus has to stay distinguishable from selection, and a red ring
+    // drawn around an already-red button is invisible.
+    border = StreamHubColors.T1,
     borderVariant = StreamHubColors.Border,
 
     error = StreamHubColors.Danger,

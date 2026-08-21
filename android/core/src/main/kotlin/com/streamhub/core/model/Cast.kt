@@ -55,6 +55,8 @@ data class CastPlayRequest(
     val posterUrl: String? = null,
     val episodeLabel: String? = null,
     val episodeUrl: String? = null,
+    /** What follows this episode, so the receiver keeps its own next control. */
+    val nextEpisodeLabel: String? = null,
     val positionMs: Long = 0,
 )
 

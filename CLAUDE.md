@@ -57,7 +57,7 @@ cd android && ./gradlew :core:testDebugUnitTest
 | `server/` | Express API, scrapers, stream proxy |
 | `frontend/` | React SPA (the web client) served by nginx in production |
 | `shared/` | Code and contract notes used by more than one client |
-| `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` and `:tv` apps whose UI is still a placeholder |
+| `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` phone app, `:tv` Android TV app. Both play video; the phone can drive the television — see `android/CASTING.md` |
 | `ios/` | Native client — README only so far |
 | `PoC/` | Standalone Python scrapers used for provider spelunking; not part of the app |
 
