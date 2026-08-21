@@ -35,6 +35,7 @@
   color: var(--usr-fg);
   background: var(--usr-bg);
   min-height: 100vh;
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -57,12 +58,14 @@
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .usr-side {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -168,15 +171,21 @@
 .usr-main { min-width: 0; display: flex; flex-direction: column; }
 
 .usr-topbar {
-  padding-top: env(safe-area-inset-top);
   position: sticky;
   top: 0;
   z-index: 25;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 24px;
-  min-height: var(--usr-topbar-h);
+  /* One shorthand, and the inset is in it. This used to be a `padding-top`
+     followed by `padding: 0 24px`, which quietly threw the inset away — so on a
+     Home Screen install the bar sat under the clock and the battery. Anything
+     added here must stay a single declaration for the same reason. */
+  padding: var(--safe-top) 24px 0;
+  /* The bar keeps its own height *under* the status bar rather than absorbing
+     the inset into it, or the controls shift up on a notched phone and the
+     search field ends up half behind the clock. */
+  min-height: calc(var(--usr-topbar-h) + var(--safe-top));
   background: rgba(10, 10, 11, 0.86);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--usr-line);
@@ -920,7 +929,7 @@
     height: auto;
     flex-direction: row;
     gap: 0;
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    padding: 6px 4px calc(6px + var(--safe-bottom));
     border-right: 0;
     border-top: 1px solid var(--usr-line);
     background: rgba(13, 13, 15, 0.94);
@@ -970,12 +979,14 @@
 
   .usr-rail-toggle { display: none; }
 
-  .usr-topbar { padding: 0 14px; }
+  /* Keeps the inset the base rule sets — a phone is exactly where it is not
+     zero, so dropping it here is where it would actually be noticed. */
+  .usr-topbar { padding: var(--safe-top) 14px 0; }
   .usr-topbar-title { font-size: 14px; }
 
   /* Clear the fixed tab bar. */
-  .usr-body { padding: 14px 14px calc(78px + env(safe-area-inset-bottom)); }
-  .usr-body-flush { padding: 0 0 calc(70px + env(safe-area-inset-bottom)); }
+  .usr-body { padding: 14px 14px calc(78px + var(--safe-bottom)); }
+  .usr-body-flush { padding: 0 0 calc(70px + var(--safe-bottom)); }
 
   .usr-cols-2 { grid-template-columns: minmax(0, 1fr); }
   .usr-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 14px 10px; }
@@ -1030,7 +1041,7 @@
   padding: 16px;
   /* Standalone on iOS has no browser chrome, so the home indicator is the
      only thing between this and the bottom edge. */
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  padding-bottom: calc(16px + var(--safe-bottom));
 }
 @media (min-width: 861px) {
   .cast-scrim { align-items: center; }
@@ -1082,7 +1093,7 @@
   border-top: 1px solid var(--border);
   /* Above the bottom tab bar on a phone, and clear of the home indicator.
      70px is the tab bar's own height, the same figure .usr-body-flush pads by. */
-  bottom: calc(70px + env(safe-area-inset-bottom));
+  bottom: calc(70px + var(--safe-bottom));
 }
 @media (min-width: 861px) {
   .cast-bar { left: auto; right: 20px; bottom: 20px; width: 360px; border-radius: 14px; border: 1px solid var(--border); }
@@ -1190,7 +1201,7 @@
    of the last rows of whatever page is open. */
 body.has-cast-bar .usr-body,
 body.has-cast-bar .usr-body-flush {
-  padding-bottom: calc(70px + 58px + env(safe-area-inset-bottom));
+  padding-bottom: calc(70px + 58px + var(--safe-bottom));
 }
 
 /* ── connecting a television ─────────────────────────────────

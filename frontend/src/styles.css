@@ -15,13 +15,40 @@
   --r:         8px;
   --r-lg:      14px;
   --nav-h:     60px;
+
+  /* Added to an iPhone Home Screen the app runs under the status bar and the
+     home indicator — `viewport-fit=cover` and a translucent status bar are what
+     let the background reach the edges, and the price is that the insets have to
+     be paid back in the layout or the first row of the page sits under the
+     clock.
+
+     Held in variables rather than written as `env()` at each use for two
+     reasons: every surface then reads the same value, and a browser with no
+     notch can be handed one — setting `--safe-top` in devtools makes the inset
+     visible on a desktop, which is the only way to see this without a phone. */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   font-family: "Inter","Noto Sans TC",system-ui,sans-serif;
   color-scheme: dark;
 }
 
 /* ── reset ────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
-body { background:var(--bg); color:var(--t1); line-height:1.5; min-height:100vh; }
+body {
+  background: var(--bg);
+  color: var(--t1);
+  line-height: 1.5;
+  min-height: 100vh;
+  /* Installed to a Home Screen there is no browser chrome to collapse, and dvh
+     is the height actually available; vh stays as the fallback for engines
+     without it. */
+  min-height: 100dvh;
+  /* Stops the page rubber-banding away from the top. Overscrolling a
+     translucent status bar drags the first row of the app under the clock and
+     it does not always spring back, which reads as the whole screen having
+     shifted up. There is no pull-to-refresh here to lose. */
+  overscroll-behavior-y: none;
+}
 button, input { font:inherit; cursor:pointer; border:0; outline:0; }
 input { cursor:text; }
 img, video { display:block; }
@@ -154,8 +181,10 @@ a { color: inherit; }
   flex-direction: column;
   gap: 12px;
   position: sticky;
-  top: calc(var(--usr-topbar-h, 56px) + 16px);
-  max-height: calc(100vh - var(--usr-topbar-h, 56px) - 32px);
+  /* The topbar it sticks under is taller by the status-bar inset, so this has
+     to carry the same term or the rail slides beneath it. */
+  top: calc(var(--usr-topbar-h, 56px) + var(--safe-top) + 16px);
+  max-height: calc(100vh - var(--usr-topbar-h, 56px) - var(--safe-top) - 32px);
   padding: 12px;
   border-radius: var(--r-lg);
   background: var(--s1);
@@ -327,6 +356,22 @@ a { color: inherit; }
 
 .src-note { font-size:0.74rem; color:var(--green); }
 .src-note.is-ad { color: var(--orange); }
+
+/* Sits between the source's name and its runtime, in both the closed trigger
+   and every row of the open list. Green because it is a reason to pick this
+   source, not a warning about it — the same meaning the phone and television
+   give the colour. Shrink-proof so a long source name cannot squeeze it away. */
+.src-adtag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(70, 211, 105, 0.14);
+  color: var(--green);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
 
 /* Visually hidden but announced — state icons in the episode rail. */
 .sr-only {
@@ -836,12 +881,12 @@ a { color: inherit; }
    has to start there or content in that band sits under the bar. */
 @media (max-width: 860px) {
   .watch-layout, .watch-layout.no-rail,
-  .results-section { padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .results-section { padding-bottom: calc(78px + var(--safe-bottom)); }
 }
 
 @media (max-width: 720px) {
   .watch-layout, .watch-layout.no-rail {
-    padding: 14px 14px calc(78px + env(safe-area-inset-bottom));
+    padding: 14px 14px calc(78px + var(--safe-bottom));
     gap: 16px;
   }
   .watch-main { gap: 12px; }
@@ -859,17 +904,17 @@ a { color: inherit; }
   .btn-mark-watched { min-height: 44px; }
   .watch-title-actions .favorite-toggle { width: 44px; height: 44px; min-width: 44px; }
   .poster-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 7px; }
-  .results-section { padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+  .results-section { padding: 16px 16px calc(78px + var(--safe-bottom)); }
   .error-banner { margin: 12px 16px; }
 }
 
 @media (max-width: 520px) {
   .poster-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .watch-layout, .watch-layout.no-rail {
-    padding: 12px 12px calc(78px + env(safe-area-inset-bottom));
+    padding: 12px 12px calc(78px + var(--safe-bottom));
   }
   .watch-poster, .watch-poster-fallback { width: 54px; }
-  .results-section { padding: 12px 12px calc(78px + env(safe-area-inset-bottom)); }
+  .results-section { padding: 12px 12px calc(78px + var(--safe-bottom)); }
 }
 
 .auth-shell {
@@ -948,7 +993,10 @@ a { color: inherit; }
 
 .session-banner {
   position: fixed;
-  top: 20px;
+  /* Cleared of the status bar: this is the one message that appears when the
+     session has gone, and reading it half-covered by the clock is exactly when
+     it matters most. */
+  top: calc(20px + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
   z-index: 500;

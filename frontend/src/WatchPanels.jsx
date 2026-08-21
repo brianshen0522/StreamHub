@@ -124,6 +124,26 @@ export function EpisodeRail({ heading, rows, onSelect, watchedLabel, nowPlayingL
  * mainstream players expose, so it collapses to one line showing what is
  * playing and opens on demand instead of spilling 21 pills onto the page.
  */
+/**
+ * Marks a source whose ads the filter has already found and will remove.
+ *
+ * Green, not red: the ads being there is not the news — every provider splices
+ * them — the news is that this source is one the filter measured and can clean,
+ * which is a reason to pick it. Red on this list would read as a fault in the
+ * source and steer people away from exactly the ones that work best.
+ *
+ * The runtime shown beside it is already the *content* length with the ads
+ * taken out, so the two read together.
+ */
+function AdTag({ text, title, seconds }) {
+  if (!text) return null;
+  return (
+    <span className="src-adtag" title={title ? title.replace("{s}", seconds) : undefined}>
+      {text}
+    </span>
+  );
+}
+
 export function SourceSelect({
   label,
   rows,
@@ -134,6 +154,8 @@ export function SourceSelect({
   emptyText,
   note,
   adNote,
+  adTag,
+  adTagTitle,
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
@@ -186,6 +208,7 @@ export function SourceSelect({
             <>
               <span className={`mode-dot ${active.mode === "proxy" ? "proxy" : "direct"}`} />
               <span className="src-trigger-label">{active.label}</span>
+              {active.adSeconds > 0 ? <AdTag text={adTag} title={adTagTitle} seconds={active.adSeconds} /> : null}
               <span className="src-trigger-duration">{active.duration}</span>
             </>
           ) : (
@@ -217,6 +240,7 @@ export function SourceSelect({
                 >
                   <span className={`mode-dot ${row.mode === "proxy" ? "proxy" : "direct"}`} />
                   <span className="src-option-label">{row.label}</span>
+                  {row.adSeconds > 0 ? <AdTag text={adTag} title={adTagTitle} seconds={row.adSeconds} /> : null}
                   <span className="src-option-duration">{row.duration}</span>
                 </button>
               </li>

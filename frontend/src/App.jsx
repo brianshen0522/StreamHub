@@ -849,6 +849,12 @@ function App() {
     label: source.sourceLabel,
     duration: formatSourceDuration(source.durationSeconds, t),
     mode: getSourcePlaybackMode(source, activeSource, playbackMode),
+    // Ads found in this source's playlist, which the filter strips before it
+    // reaches the player. It is a property of the source, so it belongs on the
+    // row: it is one of the two things worth knowing when picking between
+    // twenty of them, and it was only ever shown for the one already playing —
+    // which is too late to be a reason to choose it.
+    adSeconds: source.adSeconds || 0,
   })), [sources, activeSource, playbackMode, t]);
 
   const showRail = itemDetail?.mediaType === "tv" && (episodeRows.length > 0 || seasonOptions.length > 0);
@@ -1786,6 +1792,8 @@ function App() {
                     adNote={activeSource?.adSeconds > 0
                       ? t.metaAdsExcluded.replace("{s}", activeSource.adSeconds)
                     : ""}
+                    adTag={t.srcAdsStripped}
+                    adTagTitle={t.srcAdsStrippedTitle}
                   />
                 </div>
               </div>
