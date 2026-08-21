@@ -56,6 +56,34 @@ function readStored(key, fallback) {
   }
 }
 
+/**
+ * iPhone Safari implements no element fullscreen at all — no
+ * requestFullscreen, no webkit-prefixed variant on elements. The only route is
+ * putting the *video* into the system player via webkitEnterFullscreen, which
+ * replaces our chrome with iOS's own. Everything else gets the real thing.
+ */
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function fullscreenSupported(frame, video) {
+  return !!(frame?.requestFullscreen || frame?.webkitRequestFullscreen || video?.webkitEnterFullscreen);
+}
+
+function enterFullscreen(frame, video) {
+  if (frame?.requestFullscreen) return frame.requestFullscreen();
+  if (frame?.webkitRequestFullscreen) return Promise.resolve(frame.webkitRequestFullscreen());
+  if (video?.webkitEnterFullscreen) return Promise.resolve(video.webkitEnterFullscreen());
+  return Promise.reject(new Error("Fullscreen unavailable"));
+}
+
+function exitFullscreen(video) {
+  if (document.exitFullscreen) return document.exitFullscreen();
+  if (document.webkitExitFullscreen) return Promise.resolve(document.webkitExitFullscreen());
+  if (video?.webkitExitFullscreen) return Promise.resolve(video.webkitExitFullscreen());
+  return Promise.resolve();
+}
+
 function levelLabel(level) {
   if (level?.height) return `${level.height}p`;
   if (level?.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
@@ -253,11 +281,28 @@ export default function VideoPlayer({
   /* ── fullscreen ───────────────────────────────────────────── */
 
   useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === frameRef.current);
+    const onChange = () => setFullscreen(fullscreenElement() === frameRef.current);
     document.addEventListener("fullscreenchange", onChange);
+    document.addEventListener("webkitfullscreenchange", onChange);
     onChange();
-    return () => document.removeEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
+    };
   }, []);
+
+  // The iOS route fullscreens the video itself, which fires only these.
+  useEffect(() => {
+    if (!videoEl) return undefined;
+    const onBegin = () => setFullscreen(true);
+    const onEnd = () => setFullscreen(false);
+    videoEl.addEventListener("webkitbeginfullscreen", onBegin);
+    videoEl.addEventListener("webkitendfullscreen", onEnd);
+    return () => {
+      videoEl.removeEventListener("webkitbeginfullscreen", onBegin);
+      videoEl.removeEventListener("webkitendfullscreen", onEnd);
+    };
+  }, [videoEl]);
 
   /* ── controls auto-hide ───────────────────────────────────── */
 
@@ -320,9 +365,9 @@ export default function VideoPlayer({
   const toggleFullscreen = useCallback(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    if (document.fullscreenElement === frame) void document.exitFullscreen().catch(() => {});
-    else void frame.requestFullscreen?.().catch(() => {});
-  }, []);
+    if (fullscreenElement() === frame) void exitFullscreen(videoEl).catch(() => {});
+    else void enterFullscreen(frame, videoEl).catch(() => {});
+  }, [videoEl]);
 
   const togglePip = useCallback(async () => {
     if (!videoEl || !document.pictureInPictureEnabled) return;
@@ -896,9 +941,11 @@ export default function VideoPlayer({
             </button>
           ) : null}
 
-          <button type="button" className="vp-btn" onClick={toggleFullscreen} title={`${fullscreen ? t.vpExitFullscreen : t.vpFullscreen} (F)`} aria-label={fullscreen ? t.vpExitFullscreen : t.vpFullscreen}>
-            {fullscreen ? <IconCollapse /> : <IconExpand />}
-          </button>
+          {fullscreenSupported(frameRef.current, videoEl) ? (
+            <button type="button" className="vp-btn" onClick={toggleFullscreen} title={`${fullscreen ? t.vpExitFullscreen : t.vpFullscreen} (F)`} aria-label={fullscreen ? t.vpExitFullscreen : t.vpFullscreen}>
+              {fullscreen ? <IconCollapse /> : <IconExpand />}
+            </button>
+          ) : null}
         </div>
       </div>
 

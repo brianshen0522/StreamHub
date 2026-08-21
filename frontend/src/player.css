@@ -676,6 +676,8 @@
 
 @media (max-width: 640px) {
   .vp { border-radius: 10px; }
+  .vp:fullscreen .vp-controls,
+  .vp:-webkit-full-screen .vp-controls { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .vp-controls { padding: 28px 6px 8px; }
   .vp-btn { width: 34px; height: 34px; }
   .vp-btn svg { width: 18px; height: 18px; }
