@@ -42,7 +42,11 @@
 .usr *::before,
 .usr *::after { box-sizing: border-box; }
 
-.usr button { font: inherit; color: inherit; border: 0; background-color: transparent; cursor: pointer; }
+/* Zero-specificity reset. As `.usr button` this was (0,1,1) and silently beat
+   every single-class component rule inside the portal — .src-trigger, .ep-row,
+   .btn-mark-watched and .favorite-toggle all rendered as bare text. :where()
+   keeps the defaults while letting any component style win. */
+:where(.usr button) { font: inherit; color: inherit; border: 0; background-color: transparent; cursor: pointer; }
 .usr input,
 .usr select { font: inherit; }
 .usr a { color: inherit; text-decoration: none; }
@@ -440,6 +444,15 @@
 .usr-chip-accent { background: rgba(229, 9, 20, 0.86); border-color: transparent; }
 .usr-chip-done { background: rgba(62, 207, 126, 0.86); border-color: transparent; color: #04220f; }
 
+/* Two-line card meta. .usr-card-meta itself is left alone: Favorites and
+   History pass a plain string and rely on its nowrap/ellipsis. */
+.usr-card-meta-main,
+.usr-card-meta-sub { display: block; overflow: hidden; text-overflow: ellipsis; }
+.usr-card-meta-sub { margin-top: 1px; font-size: 10.5px; opacity: 0.72; }
+
+/* "Next" reads as a state, so it stays off the accent the provider chip uses. */
+.usr-chip-next { background: rgba(255, 255, 255, 0.9); border-color: transparent; color: #0d0d0f; }
+
 .usr-card-remove {
   position: absolute;
   top: 7px;
@@ -816,6 +829,79 @@
 
 @keyframes usr-shimmer { to { background-position: -200% 0; } }
 
+
+/* ── collapsed rail (default) ──────────────────────────────── */
+
+/* Rail toggle heads the top bar, YouTube-style. */
+.usr-rail-toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  margin-left: -6px;
+  border-radius: var(--usr-r-sm);
+  color: var(--usr-fg-2);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.usr-rail-toggle:hover { background: rgba(255, 255, 255, 0.07); color: var(--usr-fg); }
+.usr-rail-toggle:focus-visible { outline: 2px solid var(--usr-accent-hi); outline-offset: 1px; }
+.usr-rail-toggle svg { width: 18px; height: 18px; }
+
+/* Scoped above the phone breakpoint: below 861px the sidebar is already a
+   bottom tab bar and must inherit none of this. */
+@media (min-width: 861px) {
+  .usr-rail-collapsed .usr-shell { grid-template-columns: 72px minmax(0, 1fr); }
+
+  .usr-rail-collapsed .usr-side { padding: 18px 8px 14px; }
+
+  /* Collapsed, the toggle is the only thing in the brand row, so it sits on
+     the same centre line as the nav icons underneath. */
+  .usr-rail-collapsed .usr-brand { justify-content: center; padding: 4px 0 14px; }
+  .usr-rail-collapsed .usr-brand-name,
+  .usr-rail-collapsed .usr-brand-dot { display: none; }
+  .usr-rail-collapsed .usr-rail-toggle { margin-left: 0; }
+
+  .usr-rail-collapsed .usr-nav-item {
+    flex-direction: column;
+    gap: 4px;
+    padding: 9px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+  }
+  .usr-rail-collapsed .usr-nav-item svg { width: 20px; height: 20px; flex: 0 0 20px; }
+  .usr-rail-collapsed .usr-nav-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The count rides the icon instead of claiming a column of its own. */
+  .usr-rail-collapsed .usr-nav-count {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    margin: 0;
+    transform: translateX(3px);
+    min-width: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--usr-accent);
+    color: #fff;
+    font-size: 9.5px;
+    line-height: 15px;
+    text-align: center;
+  }
+
+  .usr-rail-collapsed .usr-side-user { justify-content: center; padding: 6px 0; }
+  .usr-rail-collapsed .usr-side-user-text { display: none; }
+  .usr-rail-collapsed .usr-btn-label { display: none; }
+  .usr-rail-collapsed .usr-btn-ghost { justify-content: center; padding-left: 0; padding-right: 0; }
+}
+
 /* ── responsive ────────────────────────────────────────────── */
 
 /* Phone: the sidebar becomes a bottom tab bar. Wrapping it into a header cost
@@ -880,6 +966,8 @@
     line-height: 16px;
     text-align: center;
   }
+
+  .usr-rail-toggle { display: none; }
 
   .usr-topbar { padding: 0 14px; }
   .usr-topbar-title { font-size: 14px; }

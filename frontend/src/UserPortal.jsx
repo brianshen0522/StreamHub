@@ -1,12 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
-import { PortalChromeContext } from "./portal-chrome.js";
+import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
 import { subscribeRealtime } from "./realtime.js";
-import { resolveLanguage, translations } from "./i18n.js";
+import { fmt, resolveLanguage, storeLanguage, translations } from "./i18n.js";
 import "./portal.css";
 
 const App = lazy(() => import("./App.jsx"));
+
+/** Translations for the active language, shared through LanguageContext. */
+function useT() {
+  return usePortalLanguage()?.t || translations[resolveLanguage()] || translations["zh-TW"];
+}
 
 /* ── icons ─────────────────────────────────────────────────── */
 
@@ -25,6 +30,7 @@ const IconPlayCircle = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" />
 const IconClock = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M12 7.2V12l3 1.8" /></svg>;
 const IconUser = () => <svg {...svgProps}><circle cx="12" cy="8" r="3.6" /><path d="M4.5 20a7.5 7.5 0 0 1 15 0" /></svg>;
 const IconLogout = () => <svg {...svgProps}><path d="M15 17v1.5A2.5 2.5 0 0 1 12.5 21h-6A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3h6A2.5 2.5 0 0 1 15 5.5V7" /><path d="M10 12h11M18 9l3 3-3 3" /></svg>;
+const IconMenu = () => <svg {...svgProps}><path d="M4 7h16M4 12h16M4 17h16" /></svg>;
 const IconClose = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
 const IconFilm = () => <svg {...svgProps}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9.5h18M3 14.5h18M8 4v16M16 4v16" /></svg>;
 const IconCheck = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="m8.2 12.2 2.6 2.6 5-5.2" /></svg>;
@@ -48,32 +54,32 @@ function avatarStyle(seed = "") {
   return { background: `linear-gradient(150deg, hsl(${hue} 62% 46%), hsl(${(hue + 24) % 360} 58% 32%))` };
 }
 
-function formatRelative(value) {
+function formatRelative(value, t) {
   if (!value) return "";
   const diff = Date.now() - new Date(value).getTime();
-  if (diff < 60_000) return "just now";
+  if (diff < 60_000) return t.justNow;
   const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return fmt(t.minAgo, { n: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return fmt(t.hourAgo, { n: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  if (days < 30) return fmt(t.dayAgo, { n: days });
+  return new Date(value).toLocaleDateString(t.locale, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function dayBucket(value) {
+function dayBucket(value, t) {
   const date = new Date(value);
   const today = new Date();
   const startOfDay = (input) => new Date(input.getFullYear(), input.getMonth(), input.getDate()).getTime();
   const dayDiff = Math.round((startOfDay(today) - startOfDay(date)) / 86_400_000);
-  if (dayDiff <= 0) return "Today";
-  if (dayDiff === 1) return "Yesterday";
-  if (dayDiff < 7) return `${dayDiff} days ago`;
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+  if (dayDiff <= 0) return t.today;
+  if (dayDiff === 1) return t.yesterday;
+  if (dayDiff < 7) return fmt(t.daysAgoLabel, { n: dayDiff });
+  return date.toLocaleDateString(t.locale, { month: "long", day: "numeric", year: "numeric" });
 }
 
-function formatClock(value) {
-  return new Date(value).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+function formatClock(value, t) {
+  return new Date(value).toLocaleTimeString(t.locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 function encodeViewState({ providerKey, itemUrl, title, mediaType, posterUrl, seasonUrl, episodeLabel }) {
@@ -127,13 +133,14 @@ function useLiveRefresh(matches, reload) {
 /* ── primitives ────────────────────────────────────────────── */
 
 function Poster({ src, alt }) {
+  const t = useT();
   const [failed, setFailed] = useState(false);
   const resolved = src ? posterProxyUrl(src) : "";
   if (!resolved || failed) {
     return (
       <div className="usr-card-fallback">
         <IconFilm />
-        <span>No art</span>
+        <span>{t.noArt}</span>
       </div>
     );
   }
@@ -243,6 +250,7 @@ function MediaCard({ item, meta, chips, progressPercent, isCompleted, onRemove, 
 /* ── pages ─────────────────────────────────────────────────── */
 
 function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
+  const t = useT();
   const [favorites, setFavorites] = useState(null);
   const [error, setError] = useState("");
 
@@ -261,24 +269,24 @@ function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
   useLiveRefresh(useCallback((event) => event.type === "favorites", []), load);
   useEffect(() => {
     setTopbar({
-      title: "Favorites",
+      title: t.navFavorites,
       count: favorites?.length,
       sub: (
         <>
-          Everything you starred, across all providers
-          <span className="usr-hint-hover"> · hover a poster to remove it</span>
-          <span className="usr-hint-touch"> · tap ✕ to remove</span>
+          {t.favSub}
+          <span className="usr-hint-hover">{t.favHintHover}</span>
+          <span className="usr-hint-touch">{t.favHintTouch}</span>
         </>
       ),
     });
-  }, [setTopbar, favorites]);
+  }, [setTopbar, favorites, t]);
 
   async function remove(entry) {
     const previous = favorites;
     setFavorites((current) => current.filter((item) => item.id !== entry.id));
     try {
       await apiJson(`/api/me/favorites/${entry.id}`, { method: "DELETE" });
-      toast(`Removed “${entry.title}”.`);
+      toast(fmt(t.favRemoved, { t: entry.title }));
       onCountsChanged();
     } catch (removeError) {
       setFavorites(previous);
@@ -298,17 +306,17 @@ function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
               key={item.id}
               item={item}
               chips={[{ label: item.providerKey, tone: "accent" }]}
-              meta={item.episodeLabel || (item.mediaType === "movie" ? "Movie" : item.mediaType === "tv" ? "Series" : "")}
+              meta={item.episodeLabel || (item.mediaType === "movie" ? t.typeMovie : item.mediaType === "tv" ? t.seriesLabel : "")}
               onRemove={() => remove(item)}
-              removeLabel={`Remove ${item.title} from favorites`}
+              removeLabel={fmt(t.favRemoveLabel, { t: item.title })}
             />
           ))}
         </div>
       ) : (
         <Empty
-          title="No favorites yet"
-          description="Star a title while watching and it will show up here for quick access."
-          action={<Link to="/" className="usr-btn usr-btn-primary">Browse titles</Link>}
+          title={t.favEmptyTitle}
+          description={t.favEmptyDesc}
+          action={<Link to="/" className="usr-btn usr-btn-primary">{t.browseTitles}</Link>}
         />
       )}
     </>
@@ -316,6 +324,7 @@ function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
 }
 
 function ContinuePage({ setTopbar, toast, onCountsChanged }) {
+  const t = useT();
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
 
@@ -334,17 +343,17 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
   useLiveRefresh(useCallback((event) => event.type === "progress", []), load);
   useEffect(() => {
     setTopbar({
-      title: "Continue watching",
+      title: t.navContinue,
       count: items?.length,
       sub: (
         <>
-          Resume points save automatically
-          <span className="usr-hint-hover"> · hover a poster to drop one</span>
-          <span className="usr-hint-touch"> · tap ✕ to drop one</span>
+          {t.contSub}
+          <span className="usr-hint-hover">{t.contHintHover}</span>
+          <span className="usr-hint-touch">{t.contHintTouch}</span>
         </>
       ),
     });
-  }, [setTopbar, items]);
+  }, [setTopbar, items, t]);
 
   async function remove(entry) {
     const previous = items;
@@ -353,13 +362,13 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
       await apiJson("/api/me/progress", {
         method: "DELETE",
         body: JSON.stringify({
+          scope: "title",
           providerKey: entry.providerKey,
           itemUrl: entry.itemUrl,
-          seasonUrl: entry.seasonUrl || "",
-          episodeLabel: entry.episodeLabel || "",
+          title: entry.title,
         }),
       });
-      toast(`Removed “${entry.title}” from your list.`);
+      toast(fmt(t.contRemoved, { t: entry.title }));
       onCountsChanged();
     } catch (removeError) {
       setItems(previous);
@@ -377,29 +386,46 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
           {items.map((item) => {
             const percent = Math.round(item.progressPercent || 0);
             const remaining = Math.max(0, (item.durationSeconds || 0) - (item.positionSeconds || 0));
-            const remainingLabel = remaining > 0 ? `${Math.ceil(remaining / 60)} min left` : "";
+            const remainingLabel = remaining > 0 ? fmt(t.contMinLeft, { n: Math.ceil(remaining / 60) }) : "";
+            // A finished episode carries no progress into the next one, so a bar
+            // here would read 100% for something not yet started.
+            const watched = item.episodesCompleted > 0
+              ? fmt(t.contEpisodesWatched, { n: item.episodesCompleted })
+              : "";
             return (
               <MediaCard
                 key={item.id}
                 item={item}
                 chips={[
                   { label: item.providerKey, tone: "accent" },
-                  ...(item.episodeLabel ? [{ label: item.episodeLabel }] : []),
+                  ...(item.nextUp
+                    ? [{ label: t.contNextChip, tone: "next" }]
+                    : item.episodeLabel
+                      ? [{ label: item.episodeLabel }]
+                      : []),
                 ]}
-                meta={[`${percent}%`, remainingLabel].filter(Boolean).join(" · ")}
-                progressPercent={percent}
-                isCompleted={item.isCompleted}
+                meta={
+                  <>
+                    <span className="usr-card-meta-main">
+                      {item.nextUp
+                        ? fmt(t.contUpNextAfter, { ep: item.episodeLabel })
+                        : [item.episodeLabel, remainingLabel || `${percent}%`].filter(Boolean).join(" · ")}
+                    </span>
+                    {watched ? <span className="usr-card-meta-sub">{watched}</span> : null}
+                  </>
+                }
+                progressPercent={item.nextUp ? undefined : percent}
                 onRemove={() => remove(item)}
-                removeLabel={`Remove ${item.title} from continue watching`}
+                removeLabel={fmt(t.contRemoveLabel, { t: item.title })}
               />
             );
           })}
         </div>
       ) : (
         <Empty
-          title="Nothing in progress"
-          description="Start playing something and StreamHub will remember your position here."
-          action={<Link to="/" className="usr-btn usr-btn-primary">Browse titles</Link>}
+          title={t.contEmptyTitle}
+          description={t.contEmptyDesc}
+          action={<Link to="/" className="usr-btn usr-btn-primary">{t.browseTitles}</Link>}
         />
       )}
     </>
@@ -407,6 +433,7 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
 }
 
 function HistoryPage({ setTopbar }) {
+  const t = useT();
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(() => new Set());
@@ -455,7 +482,7 @@ function HistoryPage({ setTopbar }) {
   const days = useMemo(() => {
     const groups = new Map();
     for (const title of titles) {
-      const label = dayBucket(title.latest.watchedAt);
+      const label = dayBucket(title.latest.watchedAt, t);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(title);
     }
@@ -464,13 +491,13 @@ function HistoryPage({ setTopbar }) {
 
   useEffect(() => {
     setTopbar({
-      title: "History",
+      title: t.navHistory,
       count: titles.length,
       sub: history
-        ? `${titles.length} ${titles.length === 1 ? "title" : "titles"} · ${history.length} sessions`
-        : "Everything you have played",
+        ? fmt(t.histSummary, { titles: titles.length, sessions: history.length })
+        : t.histSubDefault,
     });
-  }, [setTopbar, titles, history]);
+  }, [setTopbar, titles, history, t]);
 
   function toggle(key) {
     setExpanded((current) => {
@@ -516,15 +543,15 @@ function HistoryPage({ setTopbar }) {
                         <span className="usr-chip usr-chip-accent">{entry.providerKey}</span>
                         {entry.episodeLabel ? <span>{entry.episodeLabel}</span> : null}
                         {percent !== null ? (
-                          <><span className="usr-dot-sep">·</span><span>{percent}% watched</span></>
+                          <><span className="usr-dot-sep">·</span><span>{fmt(t.histPercentWatched, { n: percent })}</span></>
                         ) : null}
                         {episodeCount > 1 ? (
-                          <><span className="usr-dot-sep">·</span><span>{episodeCount} episodes</span></>
+                          <><span className="usr-dot-sep">·</span><span>{fmt(t.histEpisodesCount, { n: episodeCount })}</span></>
                         ) : null}
                       </div>
                     </div>
-                    <div className="usr-row-time" title={new Date(entry.watchedAt).toLocaleString()}>
-                      {formatClock(entry.watchedAt)}
+                    <div className="usr-row-time" title={new Date(entry.watchedAt).toLocaleString(t.locale)}>
+                      {formatClock(entry.watchedAt, t)}
                     </div>
                   </Link>
 
@@ -535,7 +562,7 @@ function HistoryPage({ setTopbar }) {
                       aria-expanded={isOpen}
                       onClick={() => toggle(title.key)}
                     >
-                      {isOpen ? "Hide" : `${title.sessions} sessions`}
+                      {isOpen ? t.histHide : fmt(t.histSessionsCount, { n: title.sessions })}
                     </button>
                   ) : null}
 
@@ -550,7 +577,7 @@ function HistoryPage({ setTopbar }) {
                               {episode.durationSeconds > 0
                                 ? `${Math.round((episode.positionSeconds / episode.durationSeconds) * 100)}% · `
                                 : ""}
-                              {formatRelative(episode.watchedAt)}
+                              {formatRelative(episode.watchedAt, t)}
                             </span>
                           </Link>
                         ))}
@@ -563,16 +590,17 @@ function HistoryPage({ setTopbar }) {
         </section>
       )) : (
         <Empty
-          title="No watch history"
-          description="Once you play something, every session shows up here grouped by title."
-          action={<Link to="/" className="usr-btn usr-btn-primary">Browse titles</Link>}
+          title={t.histEmptyTitle}
+          description={t.histEmptyDesc}
+          action={<Link to="/" className="usr-btn usr-btn-primary">{t.browseTitles}</Link>}
         />
       )}
     </>
   );
 }
 
-function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
+function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
+  const t = useT();
   const [form, setForm] = useState({
     username: session.user.username,
     email: session.user.email,
@@ -586,8 +614,8 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
   const [providers, setProviders] = useState([]);
 
   useEffect(() => {
-    setTopbar({ title: "Profile", sub: "Update your details and rotate your password" });
-  }, [setTopbar]);
+    setTopbar({ title: t.navProfile, sub: t.profSub });
+  }, [setTopbar, t]);
 
   useEffect(() => {
     apiJson("/api/me/providers").then((payload) => setProviders(payload.providers || [])).catch(() => {});
@@ -602,7 +630,7 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
       const nextSession = { ...session, user: payload.user };
       setStoredSession(nextSession);
       setSession(nextSession);
-      toast("Profile updated.");
+      toast(t.profUpdated);
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -618,7 +646,7 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
       await apiJson("/api/auth/me/password", { method: "PATCH", body: JSON.stringify({ currentPassword, nextPassword }) });
       setCurrentPassword("");
       setNextPassword("");
-      toast("Password updated.");
+      toast(t.profPasswordUpdated);
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -632,26 +660,26 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
       <div className="usr-cols-2">
         <section className="usr-panel">
           <header className="usr-panel-head">
-            <div className="usr-panel-title">Account</div>
-            <div className="usr-panel-desc">Your name, username, and email</div>
+            <div className="usr-panel-title">{t.profAccount}</div>
+            <div className="usr-panel-desc">{t.profAccountDesc}</div>
           </header>
           <div className="usr-panel-body">
             <form className="usr-form" onSubmit={saveProfile}>
               <label className="usr-field">
-                <span className="usr-label">Display name</span>
+                <span className="usr-label">{t.profDisplayName}</span>
                 <input className="usr-input" name="displayName" value={form.displayName} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} />
               </label>
               <label className="usr-field">
-                <span className="usr-label">Username</span>
+                <span className="usr-label">{t.profUsername}</span>
                 <input className="usr-input" name="username" value={form.username} onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))} />
               </label>
               <label className="usr-field">
-                <span className="usr-label">Email</span>
+                <span className="usr-label">{t.profEmail}</span>
                 <input className="usr-input" name="email" type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
               </label>
               <div className="usr-form-actions">
                 <button type="submit" className="usr-btn usr-btn-primary" disabled={savingProfile}>
-                  {savingProfile ? "Saving…" : "Save profile"}
+                  {savingProfile ? t.saving : t.profSave}
                 </button>
               </div>
             </form>
@@ -661,22 +689,22 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
         <div style={{ display: "grid", gap: 18 }}>
           <section className="usr-panel">
             <header className="usr-panel-head">
-              <div className="usr-panel-title">Password</div>
-              <div className="usr-panel-desc">Choose something at least 6 characters long</div>
+              <div className="usr-panel-title">{t.profPassword}</div>
+              <div className="usr-panel-desc">{t.profPasswordDesc}</div>
             </header>
             <div className="usr-panel-body">
               <form className="usr-form" onSubmit={savePassword}>
                 <label className="usr-field">
-                  <span className="usr-label">Current password</span>
+                  <span className="usr-label">{t.profCurrentPassword}</span>
                   <input className="usr-input" name="currentPassword" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="••••••••" />
                 </label>
                 <label className="usr-field">
-                  <span className="usr-label">New password</span>
+                  <span className="usr-label">{t.profNewPassword}</span>
                   <input className="usr-input" name="nextPassword" type="password" autoComplete="new-password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} placeholder="••••••••" />
                 </label>
                 <div className="usr-form-actions">
                   <button type="submit" className="usr-btn usr-btn-ghost" disabled={savingPassword || !currentPassword || !nextPassword}>
-                    {savingPassword ? "Saving…" : "Update password"}
+                    {savingPassword ? t.saving : t.profUpdatePassword}
                   </button>
                 </div>
               </form>
@@ -685,32 +713,32 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
 
           <section className="usr-panel">
             <header className="usr-panel-head">
-              <div className="usr-panel-title">Session</div>
-              <div className="usr-panel-desc">Signed in as {session.user.username}</div>
+              <div className="usr-panel-title">{t.profSession}</div>
+              <div className="usr-panel-desc">{fmt(t.profSignedInAs, { u: session.user.username })}</div>
             </header>
             <div className="usr-panel-body">
               <button type="button" className="usr-btn usr-btn-ghost" onClick={onLogout}>
                 <IconLogout />
-                {t.logout || "Sign out"}
+                {t.logout}
               </button>
             </div>
           </section>
 
           <section className="usr-panel">
             <header className="usr-panel-head">
-              <div className="usr-panel-title">Access</div>
-              <div className="usr-panel-desc">Providers your account can search — managed by an admin</div>
+              <div className="usr-panel-title">{t.profAccess}</div>
+              <div className="usr-panel-desc">{t.profAccessDesc}</div>
             </header>
             <div className="usr-panel-body">
               <div className="usr-kv">
-                <div className="usr-kv-row"><span>Member since</span><span>{new Date(session.user.createdAt).toLocaleDateString()}</span></div>
-                <div className="usr-kv-row"><span>Last sign-in</span><span>{formatRelative(session.user.lastLoginAt) || "—"}</span></div>
+                <div className="usr-kv-row"><span>{t.profMemberSince}</span><span>{new Date(session.user.createdAt).toLocaleDateString(t.locale)}</span></div>
+                <div className="usr-kv-row"><span>{t.profLastSignIn}</span><span>{formatRelative(session.user.lastLoginAt, t) || "—"}</span></div>
                 <div className="usr-kv-row">
-                  <span>Providers</span>
+                  <span>{t.providers}</span>
                   <span>
                     {providers.length
                       ? providers.map((provider) => provider.name || provider.key).join(", ")
-                      : "None enabled"}
+                      : t.profNoProviders}
                   </span>
                 </div>
               </div>
@@ -724,13 +752,24 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
 
 /* ── shell ─────────────────────────────────────────────────── */
 
+const RAIL_STORAGE_KEY = "streamhub.sidebar";
+
 export default function UserPortal({ session, setSession, onLogout }) {
   const location = useLocation();
   const [chrome, setChrome] = useState(null);
+  // Collapsed by default, like YouTube's mini guide: the rail keeps the icons
+  // reachable without spending 224px of every page on navigation.
+  const [railCollapsed, setRailCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(RAIL_STORAGE_KEY) !== "expanded";
+    } catch {
+      return true;
+    }
+  });
   const [topbar, setTopbar] = useState({ title: "", sub: "" });
   const [toastState, setToastState] = useState(null);
   const [counts, setCounts] = useState({ favorites: null, continueWatching: null });
-  const [language] = useState(resolveLanguage());
+  const [language, setLanguage] = useState(resolveLanguage());
 
   const t = translations[language] || translations["zh-TW"];
   const isBrowse = location.pathname === "/";
@@ -759,6 +798,20 @@ export default function UserPortal({ session, setSession, onLogout }) {
   }), [loadCounts]);
 
   const chromeValue = useMemo(() => ({ setChrome }), []);
+  const languageValue = useMemo(() => ({ language, setLanguage, t }), [language, t]);
+
+  // The switch lives in App.jsx (the Browse view) but drives the whole portal,
+  // and the choice has to outlive a reload — resolveLanguage() previously read
+  // navigator.language every time, so switching never stuck.
+  useEffect(() => { storeLanguage(language); }, [language]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RAIL_STORAGE_KEY, railCollapsed ? "collapsed" : "expanded");
+    } catch {
+      /* private mode — the rail just reverts to collapsed next visit */
+    }
+  }, [railCollapsed]);
 
   const links = useMemo(() => [
     { to: "/", label: t.navBrowse || "Browse", icon: <IconCompass />, end: true },
@@ -769,10 +822,21 @@ export default function UserPortal({ session, setSession, onLogout }) {
   ], [t, counts]);
 
   return (
-    <div className="usr">
+    <LanguageContext.Provider value={languageValue}>
+    <div className={`usr${railCollapsed ? " usr-rail-collapsed" : ""}`}>
       <div className="usr-shell">
         <aside className="usr-side">
           <div className="usr-brand">
+            <button
+              type="button"
+              className="usr-rail-toggle"
+              onClick={() => setRailCollapsed((current) => !current)}
+              aria-label={railCollapsed ? t.sidebarExpand : t.sidebarCollapse}
+              title={railCollapsed ? t.sidebarExpand : t.sidebarCollapse}
+              aria-expanded={!railCollapsed}
+            >
+              <IconMenu />
+            </button>
             <span className="usr-brand-dot">S</span>
             <div className="usr-brand-name">StreamHub</div>
           </div>
@@ -781,9 +845,14 @@ export default function UserPortal({ session, setSession, onLogout }) {
             {links.map((link) => {
               const active = link.end ? location.pathname === link.to : location.pathname.startsWith(link.to);
               return (
-                <Link key={link.to} to={link.to} className={`usr-nav-item${active ? " is-active" : ""}`}>
+                <Link
+                  key={link.to}
+                  to={link.to}
+                  className={`usr-nav-item${active ? " is-active" : ""}`}
+                  title={railCollapsed ? link.label : undefined}
+                >
                   {link.icon}
-                  {link.label}
+                  <span className="usr-nav-label">{link.label}</span>
                   {link.count ? <span className="usr-nav-count">{link.count}</span> : null}
                 </Link>
               );
@@ -800,9 +869,14 @@ export default function UserPortal({ session, setSession, onLogout }) {
                 <div className="usr-side-user-sub">{session.user.username}</div>
               </div>
             </div>
-            <button type="button" className="usr-btn usr-btn-ghost" onClick={onLogout}>
+            <button
+              type="button"
+              className="usr-btn usr-btn-ghost"
+              onClick={onLogout}
+              title={railCollapsed ? t.logout : undefined}
+            >
               <IconLogout />
-              {t.logout || "Sign out"}
+              <span className="usr-btn-label">{t.logout}</span>
             </button>
           </div>
         </aside>
@@ -829,7 +903,7 @@ export default function UserPortal({ session, setSession, onLogout }) {
                 <Route path="favorites" element={<FavoritesPage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="continue" element={<ContinuePage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="history" element={<HistoryPage setTopbar={setTopbar} />} />
-                <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} onLogout={onLogout} t={t} />} />
+                <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} onLogout={onLogout} />} />
               </Routes>
             </PortalChromeContext.Provider>
           </div>
@@ -838,5 +912,6 @@ export default function UserPortal({ session, setSession, onLogout }) {
 
       <Toast message={toastState?.message} tone={toastState?.tone} onDismiss={dismissToast} />
     </div>
+    </LanguageContext.Provider>
   );
 }

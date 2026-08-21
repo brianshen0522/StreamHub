@@ -17,6 +17,11 @@ export const translations = {
     details: "詳細資料",
     seasons: "季數",
     episodes: "集數",
+    sidebarExpand: "展開側欄",
+    sidebarCollapse: "收合側欄",
+    watched: "已看完",
+    timeLeft: "剩 {t}",
+    minutesShort: "{n} 分",
     sources: "可用片源",
     sourceCount: "片源數",
     autoPlay: "自動播放第一個可用片源",
@@ -110,6 +115,71 @@ export const translations = {
     dlDone: "下載完成",
     dlDoneNoAds: "下載完成，已移除 {s} 秒廣告",
     metaAdsExcluded: "已扣除 {s} 秒廣告",
+
+    /* ── portal shell & pages ── */
+    justNow: "剛剛",
+    minAgo: "{n} 分鐘前",
+    hourAgo: "{n} 小時前",
+    dayAgo: "{n} 天前",
+    today: "今天",
+    yesterday: "昨天",
+    daysAgoLabel: "{n} 天前",
+    noArt: "無圖",
+    seriesLabel: "影集",
+    browseTitles: "瀏覽作品",
+    saving: "儲存中…",
+
+    favSub: "你收藏的所有作品，跨全部來源",
+    favHintHover: " · 將滑鼠移到海報上可移除",
+    favHintTouch: " · 點 ✕ 移除",
+    favEmptyTitle: "還沒有收藏",
+    favEmptyDesc: "觀看時把作品加入收藏，就會出現在這裡方便快速取用。",
+    favRemoved: "已移除「{t}」。",
+    favRemoveLabel: "將「{t}」從收藏移除",
+
+    contSub: "一部作品一格，接續上次的進度",
+    contHintHover: " · 將滑鼠移到海報上可移除",
+    contHintTouch: " · 點 ✕ 移除",
+    contEmptyTitle: "目前沒有進行中的作品",
+    contEmptyDesc: "開始播放後，StreamHub 會在這裡記住你的進度。",
+    contNextChip: "下一集",
+    contUpNextAfter: "接續 {ep} 之後",
+    contEpisodesWatched: "已看完 {n} 集",
+    contMinLeft: "還剩 {n} 分鐘",
+    contRemoved: "已將「{t}」移出繼續觀看。",
+    contRemoveLabel: "將「{t}」移出繼續觀看",
+
+    histSubDefault: "你播放過的所有內容",
+    locale: "zh-TW",
+    histSummary: "作品 {titles} 部 · 播放 {sessions} 次",
+    histEmptyTitle: "還沒有觀看紀錄",
+    histEmptyDesc: "播放任何內容後，每一次的紀錄都會依作品分組顯示在這裡。",
+    histPercentWatched: "已看 {n}%",
+    histEpisodesCount: "{n} 集",
+    histSessionsCount: "{n} 次播放",
+    histHide: "收合",
+
+    profSub: "更新你的個人資料與密碼",
+    profAccount: "帳號",
+    profAccountDesc: "你的名稱、使用者名稱與電子郵件",
+    profDisplayName: "顯示名稱",
+    profUsername: "使用者名稱",
+    profEmail: "電子郵件",
+    profSave: "儲存資料",
+    profUpdated: "個人資料已更新。",
+    profPassword: "密碼",
+    profPasswordDesc: "請設定至少 6 個字元",
+    profCurrentPassword: "目前密碼",
+    profNewPassword: "新密碼",
+    profUpdatePassword: "更新密碼",
+    profPasswordUpdated: "密碼已更新。",
+    profSession: "工作階段",
+    profSignedInAs: "目前登入身分：{u}",
+    profAccess: "存取權限",
+    profAccessDesc: "你的帳號可搜尋的來源 — 由管理員設定",
+    profMemberSince: "註冊於",
+    profLastSignIn: "上次登入",
+    profNoProviders: "未啟用任何來源",
   },
   en: {
     appTag: "Search and play across providers",
@@ -129,6 +199,11 @@ export const translations = {
     details: "Details",
     seasons: "Seasons",
     episodes: "Episodes",
+    sidebarExpand: "Expand sidebar",
+    sidebarCollapse: "Collapse sidebar",
+    watched: "Watched",
+    timeLeft: "{t} left",
+    minutesShort: "{n} min",
     sources: "Available Sources",
     sourceCount: "Sources",
     autoPlay: "Autoplay the first available source",
@@ -222,10 +297,97 @@ export const translations = {
     dlDone: "Download complete",
     dlDoneNoAds: "Downloaded, {s}s of ads removed",
     metaAdsExcluded: "{s}s of ads excluded",
+
+    /* ── portal shell & pages ── */
+    justNow: "just now",
+    minAgo: "{n}m ago",
+    hourAgo: "{n}h ago",
+    dayAgo: "{n}d ago",
+    today: "Today",
+    yesterday: "Yesterday",
+    daysAgoLabel: "{n} days ago",
+    noArt: "No art",
+    seriesLabel: "Series",
+    browseTitles: "Browse titles",
+    saving: "Saving…",
+
+    favSub: "Everything you starred, across all providers",
+    favHintHover: " · hover a poster to remove it",
+    favHintTouch: " · tap ✕ to remove",
+    favEmptyTitle: "No favorites yet",
+    favEmptyDesc: "Star a title while watching and it will show up here for quick access.",
+    favRemoved: "Removed “{t}”.",
+    favRemoveLabel: "Remove {t} from favorites",
+
+    contSub: "One card per title, picking up where you left off",
+    contHintHover: " · hover a poster to drop one",
+    contHintTouch: " · tap ✕ to drop one",
+    contEmptyTitle: "Nothing in progress",
+    contEmptyDesc: "Start playing something and StreamHub will remember your position here.",
+    contNextChip: "Next",
+    contUpNextAfter: "Up next after {ep}",
+    contEpisodesWatched: "{n} watched",
+    contMinLeft: "{n} min left",
+    contRemoved: "Removed “{t}” from continue watching.",
+    contRemoveLabel: "Remove {t} from continue watching",
+
+    histSubDefault: "Everything you have played",
+    locale: "en",
+    histSummary: "Titles: {titles} · Sessions: {sessions}",
+    histEmptyTitle: "No watch history",
+    histEmptyDesc: "Once you play something, every session shows up here grouped by title.",
+    histPercentWatched: "{n}% watched",
+    histEpisodesCount: "{n} episodes",
+    histSessionsCount: "{n} sessions",
+    histHide: "Hide",
+
+    profSub: "Update your details and rotate your password",
+    profAccount: "Account",
+    profAccountDesc: "Your name, username, and email",
+    profDisplayName: "Display name",
+    profUsername: "Username",
+    profEmail: "Email",
+    profSave: "Save profile",
+    profUpdated: "Profile updated.",
+    profPassword: "Password",
+    profPasswordDesc: "Choose something at least 6 characters long",
+    profCurrentPassword: "Current password",
+    profNewPassword: "New password",
+    profUpdatePassword: "Update password",
+    profPasswordUpdated: "Password updated.",
+    profSession: "Session",
+    profSignedInAs: "Signed in as {u}",
+    profAccess: "Access",
+    profAccessDesc: "Providers your account can search — managed by an admin",
+    profMemberSince: "Member since",
+    profLastSignIn: "Last sign-in",
+    profNoProviders: "None enabled",
   },
 };
 
+const LANGUAGE_STORAGE_KEY = "streamhub.language";
+
 export function resolveLanguage() {
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (stored === "zh-TW" || stored === "en") return stored;
+  } catch {
+    /* private mode — fall through to the browser preference */
+  }
   const browserLanguage = navigator.language?.toLowerCase() || "en";
   return browserLanguage.startsWith("zh") ? "zh-TW" : "en";
+}
+
+export function storeLanguage(language) {
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  } catch {
+    /* the choice simply reverts to the browser preference next load */
+  }
+}
+
+/** Fills {name} placeholders: fmt(t.contMinLeft, { n: 12 }). */
+export function fmt(template, values) {
+  return String(template ?? "").replace(/\{(\w+)\}/g, (match, key) =>
+    (values && key in values ? String(values[key]) : match));
 }
