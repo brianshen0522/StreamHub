@@ -175,6 +175,32 @@ class StreamHubApiTest {
     }
 
     @Test
+    fun `a movie posts its streams back to be checked`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(
+            ok("""{"sourceLabel":"L1","url":"http://cdn/m.m3u8","directUrl":"http://cdn/m.m3u8"}""")
+        )
+
+        val sources = api.checkSources(
+            provider = "movieffm",
+            streams = listOf(
+                com.streamhub.core.model.RawStream(sourceLabel = "L1", episodeLabel = "Movie", url = "http://cdn/m.m3u8")
+            ),
+            preferredLabel = "L1",
+        ).toList()
+
+        assertEquals(1, sources.size)
+        assertEquals("L1", sources.single().sourceLabel)
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        val body = request.body.readUtf8()
+        assertTrue(body.contains("\"provider\":\"movieffm\""))
+        assertTrue(body.contains("\"streams\":["))
+        assertTrue(body.contains("\"preferredLabel\":\"L1\""))
+    }
+
+    @Test
     fun `manifest and poster urls are versioned and encoded`() {
         val target = "http://cdn.example.com/a b/index.m3u8?x=1&y=2"
 

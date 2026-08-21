@@ -52,6 +52,7 @@ class AppContainer(context: Context) {
 
     val settings = ServerSettings(appContext)
     val sessionStore: SessionStore = EncryptedSessionStore(appContext)
+    val handover = Handover()
 
     private var cached: Pair<String, StreamHubApi>? = null
 

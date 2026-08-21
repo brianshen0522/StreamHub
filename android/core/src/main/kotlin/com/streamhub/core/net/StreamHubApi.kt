@@ -17,20 +17,28 @@ import com.streamhub.core.model.ProgressResponse
 import com.streamhub.core.model.ProgressUpdate
 import com.streamhub.core.model.ProviderInfo
 import com.streamhub.core.model.ProvidersResponse
+import com.streamhub.core.model.RawStream
 import com.streamhub.core.model.RefreshRequest
 import com.streamhub.core.model.SearchResponse
 import com.streamhub.core.model.Session
 import com.streamhub.core.model.Source
+import com.streamhub.core.model.SourcePreference
 import com.streamhub.core.model.User
 import com.streamhub.core.model.WatchProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
@@ -71,11 +79,23 @@ class StreamHubApi(
         }
         .build()
 
+    private val _sessionEnded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Emits when the session can no longer be renewed, so the app can go back to
+     * the sign-in screen instead of showing screens that fail on every request.
+     */
+    val sessionEnded: SharedFlow<Unit> = _sessionEnded.asSharedFlow()
+
     /**
      * Shared with the realtime socket, so an HTTP 401 and a 4002 socket close
      * cannot rotate the refresh token out from under each other.
      */
-    internal val refresher = TokenRefresher(store) { refreshToken -> refreshBlocking(refreshToken) }
+    internal val refresher = TokenRefresher(
+        store = store,
+        perform = { refreshToken -> refreshBlocking(refreshToken) },
+        onSessionEnded = { _sessionEnded.tryEmit(Unit) },
+    )
 
     private val authed: OkHttpClient = baseClient.newBuilder()
         .addInterceptor(AuthInterceptor(store, clientKind))
@@ -237,6 +257,39 @@ class StreamHubApi(
     }.flowOn(Dispatchers.IO)
 
     /**
+     * The movie counterpart of [sources]: a movie's streams arrive with the item
+     * detail rather than being resolved per episode, so they are posted back to
+     * be health-checked. Same NDJSON stream, same element shape.
+     */
+    fun checkSources(
+        provider: String,
+        streams: List<RawStream>,
+        preferredLabel: String? = null,
+    ): Flow<Source> = flow {
+        val body = buildJsonObject {
+            put("provider", JsonPrimitive(provider))
+            put("streams", json.encodeToJsonElement(streams))
+            if (preferredLabel != null) put("preferredLabel", JsonPrimitive(preferredLabel))
+        }
+
+        val request = Request.Builder()
+            .url(path("check-sources"))
+            .post(json.encodeToString(body).asJson())
+            .build()
+
+        authed.newCall(request).execute().use { response ->
+            response.expectSuccess()
+            val lines = response.body.source()
+            while (true) {
+                val line = lines.readUtf8Line() ?: break
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) continue
+                emit(json.decodeFromString<Source>(trimmed))
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
      * What to hand the player, rather than the raw source URL: the manifest comes
      * back with ad runs removed and absolute CDN segment URLs, so playback is
      * ad-free and segments never touch the server.
@@ -280,6 +333,47 @@ class StreamHubApi(
         val request = Request.Builder()
             .url(path("me", "progress"))
             .put(json.encodeToString(update).asJson())
+            .build()
+        authed.newCall(request).execute().use { it.expectSuccess() }
+    }
+
+    /**
+     * The source this user last chose for this title, if any. Passing it to
+     * [sources] as `preferredLabel` makes the server probe it first, so the
+     * source they actually want tends to arrive before the rest.
+     *
+     * Keyed on title rather than item URL, so it survives across episodes.
+     */
+    suspend fun sourcePreference(
+        providerKey: String,
+        title: String,
+        mediaType: String = "unknown",
+    ): String? = get(
+        path("me", "source-preference") {
+            addQueryParameter("providerKey", providerKey)
+            addQueryParameter("title", title)
+            addQueryParameter("mediaType", mediaType)
+        }
+    ) { body ->
+        val preference = json.decodeFromString<JsonObject>(body)["preference"]
+        runCatching { json.decodeFromJsonElement<SourcePreference>(preference!!) }.getOrNull()?.sourceLabel
+    }
+
+    suspend fun rememberSourcePreference(
+        providerKey: String,
+        title: String,
+        mediaType: String,
+        sourceLabel: String,
+    ) = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("providerKey", JsonPrimitive(providerKey))
+            put("title", JsonPrimitive(title))
+            put("mediaType", JsonPrimitive(mediaType))
+            put("sourceLabel", JsonPrimitive(sourceLabel))
+        }
+        val request = Request.Builder()
+            .url(path("me", "source-preference"))
+            .post(json.encodeToString(body).asJson())
             .build()
         authed.newCall(request).execute().use { it.expectSuccess() }
     }

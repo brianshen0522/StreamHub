@@ -18,6 +18,12 @@ import com.streamhub.core.model.Session
 internal class TokenRefresher(
     private val store: SessionStore,
     private val perform: (refreshToken: String) -> Session?,
+    /**
+     * Called once when the session is beyond saving. Without it the app keeps
+     * showing signed-in screens that fail on every request, with no way back to
+     * the sign-in form.
+     */
+    private val onSessionEnded: () -> Unit = {},
 ) {
 
     private val lock = Any()
@@ -34,6 +40,7 @@ internal class TokenRefresher(
         if (renewed == null) {
             // The refresh token is spent or rejected; the session is over.
             store.clear()
+            onSessionEnded()
             return null
         }
 

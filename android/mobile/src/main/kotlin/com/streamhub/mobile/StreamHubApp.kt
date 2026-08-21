@@ -12,6 +12,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,10 @@ import com.streamhub.mobile.auth.LoginScreen
 import com.streamhub.mobile.auth.LoginViewModel
 import com.streamhub.mobile.continuewatching.ContinueScreen
 import com.streamhub.mobile.continuewatching.ContinueViewModel
+import com.streamhub.mobile.detail.DetailScreen
+import com.streamhub.mobile.detail.DetailViewModel
+import com.streamhub.mobile.player.PlayerScreen
+import com.streamhub.mobile.player.PlayerViewModel
 import com.streamhub.mobile.profile.ProfileScreen
 import com.streamhub.mobile.search.SearchScreen
 import com.streamhub.mobile.search.SearchViewModel
@@ -45,6 +50,9 @@ private enum class Destination(val route: String, val label: String, val icon: I
     CONTINUE("continue", "Continue", Icons.Default.PlayArrow),
     PROFILE("profile", "Settings", Icons.Default.Person),
 }
+
+private const val ROUTE_DETAIL = "detail"
+private const val ROUTE_PLAYER = "player"
 
 @Composable
 fun StreamHubApp(container: AppContainer) {
@@ -58,6 +66,13 @@ fun StreamHubApp(container: AppContainer) {
                 add(OkHttpNetworkFetcherFactory(callFactory = { container.api().authenticatedClient }))
             }
             .build()
+    }
+
+    // A session that cannot be renewed has to take the app back to sign-in.
+    // Otherwise every screen keeps failing with a server message and a Try again
+    // button that can never succeed.
+    LaunchedEffect(container) {
+        container.api().sessionEnded.collect { session = null }
     }
 
     val current = session
@@ -86,8 +101,13 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
         target.takeIf { it.isNotBlank() }?.let { container.api().posterUrl(it) }
     }
 
+    // The detail screen and the player are full-screen; a tab bar under them
+    // would be an escape hatch out of a video rather than navigation.
+    val showTabs = Destination.entries.any { it.route == route }
+
     Scaffold(
         bottomBar = {
+            if (!showTabs) return@Scaffold
             NavigationBar {
                 for (destination in Destination.entries) {
                     NavigationBarItem(
@@ -117,15 +137,64 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 SearchScreen(
                     viewModel = viewModel { SearchViewModel(container) },
                     posterUrl = posterUrl,
-                    onOpen = { /* detail screen is the next piece of work */ },
+                    onOpen = { item ->
+                        container.handover.selection = MediaSelection(
+                            provider = item.provider,
+                            itemUrl = item.url,
+                            title = item.title,
+                            mediaType = item.mediaType,
+                            posterUrl = item.posterUrl,
+                        )
+                        navController.navigate(ROUTE_DETAIL)
+                    },
                 )
             }
             composable(Destination.CONTINUE.route) {
                 ContinueScreen(
                     viewModel = viewModel { ContinueViewModel(container) },
                     posterUrl = posterUrl,
-                    onOpen = { /* detail screen is the next piece of work */ },
+                    onOpen = { item ->
+                        container.handover.selection = MediaSelection(
+                            provider = item.providerKey,
+                            itemUrl = item.itemUrl,
+                            title = item.title,
+                            mediaType = item.mediaType,
+                            posterUrl = item.posterUrl,
+                        )
+                        navController.navigate(ROUTE_DETAIL)
+                    },
                 )
+            }
+            composable(ROUTE_DETAIL) {
+                val selection = container.handover.selection
+                if (selection == null) {
+                    // Only reachable if the process was killed on this screen.
+                    LaunchedEffect(Unit) { navController.popBackStack() }
+                } else {
+                    val detailViewModel = viewModel { DetailViewModel(container, selection) }
+                    DetailScreen(
+                        viewModel = detailViewModel,
+                        posterUrl = posterUrl,
+                        onBack = { navController.popBackStack() },
+                        onPlay = { source ->
+                            container.handover.playback = detailViewModel.playbackFor(source)
+                            navController.navigate(ROUTE_PLAYER)
+                        },
+                    )
+                }
+            }
+            composable(ROUTE_PLAYER) {
+                val request = container.handover.playback
+                if (request == null) {
+                    LaunchedEffect(Unit) { navController.popBackStack() }
+                } else {
+                    PlayerScreen(
+                        container = container,
+                        request = request,
+                        viewModel = viewModel { PlayerViewModel(container, request) },
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
             composable(Destination.PROFILE.route) {
                 ProfileScreen(

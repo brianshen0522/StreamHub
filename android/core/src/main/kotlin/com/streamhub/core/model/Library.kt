@@ -129,6 +129,15 @@ data class ProgressDelete(
 )
 
 @Serializable
+data class SourcePreference(
+    val providerKey: String,
+    val mediaType: String = "unknown",
+    val title: String,
+    val sourceLabel: String,
+    val lastSelectedAt: String? = null,
+)
+
+@Serializable
 internal data class FavoritesResponse(val favorites: List<Favorite> = emptyList())
 
 @Serializable
