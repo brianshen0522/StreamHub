@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,6 +77,8 @@ fun PlayerControls(
     onSpeed: (Float) -> Unit,
     onQuality: (Int?) -> Unit,
     onSubtitles: (Boolean) -> Unit,
+    fillScreen: Boolean,
+    onFillScreen: (Boolean) -> Unit,
     onFullscreen: () -> Unit,
     onPip: () -> Unit,
     onBack: () -> Unit,
@@ -116,6 +118,8 @@ fun PlayerControls(
                     onSpeed = onSpeed,
                     onQuality = onQuality,
                     onSubtitles = onSubtitles,
+                    fillScreen = fillScreen,
+                    onFillScreen = onFillScreen,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
 
@@ -151,6 +155,8 @@ private fun TopBar(
     onSpeed: (Float) -> Unit,
     onQuality: (Int?) -> Unit,
     onSubtitles: (Boolean) -> Unit,
+    fillScreen: Boolean,
+    onFillScreen: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menu by remember { mutableStateOf<String?>(null) }
@@ -158,7 +164,7 @@ private fun TopBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -216,6 +222,11 @@ private fun TopBar(
                         onClick = { onSubtitles(!state.subtitlesOn); menu = null },
                     )
                 }
+                DropdownMenuItem(
+                    text = { Text("Zoom") },
+                    trailingIcon = { Text(if (fillScreen) "Fill" else "Fit") },
+                    onClick = { onFillScreen(!fillScreen); menu = null },
+                )
             }
 
             DropdownMenu(expanded = menu == "speed", onDismissRequest = { menu = null }) {
@@ -368,7 +379,7 @@ private fun BottomBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         SeekBar(

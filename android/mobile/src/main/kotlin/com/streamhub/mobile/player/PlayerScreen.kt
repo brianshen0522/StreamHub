@@ -9,12 +9,14 @@ import android.media.AudioManager
 import android.os.Build
 import android.util.Rational
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,8 +39,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -80,6 +86,41 @@ fun PlayerScreen(
     var flash by remember { mutableStateOf<String?>(null) }
     var holdingSpeed by remember { mutableStateOf(false) }
     var ended by remember { mutableStateOf(false) }
+    var fillScreen by remember { mutableStateOf(false) }
+    val view = LocalView.current
+
+    // Rotating is not full screen on its own. Without hiding the bars the video
+    // sits between a status bar and a navigation bar, which is what made the
+    // mode feel like nothing had happened.
+    DisposableEffect(isFullscreen) {
+        val window = activity?.window
+        if (window != null) {
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (isFullscreen) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // Let the picture run under a notch in landscape rather than
+                // losing a black band the width of the cutout.
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode = if (isFullscreen) {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    } else {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
+                }
+            }
+        }
+        onDispose {
+            // Leaving the player must not leave the rest of the app without bars.
+            activity?.window?.let { WindowCompat.getInsetsController(it, view) }
+                ?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     val player = remember(request.directUrl) {
         // Media requests go through the same authenticated client the rest of the
@@ -227,6 +268,20 @@ fun PlayerScreen(
                 )
             }
             .pointerInput(Unit) {
+                // Pinch to crop the black bars away, spread to bring them back.
+                // Two fingers, so it cannot be confused with a tap or a scrub,
+                // and it is the gesture people already try on a video.
+                detectTransformGestures { _, _, zoom, _ ->
+                    if (zoom > 1.04f && !fillScreen) {
+                        fillScreen = true
+                        flash = "Zoomed to fill"
+                    } else if (zoom < 0.96f && fillScreen) {
+                        fillScreen = false
+                        flash = "Fit to screen"
+                    }
+                }
+            }
+            .pointerInput(Unit) {
                 var startVolume = 0
                 var accumulated = 0f
                 val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -259,13 +314,22 @@ fun PlayerScreen(
                     this.player = player
                     // The controls above replace these entirely.
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setKeepScreenOn(true)
                     setBackgroundColor(android.graphics.Color.BLACK)
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
+                }
+            },
+            update = { playerView ->
+                // Fill crops the sides off a 16:9 picture to cover a taller
+                // screen; fit keeps the whole frame with bars. Neither is right
+                // for everyone, so it is a choice rather than a default.
+                playerView.resizeMode = if (fillScreen) {
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -291,6 +355,8 @@ fun PlayerScreen(
             onSpeed = { player.setPlaybackSpeed(it) },
             onQuality = { height -> state.selectedHeight = height; player.applyQuality(height) },
             onSubtitles = { on -> state.subtitlesOn = on; player.applySubtitles(on) },
+            fillScreen = fillScreen,
+            onFillScreen = { fillScreen = it },
             onFullscreen = {
                 isFullscreen = !isFullscreen
                 activity?.requestedOrientation = if (isFullscreen) {

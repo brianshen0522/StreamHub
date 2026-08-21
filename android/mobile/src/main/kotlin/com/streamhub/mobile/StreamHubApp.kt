@@ -142,14 +142,21 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             }
         },
     ) { padding ->
+        // Deliberately unpadded. The tab screens below take the inset
+        // individually; the detail screen has its own Scaffold, and the player
+        // needs the whole screen — padding it here is what kept "full screen"
+        // from ever reaching the edges.
+        val tabPadding = Modifier.padding(padding)
+
         NavHost(
             navController = navController,
             startDestination = Destination.SEARCH.route,
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize(),
         ) {
             composable(Destination.SEARCH.route) {
                 SearchScreen(
                     viewModel = viewModel { SearchViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
@@ -166,6 +173,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.CONTINUE.route) {
                 ContinueScreen(
                     viewModel = viewModel { ContinueViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
@@ -228,6 +236,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.FAVORITES.route) {
                 FavoritesScreen(
                     viewModel = viewModel { FavoritesViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { favorite ->
                         container.handover.selection = MediaSelection(
@@ -244,6 +253,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.HISTORY.route) {
                 HistoryScreen(
                     viewModel = viewModel { HistoryViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { entry ->
                         container.handover.selection = MediaSelection(
@@ -262,6 +272,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     user = session.user,
                     serverUrl = container.serverUrl,
                     buildId = BuildConfig.GIT_SHA,
+                    modifier = tabPadding,
                     statusSection = {
                         StatusSection(viewModel = viewModel { StatusViewModel(container) })
                     },
