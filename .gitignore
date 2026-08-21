@@ -53,3 +53,8 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Browser-automation artefacts. These land at the repository root and can
+# contain whatever the page was showing — including, when the admin backup
+# screen is under test, a file full of password hashes.
+.playwright-mcp/
