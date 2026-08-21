@@ -93,6 +93,7 @@
 .usr-nav { display: flex; flex-direction: column; gap: 2px; }
 
 .usr-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -795,39 +796,93 @@
 
 /* ── responsive ────────────────────────────────────────────── */
 
+/* Phone: the sidebar becomes a bottom tab bar. Wrapping it into a header cost
+   roughly 420px before any content — half the screen — on a 390px viewport. */
 @media (max-width: 860px) {
   .usr-shell { grid-template-columns: minmax(0, 1fr); }
 
   .usr-side {
-    position: static;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 40;
     height: auto;
     flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 12px 16px;
+    gap: 0;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
     border-right: 0;
-    border-bottom: 1px solid var(--usr-line);
+    border-top: 1px solid var(--usr-line);
+    background: rgba(13, 13, 15, 0.94);
+    backdrop-filter: blur(14px);
   }
 
-  .usr-brand { padding: 0; }
-  .usr-nav { flex-direction: row; flex-wrap: wrap; }
-  .usr-nav-count { display: none; }
+  /* The tab icons carry the identity down here. */
+  .usr-brand,
+  .usr-side-foot { display: none; }
 
-  .usr-side-foot {
-    margin-top: 0;
-    margin-left: auto;
-    padding-top: 0;
-    border-top: 0;
-    grid-auto-flow: column;
-    align-items: center;
+  .usr-nav {
+    flex-direction: row;
+    flex: 1;
+    justify-content: space-around;
   }
 
-  .usr-side-user { display: none; }
+  .usr-nav-item {
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+    background: none;
+  }
 
-  .usr-topbar { padding: 0 16px; }
-  .usr-body { padding: 16px 16px 48px; }
+  .usr-nav-item svg { width: 21px; height: 21px; }
+  .usr-nav-item:hover { background: none; }
+  .usr-nav-item.is-active { background: none; color: var(--usr-accent-hi); }
+  .usr-nav-item.is-active svg { color: var(--usr-accent-hi); }
+
+  .usr-nav-count {
+    position: absolute;
+    display: block;
+    margin: 0;
+    transform: translate(14px, -6px);
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--usr-accent);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  .usr-topbar { padding: 0 14px; }
+  .usr-topbar-title { font-size: 14px; }
+
+  /* Clear the fixed tab bar. */
+  .usr-body { padding: 14px 14px calc(78px + env(safe-area-inset-bottom)); }
+  .usr-body-flush { padding: 0 0 calc(70px + env(safe-area-inset-bottom)); }
+
   .usr-cols-2 { grid-template-columns: minmax(0, 1fr); }
-  .usr-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 14px 10px; }
-  .usr-searchform { min-width: 100%; max-width: none; }
+  .usr-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 14px 10px; }
+  /* Search gets the whole first row; the provider filter and language switch
+     drop to a second. Sharing one row left the field 12px wide. */
+  .usr-topbar-spacer { display: none; }
+  .usr-chrome { gap: 8px; padding: 8px 0; flex-wrap: wrap; }
+  .usr-searchform { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .usr-searchbox { min-width: 0; }
+  .usr-searchform .usr-btn { flex: 0 0 auto; padding: 0 12px; }
+
+  .usr-seg {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .usr-seg::-webkit-scrollbar { display: none; }
+  .usr-seg button { flex: 0 0 auto; }
+  .usr-lang { flex: 0 0 auto; }
 }

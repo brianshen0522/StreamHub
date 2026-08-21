@@ -560,7 +560,7 @@ function HistoryPage({ setTopbar }) {
   );
 }
 
-function ProfilePage({ session, setSession, setTopbar, toast }) {
+function ProfilePage({ session, setSession, setTopbar, toast, onLogout, t }) {
   const [form, setForm] = useState({
     username: session.user.username,
     email: session.user.email,
@@ -668,6 +668,19 @@ function ProfilePage({ session, setSession, setTopbar, toast }) {
                   </button>
                 </div>
               </form>
+            </div>
+          </section>
+
+          <section className="usr-panel">
+            <header className="usr-panel-head">
+              <div className="usr-panel-title">Session</div>
+              <div className="usr-panel-desc">Signed in as {session.user.username}</div>
+            </header>
+            <div className="usr-panel-body">
+              <button type="button" className="usr-btn usr-btn-ghost" onClick={onLogout}>
+                <IconLogout />
+                {t.logout || "Sign out"}
+              </button>
             </div>
           </section>
 
@@ -804,7 +817,7 @@ export default function UserPortal({ session, setSession, onLogout }) {
                 <Route path="favorites" element={<FavoritesPage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="continue" element={<ContinuePage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="history" element={<HistoryPage setTopbar={setTopbar} />} />
-                <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} />} />
+                <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} onLogout={onLogout} t={t} />} />
               </Routes>
             </PortalChromeContext.Provider>
           </div>
