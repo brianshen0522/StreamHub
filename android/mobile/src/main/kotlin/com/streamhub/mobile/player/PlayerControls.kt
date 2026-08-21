@@ -31,6 +31,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -306,26 +309,46 @@ private fun CentreButtons(
  * Offered when the episode finishes, rather than as a fourth button in the row
  * above — that put the play control off centre for the whole of playback to
  * serve a moment at the end of it.
+ *
+ * Two choices, and no countdown. A countdown that starts the next episode
+ * unless it is stopped is the behaviour that keeps a television running at
+ * three in the morning; being asked costs one tap and answers the question
+ * honestly. Declining leaves the player rather than dismissing back to a
+ * frozen last frame, which is a dead end with nothing on it to press.
  */
 @Composable
-fun UpNextPrompt(label: String, onPlay: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
+fun UpNextPrompt(
+    label: String,
+    onPlay: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
         modifier = modifier
-            .clip(RoundedCornerShape(28.dp))
-            .background(Color.Black.copy(alpha = 0.72f))
-            .clickable(onClick = onPlay)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.Black.copy(alpha = 0.82f))
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-        Column {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 "Up next",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.7f),
             )
-            Text(label, style = MaterialTheme.typography.titleSmall, color = Color.White)
+            Text(label, style = MaterialTheme.typography.titleMedium, color = Color.White)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onPlay) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(Modifier.size(6.dp))
+                Text("Play")
+            }
+            TextButton(onClick = onDismiss) {
+                Text("Done", color = Color.White)
+            }
         }
     }
 }

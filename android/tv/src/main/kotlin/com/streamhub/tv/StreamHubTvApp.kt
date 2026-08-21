@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -145,13 +146,28 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 LaunchedEffect(Unit) { navController.popBackStack() }
             } else {
                 val detailViewModel = viewModel { DetailViewModel(container, selection) }
+                val detailState by detailViewModel.state.collectAsStateWithLifecycle()
+                var startWhenReady by rememberSaveable { mutableStateOf(false) }
 
                 // Coming back from the player having finished an episode.
                 LaunchedEffect(Unit) {
                     container.handover.pendingEpisode?.let { episode ->
                         container.handover.pendingEpisode = null
                         detailViewModel.selectEpisode(episode)
+                        startWhenReady = true
                     }
+                }
+
+                // Answering "play the next episode" by selecting it and
+                // stopping there asks for a second press to do the thing that
+                // was already asked for. It waits because the episode's sources
+                // arrive one at a time over NDJSON.
+                LaunchedEffect(startWhenReady, detailState.sources.firstOrNull()) {
+                    if (!startWhenReady) return@LaunchedEffect
+                    val best = detailState.sources.firstOrNull() ?: return@LaunchedEffect
+                    startWhenReady = false
+                    container.handover.playback = detailViewModel.playbackFor(best)
+                    navController.navigate(ROUTE_PLAYER)
                 }
 
                 DetailScreen(

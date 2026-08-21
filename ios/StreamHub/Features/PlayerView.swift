@@ -1,6 +1,13 @@
 import AVKit
 import SwiftUI
 
+/// How playback ended, so the screen that opened the player knows what to do
+/// next.
+enum PlayerExit: Equatable {
+    case done
+    case playNext(String)
+}
+
 /// Playback.
 ///
 /// `AVPlayerViewController`, not a hand-built player. It brings the transport,
@@ -9,30 +16,60 @@ import SwiftUI
 /// one of those would otherwise be a permanent maintenance cost for a worse
 /// result.
 ///
-/// What this view adds is the two things the system controller cannot know:
-/// where to resume, and reporting progress back to the account.
+/// What this view adds is the three things the system controller cannot know:
+/// where to resume, how to report progress back to the account, and what should
+/// happen once the episode runs out.
 struct PlayerView: View {
     let request: PlaybackRequest
+    var onExit: (PlayerExit) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
     @State private var reporter: ProgressReporter?
+    @State private var ended = false
 
     var body: some View {
-        Group {
+        ZStack {
             if let player {
-                PlayerContainer(player: player, onDone: { dismiss() })
+                PlayerContainer(player: player, onDone: { leave(.done) })
             } else {
                 ZStack {
                     Color.black
                     ProgressView().tint(.white)
                 }
             }
+
+            if ended, let next = request.nextEpisodeLabel {
+                UpNextPrompt(
+                    label: next,
+                    onPlay: { leave(.playNext(next)) },
+                    onDismiss: { leave(.done) }
+                )
+            }
         }
         .background(.black)
         .task { await start() }
         .onDisappear { finish() }
+        // Reaching the end is the one moment the system player has nothing to
+        // say. Left alone it holds the last frame, which is a full-screen
+        // sheet whose only remaining control is a swipe.
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
+            guard !ended else { return }
+            ended = true
+            let duration = player?.currentItem?.duration.seconds ?? 0
+            let end = duration.isFinite ? duration : 0
+            // Reporting the end position is what marks the episode complete,
+            // which is what moves Up Next on to the following one.
+            reporter?.report(position: end, duration: end, event: "ended")
+            // Nothing to ask about, so do not ask.
+            if request.nextEpisodeLabel == nil { leave(.done) }
+        }
+    }
+
+    private func leave(_ exit: PlayerExit) {
+        onExit(exit)
+        dismiss()
     }
 
     private func start() async {
@@ -138,6 +175,51 @@ final class ProgressReporter {
             event: event
         )
         Task { try? await api.putProgress(update) }
+    }
+}
+
+/// Offered when the episode ends.
+///
+/// Two choices and no countdown. A countdown that starts the next episode
+/// unless it is stopped is the behaviour that keeps playing to a room nobody
+/// is in; being asked costs one tap.
+private struct UpNextPrompt: View {
+    let label: String
+    let onPlay: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 2) {
+                Text("Up Next")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Episode \(label)")
+                    .font(.title3.weight(.semibold))
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    onPlay()
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .buttonBorderShape(.capsule)
+
+                Button("Done", action: onDismiss)
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .buttonBorderShape(.capsule)
+                    .tint(.secondary)
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: .rect(cornerRadius: 20))
+        .shadow(radius: 30)
     }
 }
 

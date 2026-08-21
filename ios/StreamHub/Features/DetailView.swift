@@ -232,6 +232,7 @@ struct DetailView: View {
     @Environment(CastController.self) private var cast
     @State private var detail: DetailModel
     @State private var playing: PlaybackRequest?
+    @State private var startWhenReady = false
 
     init(selection: MediaSelection) {
         self.selection = selection
@@ -253,8 +254,21 @@ struct DetailView: View {
         .toolbar { ToolbarItem(placement: .topBarTrailing) { CastButton() } }
         .task { await detail.load(model.api) }
         .fullScreenCover(item: $playing) { request in
-            PlayerView(request: request)
-                .ignoresSafeArea()
+            PlayerView(request: request) { exit in
+                guard case .playNext(let episode) = exit else { return }
+                detail.selectEpisode(episode, api: model.api)
+                startWhenReady = true
+            }
+            .ignoresSafeArea()
+        }
+        // Answering "play the next episode" by selecting it and stopping there
+        // asks for a second tap to do the thing that was already asked for. It
+        // waits rather than starting at once because the episode's sources
+        // arrive one at a time over NDJSON.
+        .onChange(of: detail.sources.first?.directUrl) { _, _ in
+            guard startWhenReady, let best = detail.sources.first else { return }
+            startWhenReady = false
+            start(detail.playback(for: best))
         }
         .overlay {
             if detail.loading { ProgressView() }

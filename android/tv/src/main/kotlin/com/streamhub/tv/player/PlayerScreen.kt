@@ -53,6 +53,8 @@ import com.streamhub.core.model.CastPlaybackState
 import com.streamhub.tv.AppContainer
 import com.streamhub.tv.PlaybackRequest
 import com.streamhub.tv.ui.StreamHubColors
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.streamhub.tv.ui.TvButton
 import com.streamhub.tv.ui.Tv
 import kotlinx.coroutines.delay
 
@@ -90,6 +92,7 @@ fun PlayerScreen(
 
     var isPlaying by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(true) }
+    var ended by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var adCuts by remember { mutableStateOf<List<AdCut>>(emptyList()) }
@@ -146,6 +149,15 @@ fun PlayerScreen(
         while (true) {
             isPlaying = player.isPlaying
             buffering = player.playbackState == Player.STATE_BUFFERING
+            if (player.playbackState == Player.STATE_ENDED && !ended) {
+                ended = true
+                // Finished means finished: reporting the end position is what
+                // marks the episode complete, which is what moves Continue
+                // watching on to the next one.
+                val end = player.duration.coerceAtLeast(0)
+                viewModel.report(end, end, "ended")
+                show()
+            }
             positionMs = player.currentPosition.coerceAtLeast(0)
             durationMs = player.duration.coerceAtLeast(0)
             if (player.isPlaying) {
@@ -229,6 +241,10 @@ fun PlayerScreen(
             .focusRequester(focus)
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                // The up-next prompt owns the remote while it is showing. Left
+                // and right still mean "seek" to this handler, and consuming
+                // them would leave the prompt's own buttons unreachable.
+                if (ended && request.nextEpisodeLabel != null) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
                         if (player.isPlaying) player.pause() else player.play()
@@ -283,7 +299,26 @@ fun PlayerScreen(
             )
         }
 
-        if (controlsVisible) {
+        if (ended && request.nextEpisodeLabel != null) {
+            UpNextPrompt(
+                label = request.nextEpisodeLabel!!,
+                onPlay = { onNextEpisode(request.nextEpisodeLabel!!) },
+                onDismiss = onBack,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
+        // Nothing to ask about. A finished episode frozen on its last frame is
+        // a screen whose only remaining control is the back button, which on a
+        // television is a worse place to leave someone than the title page.
+        if (ended && request.nextEpisodeLabel == null) {
+            LaunchedEffect(Unit) { onBack() }
+        }
+
+        // Hidden while the prompt is up: the hint row would still be offering
+        // "OK Play" and "10s" when the remote no longer does either, which is
+        // worse than showing nothing.
+        if (controlsVisible && !(ended && request.nextEpisodeLabel != null)) {
             Controls(
                 title = request.title,
                 subtitle = listOfNotNull(
@@ -298,6 +333,55 @@ fun PlayerScreen(
                 hasNext = request.nextEpisodeLabel != null,
                 modifier = Modifier.align(Alignment.BottomStart),
             )
+        }
+    }
+}
+
+/**
+ * Offered when the episode ends.
+ *
+ * Two choices and no countdown: a countdown that starts the next episode
+ * unless it is stopped is exactly the behaviour that leaves a television
+ * playing to an empty room. Play takes focus, so the common answer is one
+ * press of the centre key.
+ */
+@Composable
+private fun UpNextPrompt(
+    label: String,
+    onPlay: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+
+    Column(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.86f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 40.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "Up next",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.7f),
+            )
+            Text(
+                "Episode $label",
+                style = MaterialTheme.typography.headlineSmall,
+                color = Color.White,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            TvButton(
+                label = "Play",
+                primary = true,
+                onClick = onPlay,
+                modifier = Modifier.focusRequester(focus),
+            )
+            TvButton(label = "Done", onClick = onDismiss)
         }
     }
 }

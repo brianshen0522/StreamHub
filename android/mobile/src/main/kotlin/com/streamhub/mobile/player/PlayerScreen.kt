@@ -342,7 +342,10 @@ fun PlayerScreen(
             title = request.title,
             subtitle = listOfNotNull(request.episodeLabel, request.sourceLabel).joinToString(" · "),
             adCuts = adCuts,
-            visible = controlsVisible,
+            // Hidden while the up-next prompt is up: both sit in the centre
+            // of the screen, and a play button underneath the question is one
+            // more thing to press that answers nothing.
+            visible = controlsVisible && !(ended && request.nextEpisodeLabel != null),
             isFullscreen = isFullscreen,
             onPlayPause = {
                 if (player.isPlaying) player.pause() else player.play()
@@ -378,8 +381,16 @@ fun PlayerScreen(
             UpNextPrompt(
                 label = nextLabel,
                 onPlay = { onNextEpisode(nextLabel) },
+                onDismiss = onBack,
                 modifier = Modifier.align(Alignment.Center),
             )
+        }
+
+        // Nothing to ask about, so nothing to show. Sitting on the last frame
+        // of a finished episode is a screen with no way out of it that is not
+        // the back gesture, which is worse than simply leaving.
+        if (ended && nextLabel == null) {
+            LaunchedEffect(Unit) { onBack() }
         }
 
         AnimatedVisibility(

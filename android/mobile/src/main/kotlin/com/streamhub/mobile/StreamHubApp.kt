@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -250,6 +251,8 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     LaunchedEffect(Unit) { navController.popBackStack() }
                 } else {
                     val detailViewModel = viewModel { DetailViewModel(container, selection) }
+                    val detailState by detailViewModel.state.collectAsStateWithLifecycle()
+                    var startWhenReady by rememberSaveable { mutableStateOf(false) }
 
                     // Coming back from the player's next-episode button. The
                     // screen kept its state on the back stack, so this only has
@@ -258,7 +261,20 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         container.handover.pendingEpisode?.let { episode ->
                             container.handover.pendingEpisode = null
                             detailViewModel.selectEpisode(episode)
+                            startWhenReady = true
                         }
+                    }
+
+                    // Answering "play the next episode" by selecting it and
+                    // stopping there asks for a second tap to do the thing that
+                    // was already asked for. It waits here rather than starting
+                    // immediately because the episode's sources arrive one at a
+                    // time over NDJSON, so there is nothing to play yet.
+                    LaunchedEffect(startWhenReady, detailState.sources.firstOrNull()) {
+                        if (!startWhenReady) return@LaunchedEffect
+                        val best = detailState.sources.firstOrNull() ?: return@LaunchedEffect
+                        startWhenReady = false
+                        startPlayback(detailViewModel.playbackFor(best))
                     }
 
                     DetailScreen(
