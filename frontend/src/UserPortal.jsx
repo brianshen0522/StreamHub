@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { CastBar } from "./CastControls.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
 import { subscribeRealtime } from "./realtime.js";
@@ -909,6 +910,10 @@ export default function UserPortal({ session, setSession, onLogout }) {
           </div>
         </main>
       </div>
+
+      {/* Outside the shell so it survives navigation: leaving the player
+          is not the same as stopping what a television is showing. */}
+      <CastBar t={t} />
 
       <Toast message={toastState?.message} tone={toastState?.tone} onDismiss={dismissToast} />
     </div>

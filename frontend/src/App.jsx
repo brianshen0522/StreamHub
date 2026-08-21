@@ -3,6 +3,8 @@ import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
+import { useCast } from "./cast.js";
+import { CastButton } from "./CastControls.jsx";
 import VideoPlayer from "./VideoPlayer.jsx";
 import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
@@ -276,6 +278,7 @@ function App() {
   const [sources, setSources] = useState([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [activeSource, setActiveSource] = useState(null);
+  const cast = useCast();
   const [playbackMode, setPlaybackMode] = useState("");
   const [autoSelectedFromPreference, setAutoSelectedFromPreference] = useState(false);
   const [itemProgressMap, setItemProgressMap] = useState({});
@@ -340,6 +343,14 @@ function App() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || (!activeSource?.directUrl && !activeSource?.proxyUrl)) {
+      return undefined;
+    }
+
+    // Connected to a television, nothing loads here. Opening a title
+    // auto-selects the source this account last used, and letting that start a
+    // video in this tab would contradict the whole point of being connected —
+    // two things playing at once, in two rooms.
+    if (cast.target) {
       return undefined;
     }
 
@@ -418,7 +429,7 @@ function App() {
 
     setPlayerError(t.statusError);
     return undefined;
-  }, [activeSource]);
+  }, [activeSource, cast.target]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1309,9 +1320,31 @@ function App() {
   }
 
   async function handleSelectSource(source) {
-    setActiveSource(source);
     setAutoSelectedFromPreference(false);
     await saveSourcePreference(source);
+
+    // Where playback goes. Being connected to a television is app-wide state,
+    // so the decision belongs here rather than in a second button: once one is
+    // chosen, picking a source sends it there instead of starting a player in
+    // this tab.
+    if (cast.target && currentPlaybackPayload) {
+      const sent = cast.play({
+        ...currentPlaybackPayload,
+        sourceLabel: source.sourceLabel,
+        directUrl: source.directUrl || source.url,
+        // The same thirty-second rewind the local player applies, so handing a
+        // title to a television lands where it would have landed here.
+        resumeAtSeconds: resumeProgress?.isCompleted
+          ? 0
+          : Math.max(0, (resumeProgress?.positionSeconds || 0) - 30),
+        nextEpisodeLabel: episodeNeighbours?.next?.label || null,
+      });
+      if (sent) return;
+      // Nothing went out — fall through and play here rather than leaving a
+      // tap that did nothing at all.
+    }
+
+    setActiveSource(source);
   }
 
   async function handleToggleCurrentEpisodeStatus() {
@@ -1507,6 +1540,8 @@ function App() {
       </form>
 
       <div className="usr-topbar-spacer" />
+
+      <CastButton t={t} />
 
       {!selectedItem && providerFilterOptions.length > 1 && (
         <div className="usr-seg" role="group" aria-label={t.providerFilter}>

@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is what lets the layout reach under the notch and
+         the home indicator; without it iOS letterboxes a standalone app with
+         white bars. The safe areas are then paid back in CSS. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>StreamHub</title>
 
     <!-- The SVG is what current browsers use and the only one that stays sharp
@@ -14,6 +17,16 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#0A0A0A" />
+
+    <!-- Added to the Home Screen on iOS, this is what makes it open without
+         Safari's chrome. `mobile-web-app-capable` is the standard name; the
+         apple- prefixed one is still what older iOS reads, so both are here.
+         The status bar is translucent so the app's own dark background shows
+         through it rather than a grey strip. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="StreamHub" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet" />
