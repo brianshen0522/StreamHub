@@ -81,7 +81,14 @@ export async function getDramasqItem(item) {
 
   const entries = parseEpisodeList(html);
   if (entries.length === 0) {
-    throw new Error("Could not extract dramasq episode list.");
+    // Not a parsing failure. dramasq publishes some titles with the episode
+    // container present and empty — the page even prints a total — and the play
+    // API answers 404 for every guessable slug, so there is genuinely nothing
+    // there. Saying so beats an error that reads like a bug in this app and
+    // offers a retry that can never succeed.
+    const error = new Error("dramasq lists no episodes for this title yet.");
+    error.statusCode = 404;
+    throw error;
   }
 
   return {
