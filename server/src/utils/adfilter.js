@@ -1,39 +1,19 @@
 /**
- * Server-side half of the ad filter: parse a media playlist and report how much
- * of it is advertising, so the duration shown in the source list matches the
- * timeline the player will produce.
+ * Server-side entry points to the ad filter.
  *
- * The decision itself lives in shared/adfilter-core.js, which the browser
- * filter also uses — previously the two carried separate copies of the rules
- * and could drift apart.
+ * The rules, the parser and the rewriter all live in shared/adfilter-core.js,
+ * which the browser uses too — the two used to carry separate copies and could
+ * drift apart, which showed up as a source list advertising a runtime the
+ * player's timeline did not match.
+ *
+ * `analyzePlaylist` measures; `stripAds` rewrites. The measurement feeds the
+ * runtime shown in the source list, so both have to agree about what counts as
+ * an ad, which is exactly why they now share one implementation.
  */
 
-import { classifyRuns } from "../../../shared/adfilter-core.js";
+import { classifyRuns, parsePlaylist, stripAds } from "../../../shared/adfilter-core.js";
 
-/** Splits a media playlist into runs delimited by #EXT-X-DISCONTINUITY. */
-function parseRuns(text) {
-  const runs = [];
-  let segments = [];
-  let duration = 0;
-
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    if (line.startsWith("#EXT-X-DISCONTINUITY")) {
-      if (segments.length) runs.push({ segments });
-      segments = [];
-    } else if (line.startsWith("#EXTINF")) {
-      const match = /^#EXTINF:([\d.]+)/.exec(line);
-      duration = match ? Number.parseFloat(match[1]) : 0;
-    } else if (!line.startsWith("#")) {
-      segments.push({ uri: line, duration: Number.isFinite(duration) ? duration : 0 });
-      duration = 0;
-    }
-  }
-  if (segments.length) runs.push({ segments });
-  return runs;
-}
+export { stripAds };
 
 /**
  * @returns {{totalSeconds: number, contentSeconds: number, adSeconds: number}}
@@ -41,7 +21,8 @@ function parseRuns(text) {
  *   callers can use it unconditionally.
  */
 export function analyzePlaylist(text, playlistUrl) {
-  const verdict = classifyRuns(parseRuns(text), playlistUrl);
+  const { runs } = parsePlaylist(text.split(/\r?\n/));
+  const verdict = classifyRuns(runs, playlistUrl);
   return {
     totalSeconds: verdict.totalSeconds,
     contentSeconds: verdict.totalSeconds - verdict.adSeconds,

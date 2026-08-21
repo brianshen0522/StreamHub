@@ -1,11 +1,13 @@
 /**
- * Ad classification shared by the browser filter and the server's duration
- * probe. Both used to carry their own copy of these rules; when they drift the
- * runtime shown in the source list stops matching the player's timeline, so
- * the decision now lives in exactly one place.
+ * HLS ad filtering, shared by every consumer: the browser's playlist loader and
+ * downloader, the server's duration probe, and the server's cleaned-manifest
+ * endpoint. All of them used to carry their own copy of some part of this; when
+ * the copies drift the runtime shown in the source list stops matching the
+ * player's timeline, so parsing, classification and rewriting all live here.
  *
  * Pure ESM with no platform APIs beyond URL, so it loads unchanged in Node and
- * in the bundle.
+ * in the bundle. Anything platform-specific — unwrapping proxy URLs in the
+ * browser, an hls.js loader — belongs in the caller, not here.
  *
  * These providers emit no SCTE-35 / #EXT-X-CUE-OUT, so ad breaks are inferred
  * structurally: spliced ad segments live in a *different directory* than the
@@ -88,5 +90,175 @@ export function classifyRuns(runs, playlistUrl) {
     totalSeconds,
     adSeconds,
     isAd: (index) => adFlags[index] === true,
+  };
+}
+
+/**
+ * Split a media playlist into runs delimited by #EXT-X-DISCONTINUITY,
+ * remembering the encryption key / init map in effect for every segment so the
+ * state can be re-emitted correctly after a run is excised.
+ *
+ * @param {string[]} lines
+ * @returns {{header: string[], runs: Array<{segments: Array<{uri: string,
+ *            duration: number, tags: string[], key: string|null, map: string|null}>,
+ *            discontinuityBefore: boolean}>, trailer: string[]}}
+ */
+export function parsePlaylist(lines) {
+  const header = [];
+  const runs = [];
+  const trailer = [];
+
+  let current = { segments: [], discontinuityBefore: false };
+  let pendingTags = [];
+  let activeKey = null;
+  let activeMap = null;
+  let seenSegment = false;
+  let duration = 0;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (line.startsWith("#EXT-X-KEY")) {
+      activeKey = line;
+      if (!seenSegment) header.push(line);
+      continue;
+    }
+    if (line.startsWith("#EXT-X-MAP")) {
+      activeMap = line;
+      if (!seenSegment) header.push(line);
+      continue;
+    }
+    if (line.startsWith("#EXT-X-DISCONTINUITY")) {
+      if (current.segments.length) runs.push(current);
+      current = { segments: [], discontinuityBefore: true };
+      continue;
+    }
+    if (line.startsWith("#EXTINF")) {
+      const match = /^#EXTINF:([\d.]+)/.exec(line);
+      duration = match ? Number.parseFloat(match[1]) : 0;
+      pendingTags.push(line);
+      continue;
+    }
+    if (line.startsWith("#EXT-X-ENDLIST")) {
+      trailer.push(line);
+      continue;
+    }
+    if (line.startsWith("#")) {
+      // Any other tag: header material before the first segment, otherwise it
+      // belongs to the segment that follows.
+      if (seenSegment || pendingTags.length) pendingTags.push(line);
+      else header.push(line);
+      continue;
+    }
+
+    // A URI line closes the current segment.
+    current.segments.push({
+      uri: line,
+      duration: Number.isFinite(duration) ? duration : 0,
+      tags: pendingTags,
+      key: activeKey,
+      map: activeMap,
+    });
+    pendingTags = [];
+    duration = 0;
+    seenSegment = true;
+  }
+
+  if (current.segments.length) runs.push(current);
+  return { header, runs, trailer };
+}
+
+function runDuration(run) {
+  return run.segments.reduce((total, segment) => total + segment.duration, 0);
+}
+
+/**
+ * Remove spliced ad runs from a media playlist.
+ *
+ * @param {string} text Raw playlist body.
+ * @param {string} playlistUrl Base for resolving relative segment URIs.
+ * @param {{resolveUri?: (uri: string) => string}} [options]
+ *   `resolveUri` maps a URI to the real upstream one before classification, for
+ *   callers whose URIs are wrapped — the browser sees segments behind
+ *   /api/stream once playback has fallen back to the proxy, and comparing
+ *   directories on wrapped URLs would put every segment in the same directory.
+ *   It affects classification only; emitted URIs are always the originals.
+ * @returns {{text: string, cuts: Array<{at: number, removed: number}>, reason: string|null,
+ *            removedSeconds: number, contentDirectory: string|null}}
+ *   `cuts[].at` is the position in the *cleaned* timeline where a break was removed.
+ */
+export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) {
+  const unchanged = (reason) => ({ text, cuts: [], reason, removedSeconds: 0, contentDirectory: null });
+
+  if (typeof text !== "string" || !text.includes("#EXTINF")) {
+    return unchanged("not-a-media-playlist");
+  }
+
+  const { header, runs, trailer } = parsePlaylist(text.split(/\r?\n/));
+
+  const verdict = classifyRuns(
+    runs.map((run) => ({ segments: run.segments.map((s) => ({ uri: resolveUri(s.uri), duration: s.duration })) })),
+    resolveUri(playlistUrl),
+  );
+  if (!verdict.ads) return unchanged(verdict.reason);
+
+  const isAd = (index) => verdict.isAd(index);
+
+  // Rebuild, keeping one discontinuity wherever a break was excised so the
+  // player still resets timestamp continuity across the splice.
+  const out = header.filter((line) => !line.startsWith("#EXT-X-KEY") && !line.startsWith("#EXT-X-MAP"));
+  const cuts = [];
+  let lastKey = null;
+  let lastMap = null;
+  let keptDuration = 0;
+  let emittedRun = false;
+  let discontinuityPending = false;
+  let pendingRemoved = 0;
+
+  for (const [index, run] of runs.entries()) {
+    if (isAd(index)) {
+      discontinuityPending = true;
+      pendingRemoved += runDuration(run);
+      continue;
+    }
+
+    if (emittedRun && (discontinuityPending || run.discontinuityBefore)) {
+      out.push("#EXT-X-DISCONTINUITY");
+    }
+    if (pendingRemoved > 0) {
+      cuts.push({ at: keptDuration, removed: Number(pendingRemoved.toFixed(3)) });
+      pendingRemoved = 0;
+    }
+    discontinuityPending = false;
+
+    for (const segment of run.segments) {
+      if (segment.key && segment.key !== lastKey) {
+        out.push(segment.key);
+        lastKey = segment.key;
+      }
+      if (segment.map && segment.map !== lastMap) {
+        out.push(segment.map);
+        lastMap = segment.map;
+      }
+      out.push(...segment.tags, segment.uri);
+      keptDuration += segment.duration;
+    }
+    emittedRun = true;
+  }
+
+  // A break sitting at the very end has no following content run.
+  if (pendingRemoved > 0) {
+    cuts.push({ at: keptDuration, removed: Number(pendingRemoved.toFixed(3)) });
+  }
+
+  out.push(...trailer);
+
+  return {
+    text: out.join("\n") + "\n",
+    cuts,
+    reason: null,
+    removedSeconds: Number(verdict.adSeconds.toFixed(3)),
+    contentDirectory: verdict.contentDirectory,
   };
 }
