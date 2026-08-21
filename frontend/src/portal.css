@@ -1225,3 +1225,43 @@ body.has-cast-bar .usr-body-flush {
   font-weight: 700;
   letter-spacing: 0.12em;
 }
+
+/* The camera view. Square, because a QR is square and a 16:9 preview spends
+   most of its height on the wall around the television. */
+.usr-scan {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--usr-r);
+  background: #000;
+}
+
+.usr-scan-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A window to aim through. Corners rather than a full rectangle: it frames the
+   code without covering the picture the person is trying to line up. */
+.usr-scan-frame {
+  position: absolute;
+  inset: 18%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+}
+
+.usr-scan-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 10px;
+  padding: 0 14px;
+  text-align: center;
+  font-size: 12.5px;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}

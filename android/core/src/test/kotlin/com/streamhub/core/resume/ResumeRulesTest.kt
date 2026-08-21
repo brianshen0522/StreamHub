@@ -1,6 +1,7 @@
 package com.streamhub.core.resume
 
 import com.streamhub.core.model.SeasonRef
+import com.streamhub.core.model.UserCode
 import com.streamhub.core.model.WatchProgress
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -32,6 +33,46 @@ class ResumeRulesTest {
     )
 
     private fun map(vararg entries: WatchProgress) = ResumeRules.progressMap(entries.toList())
+
+    // ── reading a pairing code off a camera ─────────────────────────────────
+
+    @Test
+    fun `the code is taken out of the link a television shows`() {
+        assertEquals(
+            "ABCD2345",
+            UserCode.fromScan("https://streamhub.gugulu.tw/link?code=ABCD2345"),
+        )
+    }
+
+    @Test
+    fun `a bare code scans too`() {
+        assertEquals("ABCD2345", UserCode.fromScan("abcd-2345"))
+    }
+
+    /** The reason only the parameter is read: the URL is never a place to go. */
+    @Test
+    fun `a code from somebody else's host is still only a code`() {
+        assertEquals(
+            "ABCD2345",
+            UserCode.fromScan("https://evil.example/link?code=ABCD2345&next=/steal"),
+        )
+    }
+
+    @Test
+    fun `anything else scans to nothing rather than to an error`() {
+        assertNull(UserCode.fromScan("WIFI:S=Home;T=WPA;P=hunter2;;"))
+        assertNull(UserCode.fromScan("https://streamhub.gugulu.tw/link"))
+        assertNull(UserCode.fromScan("https://streamhub.gugulu.tw/link?code=TOOSHORT1"))
+        assertNull(UserCode.fromScan(""))
+        assertNull(UserCode.fromScan(null))
+    }
+
+    @Test
+    fun `the separator is only ever for display`() {
+        assertEquals("ABCD-2345", UserCode.forDisplay("abcd2345"))
+        assertEquals("ABC", UserCode.forDisplay("abc"))
+        assertEquals("ABCD2345", UserCode.normalise("ab cd-23_45"))
+    }
 
     // ── which season ────────────────────────────────────────────────────────
 

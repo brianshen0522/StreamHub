@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiJson } from "./api.js";
 import { fmt } from "./i18n.js";
+
+// The camera half is only reached by pressing Scan, and it pulls a decoder in
+// behind it on Safari; nobody who types the code should pay for that.
+const QrScanner = lazy(() => import("./QrScanner.jsx"));
 
 /**
  * Signing a television in from something with a keyboard.
@@ -31,6 +35,7 @@ export default function LinkTvPage({ setTopbar, t }) {
   const [device, setDevice] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -72,6 +77,19 @@ export default function LinkTvPage({ setTopbar, t }) {
     lookUp(scanned);
   }, [scanned, setParams, lookUp]);
 
+  // Stable, because QrScanner restarts its camera whenever this identity
+  // changes and a new function every render would restart it every render.
+  const handleScanned = useCallback((found) => {
+    setScanning(false);
+    setCode(`${found.slice(0, 4)}-${found.slice(4)}`);
+    lookUp(found);
+  }, [lookUp]);
+
+  const handleScanError = useCallback((message) => {
+    setScanning(false);
+    setError(message);
+  }, []);
+
   async function decide(approve) {
     setBusy(true);
     setError("");
@@ -107,6 +125,18 @@ export default function LinkTvPage({ setTopbar, t }) {
             <div className="usr-panel-desc">{t.linkSub}</div>
           </header>
           <div className="usr-panel-body">
+            {scanning ? (
+              <div className="usr-form">
+                <Suspense fallback={<p className="usr-panel-desc">{t.scanStarting}</p>}>
+                  <QrScanner onCode={handleScanned} onError={handleScanError} t={t} />
+                </Suspense>
+                <div className="usr-form-actions">
+                  <button type="button" className="usr-btn usr-btn-ghost" onClick={() => setScanning(false)}>
+                    {t.scanStop}
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form
               className="usr-form"
               onSubmit={(event) => { event.preventDefault(); lookUp(code); }}
@@ -137,8 +167,16 @@ export default function LinkTvPage({ setTopbar, t }) {
                 >
                   {busy ? t.linkChecking : t.linkContinue}
                 </button>
+                <button
+                  type="button"
+                  className="usr-btn usr-btn-ghost"
+                  onClick={() => { setError(""); setScanning(true); }}
+                >
+                  {t.scanOpen}
+                </button>
               </div>
             </form>
+            )}
           </div>
         </section>
       ) : null}

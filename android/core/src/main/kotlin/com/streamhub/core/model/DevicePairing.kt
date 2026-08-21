@@ -83,6 +83,30 @@ object UserCode {
         val clean = normalise(input).take(LENGTH)
         return if (clean.length > 4) "${clean.take(4)}-${clean.drop(4)}" else clean
     }
+
+    /**
+     * The code out of whatever a camera read, or null if it was not one of ours.
+     *
+     * The television encodes a link, so the usual case is a URL — but only its
+     * `code` parameter is taken and **the URL itself is never opened**. A QR is
+     * something a stranger can print and leave on a wall; treating one as a
+     * place to navigate would be handing a signed-in session to whoever printed
+     * it. Anything unrecognised returns null rather than an error, because a
+     * camera pointed at a room finds wifi codes and packaging, and stopping on
+     * each of them would make scanning unusable.
+     */
+    fun fromScan(text: String?): String? {
+        if (text.isNullOrBlank()) return null
+
+        val fromQuery = Regex("""[?&]code=([^&#\s]+)""").find(text)?.groupValues?.get(1)
+        if (fromQuery != null) {
+            val candidate = normalise(fromQuery)
+            if (candidate.length == LENGTH) return candidate
+        }
+
+        val bare = normalise(text)
+        return if (bare.length == LENGTH) bare else null
+    }
 }
 
 @Serializable

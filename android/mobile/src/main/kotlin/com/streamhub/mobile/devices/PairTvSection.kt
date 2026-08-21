@@ -166,6 +166,7 @@ fun PairTvSection(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var code by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Connect a TV", style = MaterialTheme.typography.titleMedium)
@@ -175,9 +176,16 @@ fun PairTvSection(
         }
 
         when (val step = state.step) {
-            PairTvStep.EnteringCode -> {
+            PairTvStep.EnteringCode -> if (scanning) {
+                QrScanner(onCode = { found ->
+                    scanning = false
+                    code = UserCode.forDisplay(found)
+                    viewModel.lookUp(found)
+                })
+                TextButton(onClick = { scanning = false }) { Text("Type it instead") }
+            } else {
                 Text(
-                    "Enter the code your television is showing, instead of typing a password on a remote.",
+                    "Scan the code on your television, or type it below.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -210,12 +218,14 @@ fun PairTvSection(
                     keyboardActions = KeyboardActions(onGo = { viewModel.lookUp(code) }),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Button(
-                    onClick = { viewModel.lookUp(code) },
-                    enabled = !state.busy && UserCode.isComplete(code),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (state.busy) "Checking…" else "Continue")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.lookUp(code) },
+                        enabled = !state.busy && UserCode.isComplete(code),
+                    ) {
+                        Text(if (state.busy) "Checking…" else "Continue")
+                    }
+                    TextButton(onClick = { scanning = true }) { Text("Scan the code") }
                 }
             }
 

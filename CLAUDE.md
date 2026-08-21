@@ -257,6 +257,14 @@ The instance runs on a public domain, which changes what the code has to assume.
   stamps the request's address, user agent and client kind onto the pending row,
   and the session is minted from *those* rather than from the phone that
   approves it, so the account's device list names the television.
+- **A scanned QR is untrusted input.** All three clients take only the `code`
+  parameter out of it and never open the URL: a QR is something anyone can
+  print, and following one would hand a signed-in session to whoever printed it.
+  The rule lives in `UserCode.fromScan` (android/core, ios/StreamHub/Core) and
+  `codeFromScan` (frontend/src/QrScanner.jsx). Decoding differs by platform —
+  zxing through `QrDecoder` in android/core, AVFoundation on iOS, and
+  `BarcodeDetector` with a jsQR fallback on the web because Safari has no
+  native one.
 - **Never rewrite a code field's text to insert the separator while it is being
   typed.** Both phone apps did, and both silently corrupted the pairing code:
   Compose reordered it (`3vxja5wj` → `3VXJ-5WJA`) and SwiftUI dropped the
