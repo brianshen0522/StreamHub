@@ -13,7 +13,7 @@ StreamHub is a self-hosted streaming aggregator that scrapes content from multip
 *   **Core Logic:**
     *   **Scraping:** Modular provider system in `server/src/providers/`.
     *   **Stream Validation:** m3u8 URLs are validated by content (`#EXTM3U` + segment tags) over the first 4 KB, so HTML error pages cannot pass.
-    *   **Ad Stripping:** Ad runs are inferred structurally — spliced segments live in a different directory than the feature. Classification is shared (`shared/adfilter-core.js`); only the browser rewrites manifests today.
+    *   **Ad Stripping:** Ad runs are inferred structurally — spliced segments live in a different directory than the feature. Parsing, classification and rewriting are all shared (`shared/adfilter-core.js`), so the browser filter and the server's `/api/manifest` endpoint clean a playlist identically.
     *   **Proxying:** Direct CDN playback is the default path. `/api/stream` is a **fallback** for hostile networks and hotlink protection, not the normal route — video does not usually pass through the server.
     *   **Auth:** JWT access tokens (4 h) plus rotating opaque refresh tokens (30 d), with role-based access control (Admin/User).
     *   **Realtime:** A WebSocket at `/api/realtime` pushes per-user cache invalidation so a user's open tabs stay in sync.
@@ -60,12 +60,12 @@ npm run seed         # providers + bootstrap admin
 ## Project Structure
 
 ### `server/`
-*   `src/index.js`: All 43 routes registered on one Express app, session issuing, boot seeding. No Router modules.
+*   `src/index.js`: All 44 routes registered on one Express app, session issuing, boot seeding. No Router modules.
 *   `src/middleware.js`: `requireAuth`, `requireRole`, `forbidAdminPlayback`, `asyncHandler`.
 *   `src/auth.js`: JWT signing/verification, refresh-token hashing, bearer extraction.
 *   `src/providers/`: Scraper implementations plus the registry.
 *   `src/provider-access.js`: Global and per-user provider gating.
-*   `src/stream.js`: Source health checks, m3u8 duration probing, HLS and poster proxies.
+*   `src/stream.js`: Source health checks, m3u8 duration probing, the cleaned-manifest endpoint, and the HLS and poster proxies.
 *   `src/monitoring.js`: Background provider health checks every 30 s.
 *   `src/realtime.js`: WebSocket fan-out.
 *   `src/cache.js`: Five LRU caches — search, detail, streamCheck, streamMetadata, mediaType.

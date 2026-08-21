@@ -65,7 +65,11 @@ a remote is bad enough that voice search is the primary input, not an extra.
 
 ## Playback
 
-Media3 / ExoPlayer on both. The server is expected to serve a cleaned manifest
-with ads already removed, because the browser's `pLoader` filter has no ExoPlayer
-equivalent — until that endpoint exists, a native client plays the ads the web
-player hides.
+Media3 / ExoPlayer on both. Hand the player `/api/manifest?target=<source url>`
+rather than the raw source: the browser's `pLoader` ad filter has no ExoPlayer
+equivalent, so that endpoint is what keeps native playback ad-free. Segments come
+back as absolute CDN URLs and never touch the server.
+
+Set the auth header as a **default request property** on the data source, not
+just on the first request — a master playlist sends the player back to
+`/api/manifest` for the variant it picks.

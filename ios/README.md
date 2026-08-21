@@ -49,10 +49,14 @@ arrows to seek, `⌘F` to search.
 
 ## Playback
 
-AVPlayer plays HLS natively, which is exactly why the server-side cleaned-manifest
-endpoint matters — hand AVPlayer a URL and it works, but it cannot run the
-browser's `pLoader` ad filter, so until that endpoint exists a native client plays
-the ads the web player hides.
+AVPlayer plays HLS natively, so hand it `/api/manifest?target=<source url>` and
+the rest is ordinary playback. That endpoint is what keeps native playback
+ad-free — AVPlayer cannot run the browser's `pLoader` filter — and it returns
+absolute CDN URLs, so segments never touch the server.
+
+Attach the auth header to the **asset**, via `AVURLAssetHTTPHeaderFieldsKey`, not
+to a one-off request: a master playlist sends AVPlayer back to `/api/manifest`
+for the variant it picks.
 
 ## Signing
 

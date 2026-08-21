@@ -64,6 +64,23 @@ of the video path.
 `durationSeconds` on those lines already has detected ad segments subtracted, so
 it matches the playable timeline rather than the raw manifest.
 
+`GET /api/manifest?target=<url>` is what a **native player should be handed**,
+not the raw source URL. It returns the playlist with spliced ad runs removed and
+every segment, key and init-map URL made absolute, so playback is ad-free while
+segments stream device-to-CDN — only the manifest passes through the server.
+Point AVPlayer or ExoPlayer at it and the rest is ordinary HLS.
+
+Two things follow from that. A master playlist comes back with each variant and
+rendition pointed at `/api/manifest` again, so the player will make a second
+authenticated request to this server when it picks a variant — the auth header
+has to be set for every request on the asset, not just the first
+(`AVURLAssetHTTPHeaderFieldsKey` on iOS, `setDefaultRequestProperties` on
+Media3). And the response body deliberately contains **no access token**, unlike
+`/api/stream`, so nothing sensitive lands in a cache.
+
+The response carries `x-adfilter-removed-seconds`, and `x-adfilter-reason` when
+nothing was removed — useful when a source's runtime looks wrong.
+
 `GET /api/item` is **polymorphic** and returned bare, not wrapped. Discriminate on
 which key is present:
 

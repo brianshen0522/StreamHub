@@ -6,7 +6,7 @@ import cookieParser from "cookie-parser";
 import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
 import { CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { providers } from "./providers/index.js";
-import { streamCheckedSources, handlePosterProxy, handleStreamProxy } from "./stream.js";
+import { streamCheckedSources, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
   createAccessToken,
   createRefreshToken,
@@ -1122,6 +1122,10 @@ app.post("/api/check-sources", requireAuth(), forbidAdminPlayback(), asyncHandle
 
 app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleStreamProxy(request, response);
+}));
+
+app.get("/api/manifest", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  await handleCleanManifest(request, response);
 }));
 
 app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {

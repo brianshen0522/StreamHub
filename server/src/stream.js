@@ -1,7 +1,7 @@
 import { getBearerToken } from "./auth.js";
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
-import { analyzePlaylist } from "./utils/adfilter.js";
+import { analyzePlaylist, stripAds } from "./utils/adfilter.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -365,6 +365,132 @@ export async function handleStreamProxy(request, response) {
   const webStream = stream;
   const nodeStream = await import("node:stream");
   nodeStream.Readable.fromWeb(webStream).pipe(response);
+}
+
+function resolveAgainst(baseUrl, uri) {
+  try {
+    return new URL(uri, baseUrl).toString();
+  } catch {
+    return uri;
+  }
+}
+
+function buildManifestUrl(targetUrl) {
+  return `/api/manifest?target=${encodeURIComponent(targetUrl)}`;
+}
+
+/**
+ * Point every segment, key and init map at the CDN directly. The client fetches
+ * media without touching this server, which is the whole reason to clean the
+ * manifest here rather than proxy the video.
+ *
+ * #EXT-X-MAP is rewritten too, unlike in the proxy path, where an fMP4 source
+ * would leak a direct init-segment fetch.
+ */
+function absolutizeMediaPlaylist(sourceUrl, content) {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        if (trimmed.startsWith("#EXT-X-KEY") || trimmed.startsWith("#EXT-X-MAP")) {
+          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${resolveAgainst(sourceUrl, uri)}"`);
+        }
+        return line;
+      }
+      return resolveAgainst(sourceUrl, trimmed);
+    })
+    .join("\n");
+}
+
+/**
+ * A master playlist has no segments to filter, so it is only redirected: each
+ * variant and rendition comes back through this endpoint so that whichever one
+ * the player picks arrives cleaned.
+ */
+function rewriteMasterPlaylist(sourceUrl, content) {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        if (trimmed.startsWith("#EXT-X-MEDIA") || trimmed.startsWith("#EXT-X-I-FRAME-STREAM-INF")) {
+          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${buildManifestUrl(resolveAgainst(sourceUrl, uri))}"`);
+        }
+        return line;
+      }
+      // A bare URI line in a master playlist is a variant playlist.
+      return buildManifestUrl(resolveAgainst(sourceUrl, trimmed));
+    })
+    .join("\n");
+}
+
+/**
+ * Serve a playlist with spliced ad runs removed and every media URL absolute.
+ *
+ * AVPlayer and ExoPlayer cannot run the browser's hls.js playlist loader, so
+ * without this a native client plays the ads the web player hides. Only the
+ * manifest passes through here; segments stream device-to-CDN.
+ *
+ * The body deliberately carries no access token — unlike /api/stream, which has
+ * to embed one because hls.js cannot put a header on a segment request. Here
+ * the segment URLs are the CDN's own and need no credential of ours.
+ */
+export async function handleCleanManifest(request, response) {
+  const target = request.query.target;
+  if (typeof target !== "string" || !target.startsWith("http")) {
+    response.status(400).json({ error: "Invalid target URL." });
+    return;
+  }
+
+  let upstream;
+  try {
+    upstream = await fetch(target, {
+      redirect: "follow",
+      headers: {
+        "user-agent": UA,
+        referer: new URL(target).origin + "/",
+      },
+      signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
+    });
+  } catch {
+    response.status(502).json({ error: "Upstream playlist unreachable." });
+    return;
+  }
+
+  if (!upstream.ok) {
+    response.status(upstream.status).json({ error: `Upstream responded ${upstream.status}.` });
+    return;
+  }
+
+  const text = await upstream.text();
+  if (!isValidM3u8Content(text)) {
+    response.status(415).json({ error: "Target is not an HLS playlist." });
+    return;
+  }
+
+  // Relative URIs resolve against wherever the redirect chain landed, not
+  // against the URL we asked for.
+  const baseUrl = upstream.url || target;
+
+  response.type("application/vnd.apple.mpegurl");
+  // No credentials in the body, but the route is per-user gated, so keep it out
+  // of shared caches all the same.
+  response.setHeader("cache-control", "private, max-age=30");
+
+  if (!text.includes("#EXTINF")) {
+    response.send(rewriteMasterPlaylist(baseUrl, text));
+    return;
+  }
+
+  const result = stripAds(text, baseUrl);
+  response.setHeader("x-adfilter-removed-seconds", String(result.removedSeconds));
+  if (result.reason) {
+    response.setHeader("x-adfilter-reason", result.reason);
+  }
+  response.send(absolutizeMediaPlaylist(baseUrl, result.text));
 }
 
 export async function handlePosterProxy(request, response) {

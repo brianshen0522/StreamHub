@@ -67,7 +67,7 @@ Express 4 + Prisma (PostgreSQL) + `ws`. ESM throughout, plain JavaScript, no
 TypeScript. The Prisma client is generated to the non-standard path
 `server/generated/prisma` and imported as `../generated/prisma/index.js`.
 
-`src/index.js` is ~1160 lines and registers **all 43 routes directly on one
+`src/index.js` is ~1170 lines and registers **all 44 routes directly on one
 `app`** — no Router modules. Route groups:
 
 | Group | Guards |
@@ -75,7 +75,8 @@ TypeScript. The Prisma client is generated to the non-standard path
 | `/api/health`, `/api/auth/{login,refresh,logout}` | none |
 | `/api/auth/me*`, `/api/auth/heartbeat` | `requireAuth` |
 | `/api/me/*` — favorites, history, progress, continue-watching, source-preference | `requireAuth` + `forbidAdminPlayback` |
-| `/api/{search,item,episodes,sources,check-sources,stream,poster}` | `requireAuth` + `forbidAdminPlayback` + `assertProviderAccess` |
+| `/api/{search,item,episodes,sources,check-sources}` | `requireAuth` + `forbidAdminPlayback` + `assertProviderAccess` |
+| `/api/{stream,manifest,poster}` | `requireAuth` + `forbidAdminPlayback` |
 | `/api/admin/*` | `requireAuth` + `requireRole(ADMIN)` |
 
 | File | Role |
@@ -83,7 +84,7 @@ TypeScript. The Prisma client is generated to the non-standard path
 | `src/index.js` | All routes, session issuing, boot seeding |
 | `src/middleware.js` | `requireAuth`, `requireRole`, `forbidAdminPlayback`, `asyncHandler` |
 | `src/auth.js` | JWT signing/verify, refresh-token hashing, `getBearerToken` |
-| `src/stream.js` | Source health checks, m3u8 duration probing, HLS and poster proxies |
+| `src/stream.js` | Source health checks, m3u8 duration probing, the cleaned-manifest endpoint, HLS and poster proxies |
 | `src/providers/*.js` | One scraper per provider + the registry |
 | `src/provider-access.js` | Global and per-user provider gating |
 | `src/monitoring.js` | Provider health poller (every 30 s, runs a real search) |
@@ -91,7 +92,7 @@ TypeScript. The Prisma client is generated to the non-standard path
 | `src/cache.js` | Five LRU caches |
 | `src/validators.js` | Zod schemas — request bodies only |
 | `src/utils/http.js` | `fetchText`/`fetchJson` with a Chrome UA and `zh-TW` accept-language |
-| `src/utils/adfilter.js` | `analyzePlaylist` — measurement only |
+| `src/utils/adfilter.js` | `analyzePlaylist` (measures) and `stripAds` (rewrites), both over the shared core |
 
 **Provider pattern:** each provider exports `search`, `getItem`, `getEpisodes`,
 `getEpisodeStreams` and is registered in `src/providers/index.js`. Scraping is
@@ -156,11 +157,17 @@ conservative: the dominant directory must hold ≥60% of the runtime, a foreign 
 over 240 s is treated as content, and it never strips more than 35% of a
 playlist.
 
-Only the browser side rewrites manifests today — `frontend/src/adfilter.js` has
-the rich parser and rebuilder; `server/src/utils/adfilter.js` only measures, to
-correct the runtime shown in the source list. A server-side cleaned-manifest
-endpoint is the prerequisite for native clients, which cannot run an hls.js
-loader.
+Parsing (`parsePlaylist`) and rewriting (`stripAds`) live there too, so both
+sides clean a playlist the same way. Anything platform-specific stays in the
+caller: `frontend/src/adfilter.js` keeps the hls.js `pLoader` and unwraps
+`/api/stream` URLs before classifying, via the `resolveUri` option.
+
+`GET /api/manifest?target=<url>` serves a cleaned playlist with **absolute CDN
+URLs**, so a native player gets an ad-free manifest while segments stream
+device-to-CDN. Master playlists are not filtered — each variant and rendition is
+pointed back at the endpoint so whichever one the player picks arrives cleaned.
+Unlike `/api/stream`, the body carries no access token, because the segment URLs
+are the CDN's own.
 
 ## Gotchas
 
