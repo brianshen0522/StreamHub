@@ -83,6 +83,8 @@ fun PlayerControls(
     onPip: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The cast button, supplied by the host; renders nothing with no devices. */
+    castAction: @Composable () -> Unit = {},
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         // Buffering shows through whether or not the controls are up, otherwise a
@@ -120,6 +122,7 @@ fun PlayerControls(
                     onSubtitles = onSubtitles,
                     fillScreen = fillScreen,
                     onFillScreen = onFillScreen,
+                    castAction = castAction,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
 
@@ -157,6 +160,7 @@ private fun TopBar(
     onSubtitles: (Boolean) -> Unit,
     fillScreen: Boolean,
     onFillScreen: (Boolean) -> Unit,
+    castAction: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menu by remember { mutableStateOf<String?>(null) }
@@ -190,6 +194,8 @@ private fun TopBar(
                 )
             }
         }
+
+        castAction()
 
         IconButton(onClick = onPip) {
             // No dedicated PiP glyph in the icon set that ships with Compose;

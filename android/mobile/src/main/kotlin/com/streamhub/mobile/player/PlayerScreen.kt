@@ -74,6 +74,7 @@ fun PlayerScreen(
     viewModel: PlayerViewModel,
     onNextEpisode: (String) -> Unit,
     onBack: () -> Unit,
+    castAction: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -336,6 +337,7 @@ fun PlayerScreen(
         )
 
         PlayerControls(
+            castAction = castAction,
             state = state,
             title = request.title,
             subtitle = listOfNotNull(request.episodeLabel, request.sourceLabel).joinToString(" · "),

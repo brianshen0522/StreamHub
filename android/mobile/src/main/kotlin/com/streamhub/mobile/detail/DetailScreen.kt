@@ -45,6 +45,8 @@ fun DetailScreen(
     posterUrl: (String) -> String?,
     onBack: () -> Unit,
     onPlay: (Source) -> Unit,
+    /** The cast button, supplied by the host so this screen stays unaware of it. */
+    castAction: @Composable () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -57,6 +59,7 @@ fun DetailScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = { castAction() },
             )
         },
     ) { padding ->
