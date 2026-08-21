@@ -17,7 +17,7 @@ enum ApiConfig {
     static let clientHeader = "X-StreamHub-Client"
     static let clientKind = "ios"
 
-    static let clientVersion = "0.1.0"
+    static let clientVersion = "0.2.0"
 
     /// Reported as the user agent, which is what the account's device list
     /// shows. URLSession's default names the app and CFNetwork, which tells the
