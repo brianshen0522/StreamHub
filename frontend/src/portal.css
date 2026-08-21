@@ -460,6 +460,18 @@
 
 .usr-card-remove svg { width: 13px; height: 13px; }
 
+/* The visual stays 26px so it does not dominate the poster, but the tappable
+   area is extended to 44px — on touch this is the only way to remove a card. */
+.usr-card-remove::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
 .usr-card:hover .usr-card-remove,
 .usr-card-remove:focus-visible { opacity: 1; transform: scale(1); }
 
@@ -640,6 +652,16 @@
 }
 
 .usr-dot-sep { color: var(--usr-fg-3); opacity: 0.5; }
+
+.usr-hint-touch { display: none; }
+
+@media (hover: none) {
+  .usr-hint-hover { display: none; }
+  .usr-hint-touch { display: inline; }
+  /* No hover means the control must be permanently visible and bigger. */
+  .usr-card-remove { width: 30px; height: 30px; }
+  .usr-card-remove svg { width: 15px; height: 15px; }
+}
 
 /* ── panels / forms (profile) ──────────────────────────────── */
 

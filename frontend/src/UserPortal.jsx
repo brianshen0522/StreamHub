@@ -263,7 +263,13 @@ function FavoritesPage({ setTopbar, toast, onCountsChanged }) {
     setTopbar({
       title: "Favorites",
       count: favorites?.length,
-      sub: "Everything you starred, across all providers · hover a poster to remove it",
+      sub: (
+        <>
+          Everything you starred, across all providers
+          <span className="usr-hint-hover"> · hover a poster to remove it</span>
+          <span className="usr-hint-touch"> · tap ✕ to remove</span>
+        </>
+      ),
     });
   }, [setTopbar, favorites]);
 
@@ -330,7 +336,13 @@ function ContinuePage({ setTopbar, toast, onCountsChanged }) {
     setTopbar({
       title: "Continue watching",
       count: items?.length,
-      sub: "Resume points save automatically · hover a poster to drop one",
+      sub: (
+        <>
+          Resume points save automatically
+          <span className="usr-hint-hover"> · hover a poster to drop one</span>
+          <span className="usr-hint-touch"> · tap ✕ to drop one</span>
+        </>
+      ),
     });
   }, [setTopbar, items]);
 

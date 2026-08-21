@@ -560,6 +560,17 @@
 }
 
 .adm .adm-switch.is-on { background: var(--adm-ok); border-color: transparent; }
+
+/* 36x20 is fine for a mouse, too small for a thumb; grow the hit area only. */
+.adm-switch::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
 .adm-switch.is-on::after { transform: translateX(16px); }
 .adm-switch:disabled { opacity: 0.4; cursor: not-allowed; }
 
