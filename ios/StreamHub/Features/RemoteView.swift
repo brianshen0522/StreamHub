@@ -101,11 +101,15 @@ struct RemoteView: View {
             }
 
             HStack(spacing: 36) {
+                // Every control here is an icon, so each carries its own label:
+                // an unlabelled icon button is silent under VoiceOver, which
+                // makes the remote unusable rather than merely awkward.
                 Button {
                     cast.seek(toMs: Int(max(live - 10, 0) * 1000))
                 } label: {
                     Image(systemName: "gobackward.10").font(.system(size: 28))
                 }
+                .accessibilityLabel("Back 10 Seconds")
 
                 Button {
                     if state?.paused == true { cast.resume() } else { cast.pause() }
@@ -116,12 +120,17 @@ struct RemoteView: View {
                         .background(Color.streamHubAccent, in: .circle)
                         .foregroundStyle(.white)
                 }
+                .accessibilityLabel(state?.paused == true ? "Resume" : "Pause")
+                // The bar behind this sheet carries the same control, so the
+                // two need telling apart by something other than their glyph.
+                .accessibilityIdentifier("remotePlayPause")
 
                 Button {
                     cast.seek(toMs: Int((live + 10) * 1000))
                 } label: {
                     Image(systemName: "goforward.10").font(.system(size: 28))
                 }
+                .accessibilityLabel("Forward 10 Seconds")
             }
             .foregroundStyle(.primary)
             .disabled(state == nil || cast.lost)
@@ -136,12 +145,16 @@ struct RemoteView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
+                // Neutral, not accented. Red already means the transport and
+                // means Stop; a third red control on one screen and none of
+                // them is the obvious one.
                 Button("Play on iPhone") {
                     cast.disconnect()
                     dismiss()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                .tint(.secondary)
             }
         }
         .padding(.horizontal, 28)

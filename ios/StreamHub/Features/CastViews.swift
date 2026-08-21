@@ -178,6 +178,8 @@ struct CastBar: View {
                                 .frame(width: 40, height: 40)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(target.state?.paused == true ? "Resume" : "Pause")
+                        .accessibilityIdentifier("castBarPlayPause")
                     }
                 }
                 .padding(.horizontal, 14)
