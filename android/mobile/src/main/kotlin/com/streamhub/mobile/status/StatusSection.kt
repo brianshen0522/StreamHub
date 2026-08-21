@@ -1,7 +1,6 @@
 package com.streamhub.mobile.status
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,21 +21,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.streamhub.core.model.ProviderInfo
+import com.streamhub.mobile.ui.StreamHubColors
 
 /** How a row reads at a glance, before anyone reads the words next to it. */
 enum class StatusLevel { GOOD, WARNING, BAD, OFF }
 
 @Composable
-private fun StatusLevel.color(): Color {
-    val dark = isSystemInDarkTheme()
-    return when (this) {
-        // Not MaterialTheme.colorScheme.primary: these mean good/bad, and on a
-        // dynamic-colour build the accent could be any hue at all, including red.
-        StatusLevel.GOOD -> if (dark) Color(0xFF66BB6A) else Color(0xFF2E7D32)
-        StatusLevel.WARNING -> if (dark) Color(0xFFE8AC48) else Color(0xFF8A5300)
-        StatusLevel.BAD -> MaterialTheme.colorScheme.error
-        StatusLevel.OFF -> MaterialTheme.colorScheme.outline
-    }
+private fun StatusLevel.color(): Color = when (this) {
+    // The web client already has semantic colours for exactly this; using its
+    // --green and --orange keeps a healthy provider the same green in both.
+    // Deliberately not the accent, which means "StreamHub", not "fine".
+    StatusLevel.GOOD -> StreamHubColors.Green
+    StatusLevel.WARNING -> StreamHubColors.Orange
+    StatusLevel.BAD -> MaterialTheme.colorScheme.error
+    StatusLevel.OFF -> MaterialTheme.colorScheme.outline
 }
 
 @Composable
