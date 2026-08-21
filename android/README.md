@@ -39,6 +39,16 @@ knowing before changing anything:
   `EncryptedSharedPreferences` is deprecated as of security-crypto 1.1.0 with no
   drop-in replacement; it is still the battle-tested option, and replacing it
   with an AES/GCM store over the Android keystore is a one-file change.
+- **`RealtimeClient.events()` is a self-healing flow.** Collecting it opens the
+  socket, cancelling closes it, and it reconnects on its own. A 4002 close means
+  the token behind the handshake lapsed, so it renews *through the shared
+  `TokenRefresher`* before reconnecting — reconnecting with the same dead token
+  loops, and renewing through a second lock would rotate the token away from an
+  HTTP request doing the same thing.
+- **`ResumeRules` is a port, not a design.** Which episode resumes, when a season
+  rolls over and what counts as finished already exist in the web player; the
+  two must agree. One difference is deliberate and marked in the source: a
+  finished episode restarts from zero here rather than 30 seconds from the end.
 
 ```bash
 ./gradlew :core:testDebugUnitTest

@@ -212,6 +212,29 @@ class StreamHubApiTest {
     }
 
     @Test
+    fun `creating a favorite does not invent an id`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"favorite":{"id":"srv-1","providerKey":"dramasq","title":"Show","itemUrl":"http://x/1"}}""")
+        )
+
+        val created = api.addFavorite(
+            com.streamhub.core.model.NewFavorite(
+                providerKey = "dramasq",
+                title = "Show",
+                itemUrl = "http://x/1",
+                episodeLabel = "EP3",
+            )
+        )
+
+        assertEquals("srv-1", created.id)
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue("the server assigns the id", !body.contains("\"id\""))
+        assertTrue(body.contains("\"episodeLabel\":\"EP3\""))
+    }
+
+    @Test
     fun `deleting progress sends a body`() = runBlocking {
         store.save(json(sessionJson()))
         server.enqueue(ok("""{"ok":true}"""))

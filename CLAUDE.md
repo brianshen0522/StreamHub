@@ -210,6 +210,11 @@ are the CDN's own.
   then reconnect, or the client reconnect-loops.
 - **`encodeViewState` is duplicated** in `App.jsx` and `UserPortal.jsx` with
   different parameter names but an identical wire format. Change both.
+- **Resume semantics now exist twice**: `getResumeEpisode` and friends in
+  `frontend/src/App.jsx`, and `ResumeRules` in `android/core`. Which episode
+  resumes, when a season rolls over and what counts as finished have to agree
+  across clients, so changing one means changing the other. They cannot share
+  code — one is JS in a browser, the other Kotlin on a device.
 - **`AdminPortal.jsx` is not translated** — its strings are hardcoded English.
 - `/api/me/history` and `/api/me/progress` are capped at 200 rows with no
   pagination.

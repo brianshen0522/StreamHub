@@ -22,6 +22,24 @@ data class Favorite(
     val createdAt: String? = null,
 )
 
+/**
+ * What a client posts to create a favorite. Separate from [Favorite] because the
+ * server assigns the id, so requiring one here would mean inventing a value it
+ * ignores.
+ */
+@Serializable
+data class NewFavorite(
+    val providerKey: String,
+    val mediaType: String = "unknown",
+    val title: String,
+    val posterUrl: String? = null,
+    val itemUrl: String,
+    val detailUrl: String? = null,
+    val seasonUrl: String? = null,
+    val seasonLabel: String? = null,
+    val episodeLabel: String? = null,
+)
+
 @Serializable
 data class WatchProgress(
     val id: String? = null,

@@ -11,6 +11,7 @@ import com.streamhub.core.model.FavoriteResponse
 import com.streamhub.core.model.FavoritesResponse
 import com.streamhub.core.model.ItemDetail
 import com.streamhub.core.model.LoginRequest
+import com.streamhub.core.model.NewFavorite
 import com.streamhub.core.model.ProgressDelete
 import com.streamhub.core.model.ProgressResponse
 import com.streamhub.core.model.ProgressUpdate
@@ -70,9 +71,15 @@ class StreamHubApi(
         }
         .build()
 
+    /**
+     * Shared with the realtime socket, so an HTTP 401 and a 4002 socket close
+     * cannot rotate the refresh token out from under each other.
+     */
+    internal val refresher = TokenRefresher(store) { refreshToken -> refreshBlocking(refreshToken) }
+
     private val authed: OkHttpClient = baseClient.newBuilder()
         .addInterceptor(AuthInterceptor(store, clientKind))
-        .authenticator(TokenAuthenticator(store) { refreshToken -> refreshBlocking(refreshToken) })
+        .authenticator(TokenAuthenticator(refresher))
         .build()
 
     // ── auth ────────────────────────────────────────────────────────────────
@@ -120,6 +127,17 @@ class StreamHubApi(
             .post(ByteArray(0).toRequestBody())
             .build()
         authed.newCall(request).execute().use { it.expectSuccess() }
+    }
+
+    /**
+     * Renew the session out of band — the realtime socket needs this when the
+     * server closes it because the token behind the handshake lapsed.
+     *
+     * @param staleAccessToken the token that stopped working, so a renewal that
+     *   another caller already performed is reused rather than repeated.
+     */
+    suspend fun renewSession(staleAccessToken: String?): Session? = withContext(Dispatchers.IO) {
+        refresher.refresh(staleAccessToken)
     }
 
     /**
@@ -226,7 +244,7 @@ class StreamHubApi(
     suspend fun favorites(): List<Favorite> =
         get(path("me", "favorites")) { json.decodeFromString<FavoritesResponse>(it).favorites }
 
-    suspend fun addFavorite(favorite: Favorite): Favorite = withContext(Dispatchers.IO) {
+    suspend fun addFavorite(favorite: NewFavorite): Favorite = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(path("me", "favorites"))
             .post(json.encodeToString(favorite).asJson())
