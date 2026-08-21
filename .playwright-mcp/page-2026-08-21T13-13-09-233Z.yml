@@ -1,0 +1,50 @@
+- generic [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - complementary [ref=f1e5]:
+      - generic [ref=f1e6]:
+        - generic [ref=f1e7]: S
+        - generic [ref=f1e8]:
+          - generic [ref=f1e9]: StreamHub
+          - generic [ref=f1e10]: Admin
+      - generic [ref=f1e11]: Console
+      - navigation [ref=f1e12]:
+        - link "Dashboard" [ref=f1e13] [cursor=pointer]:
+          - /url: /admin
+        - link "Providers" [ref=f1e19] [cursor=pointer]:
+          - /url: /admin/providers
+        - link "Users" [ref=f1e24] [cursor=pointer]:
+          - /url: /admin/users
+        - link "Audit" [ref=f1e29] [cursor=pointer]:
+          - /url: /admin/audit
+        - link "Backup" [ref=f1e33] [cursor=pointer]:
+          - /url: /admin/backup
+        - link "Account" [ref=f1e36] [cursor=pointer]:
+          - /url: /admin/account
+      - generic [ref=f1e40]:
+        - generic [ref=f1e41]:
+          - generic [ref=f1e42]: AD
+          - generic [ref=f1e43]:
+            - generic [ref=f1e44]: Administrator
+            - generic [ref=f1e45]: admin
+        - button "Sign out" [ref=f1e46] [cursor=pointer]
+    - main [ref=f1e50]:
+      - generic [ref=f1e52]:
+        - generic [ref=f1e53]: Backup
+        - generic [ref=f1e54]: Export and import everything on this server
+      - generic [ref=f1e55]:
+        - generic [ref=f1e56]:
+          - generic [ref=f1e58]:
+            - generic [ref=f1e59]: Export
+            - generic [ref=f1e60]: Every account, what each one can reach, and everything they have watched — as one file.
+          - generic [ref=f1e61]:
+            - paragraph [ref=f1e62]: "The file contains password hashes, so accounts keep their passwords when it is imported. Nothing in it is a readable password, but it is still what those accounts are: keep it wherever the database itself would be kept."
+            - paragraph [ref=f1e63]: Sign-in sessions are left out — everyone signs in again after a move — as are the provider health history and the audit log.
+            - button "Download backup" [ref=f1e64] [cursor=pointer]
+        - generic [ref=f1e65]:
+          - generic [ref=f1e67]:
+            - generic [ref=f1e68]: Import
+            - generic [ref=f1e69]: Restore a backup onto this server.
+          - generic [ref=f1e70]:
+            - paragraph [ref=f1e71]: "Accounts are matched by username: existing ones are updated, missing ones are created. Nothing is deleted, so importing onto a server that already has data cannot destroy it. Your own administrator account is skipped, so an import cannot change the password you are signed in with."
+            - button "Choose a backup file" [ref=f1e72] [cursor=pointer]
+  - generic [ref=f1e73]: Backup downloaded

@@ -10,7 +10,10 @@ export default defineConfig({
     fs: { allow: [".."] },
     proxy: {
       "/api": {
-        target: "http://localhost:8787",
+        // Overridable so the dev server can be pointed at a throwaway backend
+        // instead of whatever is running on the usual port — which, on a
+        // machine that also runs the real stack, is the real stack.
+        target: process.env.STREAMHUB_API_ORIGIN || "http://localhost:8787",
         changeOrigin: true,
         ws: true,
       },

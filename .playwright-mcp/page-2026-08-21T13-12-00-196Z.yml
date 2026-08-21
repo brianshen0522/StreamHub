@@ -1,0 +1,145 @@
+- generic [ref=e14]:
+  - complementary [ref=e15]:
+    - generic [ref=e16]:
+      - generic [ref=e17]: S
+      - generic [ref=e18]:
+        - generic [ref=e19]: StreamHub
+        - generic [ref=e20]: Admin
+    - generic [ref=e21]: Console
+    - navigation [ref=e22]:
+      - link "Dashboard" [ref=e23] [cursor=pointer]:
+        - /url: /admin
+      - link "Providers" [ref=e29] [cursor=pointer]:
+        - /url: /admin/providers
+      - link "Users" [ref=e34] [cursor=pointer]:
+        - /url: /admin/users
+      - link "Audit" [ref=e39] [cursor=pointer]:
+        - /url: /admin/audit
+      - link "Backup" [ref=e43] [cursor=pointer]:
+        - /url: /admin/backup
+      - link "Account" [ref=e46] [cursor=pointer]:
+        - /url: /admin/account
+    - generic [ref=e50]:
+      - generic [ref=e51]:
+        - generic [ref=e52]: AD
+        - generic [ref=e53]:
+          - generic [ref=e54]: Administrator
+          - generic [ref=e55]: admin
+      - button "Sign out" [ref=e56] [cursor=pointer]
+  - main [ref=e60]:
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]: Dashboard
+        - generic [ref=e64]: Live provider health and account activity
+      - button "Refresh" [ref=e66] [cursor=pointer]
+    - generic [ref=e72]:
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]: Total users
+          - generic [ref=e76]: "3"
+          - generic [ref=e77]: 3 active · 0 disabled
+        - generic [ref=e78]:
+          - generic [ref=e79]: Online now
+          - generic [ref=e80]: "0"
+          - generic [ref=e81]: Seen in the last 2 minutes
+        - generic [ref=e82]:
+          - generic [ref=e83]: Active sessions
+          - generic [ref=e84]: "1"
+          - generic [ref=e85]: Refresh tokens with a recent heartbeat
+        - generic [ref=e86]:
+          - generic [ref=e87]: Providers enabled
+          - generic [ref=e88]: 3/3
+          - generic [ref=e89]: All sources reachable
+      - generic [ref=e90]:
+        - generic [ref=e91]:
+          - generic [ref=e93]:
+            - generic [ref=e94]: Provider status
+            - generic [ref=e95]: Latest health check per source
+          - generic [ref=e97]:
+            - generic [ref=e98]:
+              - generic [ref=e99]:
+                - generic [ref=e100]: MO
+                - generic [ref=e101]:
+                  - generic [ref=e102]: MovieFFM
+                  - generic [ref=e103]: Checked just now
+              - generic [ref=e104]:
+                - generic [ref=e105]: HEALTHY
+                - generic [ref=e107]: —
+            - generic [ref=e108]:
+              - generic [ref=e109]:
+                - generic [ref=e110]: "77"
+                - generic [ref=e111]:
+                  - generic [ref=e112]: 777TV
+                  - generic [ref=e113]: Checked just now
+              - generic [ref=e114]:
+                - generic [ref=e115]: HEALTHY
+                - generic [ref=e117]: —
+            - generic [ref=e118]:
+              - generic [ref=e119]:
+                - generic [ref=e120]: DR
+                - generic [ref=e121]:
+                  - generic [ref=e122]: DramaSQ
+                  - generic [ref=e123]: Checked just now
+              - generic [ref=e124]:
+                - generic [ref=e125]: HEALTHY
+                - generic [ref=e127]: —
+        - generic [ref=e128]:
+          - generic [ref=e130]:
+            - generic [ref=e131]: Recent check outcomes
+            - generic [ref=e132]: Last 12 health checks across all providers
+          - generic [ref=e134]:
+            - generic [ref=e135]:
+              - generic [ref=e136]: Healthy
+              - strong [ref=e139]: "12"
+            - generic [ref=e140]:
+              - generic [ref=e141]: Degraded
+              - strong [ref=e143]: "0"
+            - generic [ref=e144]:
+              - generic [ref=e145]: Down
+              - strong [ref=e147]: "0"
+            - generic [ref=e148]:
+              - generic [ref=e149]: Disabled
+              - strong [ref=e151]: "0"
+      - generic [ref=e152]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]: Recent sign-ins
+            - generic [ref=e157]: Accounts ordered by their most recent login
+          - generic [ref=e159]:
+            - generic [ref=e160]:
+              - generic [ref=e161]:
+                - generic [ref=e162]: AL
+                - generic [ref=e163]:
+                  - generic [ref=e164]: Alice
+                  - generic [ref=e165]: alice
+              - generic [ref=e166]: 6m ago
+            - generic [ref=e167]:
+              - generic [ref=e168]:
+                - generic [ref=e169]: BO
+                - generic [ref=e170]:
+                  - generic [ref=e171]: Bob
+                  - generic [ref=e172]: bob
+              - generic [ref=e173]: Never
+        - generic [ref=e174]:
+          - generic [ref=e176]:
+            - generic [ref=e177]: Latest playback
+            - generic [ref=e178]: Most recent watch events across all accounts
+          - generic [ref=e180]:
+            - strong [ref=e185]: Nothing watched yet
+            - generic [ref=e186]: Playback events show up here as soon as a user starts a stream.
+      - generic [ref=e187]:
+        - link "Manage users Accounts, access, activity" [ref=e188] [cursor=pointer]:
+          - /url: /admin/users
+          - generic [ref=e194]:
+            - strong [ref=e195]: Manage users
+            - generic [ref=e196]: Accounts, access, activity
+        - link "Providers Toggle sources, view health" [ref=e200] [cursor=pointer]:
+          - /url: /admin/providers
+          - generic [ref=e206]:
+            - strong [ref=e207]: Providers
+            - generic [ref=e208]: Toggle sources, view health
+        - link "Audit trail Administrative history" [ref=e212] [cursor=pointer]:
+          - /url: /admin/audit
+          - generic [ref=e217]:
+            - strong [ref=e218]: Audit trail
+            - generic [ref=e219]: Administrative history

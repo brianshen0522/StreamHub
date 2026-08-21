@@ -1,0 +1,8 @@
+- generic [ref=e5]:
+  - generic [ref=e6]: StreamHub
+  - heading "User Sign In" [level=1] [ref=e7]
+  - paragraph [ref=e8]: Search, watch, resume, and manage your profile.
+  - generic [ref=e9]:
+    - textbox "Username or email" [ref=e10]
+    - textbox "Password" [ref=e11]
+    - button "Sign In" [ref=e12] [cursor=pointer]

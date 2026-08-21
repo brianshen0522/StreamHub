@@ -22,6 +22,7 @@ import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./m
 import { startMonitoring } from "./monitoring.js";
 import { attachRealtime, broadcast } from "./realtime.js";
 import { describeDevice } from "./devices.js";
+import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
   adminResetPasswordSchema,
@@ -874,6 +875,47 @@ app.get("/api/admin/audit-logs", requireAuth(), requireRole(UserRole.ADMIN), asy
   });
   response.json({ logs });
 }));
+
+/**
+ * The whole instance, as one file.
+ *
+ * Sent as a download rather than a plain body so a browser saves it instead of
+ * rendering a wall of JSON containing every password hash on the server.
+ */
+app.get("/api/admin/backup", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (request, response) => {
+  const document = await exportEverything();
+
+  await createAuditLog(request.auth.user.id, "backup.export", {
+    users: document.users.length,
+    providers: document.providers.length,
+  });
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Content-Disposition", `attachment; filename="streamhub-backup-${stamp}.json"`);
+  response.send(JSON.stringify(document, null, 2));
+}));
+
+/**
+ * Puts one back.
+ *
+ * The body limit is raised here and only here: a backup of an instance with
+ * real watch history is far past the default, and raising it globally would
+ * widen every other route for the sake of this one.
+ */
+app.post(
+  "/api/admin/backup",
+  requireAuth(),
+  requireRole(UserRole.ADMIN),
+  express.json({ limit: "64mb" }),
+  asyncHandler(async (request, response) => {
+    const summary = await importEverything(request.body, request.auth.user.id);
+
+    await createAuditLog(request.auth.user.id, "backup.import", summary);
+
+    response.json({ summary });
+  }),
+);
 
 app.get("/api/admin/providers", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (_request, response) => {
   const providerRows = await prisma.provider.findMany({

@@ -60,7 +60,7 @@ npm run seed         # providers + bootstrap admin
 ## Project Structure
 
 ### `server/`
-*   `src/index.js`: All 44 routes registered on one Express app, session issuing, boot seeding. No Router modules.
+*   `src/index.js`: All 48 routes registered on one Express app, session issuing, boot seeding. No Router modules.
 *   `src/middleware.js`: `requireAuth`, `requireRole`, `forbidAdminPlayback`, `asyncHandler`.
 *   `src/auth.js`: JWT signing/verification, refresh-token hashing, bearer extraction.
 *   `src/providers/`: Scraper implementations plus the registry.
