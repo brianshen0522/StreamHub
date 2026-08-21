@@ -55,7 +55,12 @@ final class DetailModel {
                 self.title = title.isEmpty ? self.title : title
                 self.posterUrl = poster ?? posterUrl
                 self.seasons = seasons
-                if let first = seasons.first { await selectSeason(first, api: api) }
+                // Not the first season — the one being watched. Opening a
+                // five-season show at season one is only right for someone who
+                // has never seen it.
+                if let season = ResumeRules.resumeSeason(seasons: seasons, progress: progress) {
+                    await selectSeason(season, api: api)
+                }
 
             case .episodes(let title, let poster, let sourceUrl, let episodes):
                 self.title = title.isEmpty ? self.title : title

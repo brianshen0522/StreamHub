@@ -84,7 +84,10 @@ class DetailViewModel(
                                 seasons = detail.seasons,
                             )
                         }
-                        detail.seasons.firstOrNull()?.let { selectSeason(it) }
+                        // Not the first season — the one being watched. Opening a
+                        // five-season show at season one is only right for someone
+                        // who has never seen it.
+                        ResumeRules.resumeSeason(detail.seasons, progress)?.let { selectSeason(it) }
                     }
 
                     is ItemDetail.Episodes -> {

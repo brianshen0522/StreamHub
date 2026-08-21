@@ -13,12 +13,22 @@ import { canStreamToDisk, downloadStream } from "./download.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
-function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode }) {
+/**
+ * `exact` is the difference between "take me to this" and "take me to this
+ * title". A row of history means the first — it is a bookmark of one viewing —
+ * so its season and episode are honoured as given. Everywhere else they are
+ * only a fallback for a title with no progress; see `getResumeSeason`.
+ *
+ * Duplicated in UserPortal.jsx with different parameter names and an identical
+ * wire format. Change both.
+ */
+function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode, exact }) {
   try {
     const obj = { p: provider, u: url, t: title, m: mediaType };
     if (posterUrl) obj.ps = posterUrl;
     if (seasonUrl) obj.s = seasonUrl;
     if (episode)   obj.ep = episode;
+    if (exact)     obj.x = 1;
     // Unicode-safe: percent-encode → Latin1 bytes → base64
     const latin1 = encodeURIComponent(JSON.stringify(obj)).replace(/%([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
     return btoa(latin1).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -33,7 +43,7 @@ function decodeViewState(encoded) {
     const latin1 = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
     const json = decodeURIComponent(latin1.split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
     const obj = JSON.parse(json);
-    return { provider: obj.p, url: obj.u, title: obj.t, mediaType: obj.m, posterUrl: obj.ps || "", seasonUrl: obj.s || null, episode: obj.ep || null };
+    return { provider: obj.p, url: obj.u, title: obj.t, mediaType: obj.m, posterUrl: obj.ps || "", seasonUrl: obj.s || null, episode: obj.ep || null, exact: Boolean(obj.x) };
   } catch {
     return null;
   }
@@ -135,6 +145,34 @@ function getSeasonStatus(seasonUrl, progressMap) {
   if (entries.every((e) => e.isCompleted)) return "pill-completed";
   if (entries.some((e) => !e.isCompleted && (e.progressPercent || 0) > 0)) return "pill-in-progress";
   return "";
+}
+
+/**
+ * The season to open when a title is picked.
+ *
+ * A title is opened from several places — a search result, a favourite, a row
+ * of history — and only some of them carry a position. None of that should
+ * decide where a person lands: what they watched last should, and it should be
+ * the same answer whichever door they came through. So the season holding the
+ * most recent progress wins, and `fallbackSeasonUrl` is consulted only when
+ * nothing has been watched.
+ *
+ * That fallback is what a favourite remembers: the season that was on screen
+ * when the heart was tapped. It is a reasonable guess for a title never watched
+ * and simply wrong for one that has been, which is why it loses to progress.
+ *
+ * Mirrors `ResumeRules.resumeSeason` in android/core and ios/StreamHub/Core.
+ */
+function getResumeSeason(seasons, progressMap, fallbackSeasonUrl) {
+  if (!seasons.length) return null;
+  const latest = Object.values(progressMap)
+    .filter((entry) => entry.seasonUrl)
+    .sort((a, b) => new Date(b.lastWatchedAt) - new Date(a.lastWatchedAt))[0];
+  // A season can go missing between watching it and coming back: providers
+  // renumber and re-list. Falling through beats landing on nothing.
+  return seasons.find((s) => s.url === latest?.seasonUrl)
+    || seasons.find((s) => s.url === fallbackSeasonUrl)
+    || seasons[0];
 }
 
 // Returns the episode label to resume, or null if the season is fully done.
@@ -925,6 +963,7 @@ function App() {
       { url: state.url, provider: state.provider, title: state.title, mediaType: state.mediaType, posterUrl: state.posterUrl },
       state.seasonUrl,
       state.episode,
+      state.exact,
     );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -939,6 +978,10 @@ function App() {
       posterUrl: selectedItem.posterUrl,
       seasonUrl: selectedSeason?.url,
       episode: selectedEpisode,
+      // Exact, because this describes what is open right now: reloading the
+      // page, or sharing the address, should land back here and not somewhere
+      // progress happens to point.
+      exact: true,
     });
     history.replaceState(null, "", v ? `?v=${v}` : window.location.pathname);
   }, [selectedItem, selectedSeason, selectedEpisode, detailLoading]);
@@ -1208,7 +1251,7 @@ function App() {
     }
   }
 
-  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null) {
+  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null, exact = false) {
     sourcesAbortRef.current?.abort();
     setSelectedItem(item);
     setItemDetail(null);
@@ -1239,16 +1282,12 @@ function App() {
       setItemProgressMap(progressMap);
 
       if (detail.provider === "movieffm" && Array.isArray(detail.seasons) && detail.seasons.length > 0) {
-        // Determine which season to land on
-        let season;
-        if (targetSeasonUrl) {
-          season = detail.seasons.find((s) => s.url === targetSeasonUrl) || detail.seasons[0];
-        } else {
-          const lastEntry = Object.values(progressMap)
-            .sort((a, b) => new Date(b.lastWatchedAt) - new Date(a.lastWatchedAt))[0];
-          season = (lastEntry && detail.seasons.find((s) => s.url === lastEntry.seasonUrl))
-            || detail.seasons[0];
-        }
+        // Determine which season to land on. Only a pointer at one viewing —
+        // a row of history — overrides what has been watched; anything else
+        // offers its season as a fallback and progress decides.
+        const season = exact && targetSeasonUrl
+          ? (detail.seasons.find((s) => s.url === targetSeasonUrl) || detail.seasons[0])
+          : getResumeSeason(detail.seasons, progressMap, targetSeasonUrl);
         setSelectedSeason(season);
 
         const episodesData = await apiJson(
@@ -1257,12 +1296,20 @@ function App() {
         const nextEpisodes = episodesData.episodes || [];
         setEpisodes(nextEpisodes);
 
-        // Determine which episode to start on
+        // Determine which episode to start on. The episode that came in is
+        // honoured when it points at one viewing, and otherwise only while it
+        // cannot contradict anything: on the season it was recorded against,
+        // and only if that season has never been watched. A favourite made at
+        // episode one must not undo six episodes of progress.
+        const seasonWatched = Object.values(progressMap)
+          .some((entry) => (entry.seasonUrl || "") === (season.url || ""));
+        const usePassedEpisode = exact || (!seasonWatched && season.url === targetSeasonUrl);
+
         let episode;
         const targetEpProg = targetEpisode
           ? progressMap[progressKey(season.url, targetEpisode)]
           : null;
-        if (targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg?.isCompleted) {
+        if (usePassedEpisode && targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg?.isCompleted) {
           episode = targetEpisode;
         } else {
           const resumeEp = getResumeEpisode(nextEpisodes, season.url, progressMap);
@@ -1309,11 +1356,16 @@ function App() {
       const nextEpisodes = detail.episodes || [];
       setEpisodes(nextEpisodes);
 
+      // Same rule as above: no season to get wrong here, but a favourite made
+      // at episode one must still not undo progress.
+      const seriesWatched = Object.values(progressMap)
+        .some((entry) => (entry.seasonUrl || "") === (detail.seasonUrl || ""));
+
       let episode;
       const targetEpProg2 = targetEpisode
         ? progressMap[progressKey(detail.seasonUrl || null, targetEpisode)]
         : null;
-      if (targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg2?.isCompleted) {
+      if ((exact || !seriesWatched) && targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg2?.isCompleted) {
         episode = targetEpisode;
       } else {
         const resumeEp = getResumeEpisode(nextEpisodes, detail.seasonUrl || null, progressMap);

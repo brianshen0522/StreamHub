@@ -33,6 +33,55 @@ class ResumeRulesTest {
 
     private fun map(vararg entries: WatchProgress) = ResumeRules.progressMap(entries.toList())
 
+    // ── which season ────────────────────────────────────────────────────────
+
+    private val s1 = SeasonRef("Season 1", "http://x/season-1")
+    private val s5 = SeasonRef("Season 5", "http://x/season-5")
+    private val seasons = listOf(s1, SeasonRef("Season 2", "http://x/season-2"), s5)
+
+    @Test
+    fun `nothing watched opens the first season`() {
+        assertEquals(s1, ResumeRules.resumeSeason(seasons, emptyMap()))
+    }
+
+    @Test
+    fun `the season watched most recently wins`() {
+        val progress = map(
+            progress("EP3", seasonUrl = s1.url, watchedAt = "2026-08-01T00:00:00.000Z"),
+            progress("EP6", seasonUrl = s5.url, watchedAt = "2026-08-20T00:00:00.000Z"),
+        )
+        assertEquals(s5, ResumeRules.resumeSeason(seasons, progress))
+    }
+
+    /** The reported bug: a favourite made on season one pinned every later visit to it. */
+    @Test
+    fun `progress beats the season a favourite remembers`() {
+        val progress = map(progress("EP6", seasonUrl = s5.url, watchedAt = "2026-08-20T00:00:00.000Z"))
+        assertEquals(s5, ResumeRules.resumeSeason(seasons, progress, fallbackSeasonUrl = s1.url))
+    }
+
+    @Test
+    fun `the remembered season is used when nothing has been watched`() {
+        assertEquals(s5, ResumeRules.resumeSeason(seasons, emptyMap(), fallbackSeasonUrl = s5.url))
+    }
+
+    @Test
+    fun `a season that no longer exists falls through to the first`() {
+        val progress = map(progress("EP1", seasonUrl = "http://x/season-gone"))
+        assertEquals(s1, ResumeRules.resumeSeason(seasons, progress, fallbackSeasonUrl = "http://x/also-gone"))
+    }
+
+    @Test
+    fun `progress carrying no season is ignored rather than blanking the choice`() {
+        val progress = map(progress("EP1", seasonUrl = null, watchedAt = "2026-08-20T00:00:00.000Z"))
+        assertEquals(s5, ResumeRules.resumeSeason(seasons, progress, fallbackSeasonUrl = s5.url))
+    }
+
+    @Test
+    fun `no seasons at all resumes nothing`() {
+        assertNull(ResumeRules.resumeSeason(emptyList(), emptyMap(), fallbackSeasonUrl = s1.url))
+    }
+
     // ── which episode ───────────────────────────────────────────────────────
 
     @Test
