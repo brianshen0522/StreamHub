@@ -4,9 +4,10 @@ import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
-import { CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
+import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
+import { rateLimit } from "./rate-limit.js";
 import { providers } from "./providers/index.js";
-import { streamCheckedSources, handlePosterProxy, handleStreamProxy } from "./stream.js";
+import { streamCheckedSources, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
   createAccessToken,
   createRefreshToken,
@@ -36,9 +37,48 @@ import {
 
 const app = express();
 
+// One hop: nginx in front of this container. Without it every request appears
+// to come from the proxy, which makes the recorded session IP useless and would
+// have one noisy caller rate-limit everybody.
+app.set("trust proxy", 1);
+
+const API_VERSION = 1;
+const VERSION_PREFIX = `/api/v${API_VERSION}`;
+
+/**
+ * Clients pin themselves to /api/v1 so the unversioned paths stay free to
+ * change without breaking a build that is already installed. Nothing pushes
+ * updates here — a sideloaded phone or TV build stays on the device until
+ * someone reinstalls it by hand — so the version has to exist before the first
+ * client ships, not once something needs to break.
+ *
+ * A rewrite rather than a Router leaves all 44 route registrations untouched.
+ * Express keeps req.originalUrl, so logs and error reports still show the path
+ * the client actually asked for.
+ */
+app.use((request, _response, next) => {
+  if (request.url.startsWith(`${VERSION_PREFIX}/`)) {
+    request.url = "/api" + request.url.slice(VERSION_PREFIX.length);
+  }
+  next();
+});
+
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
+
+/**
+ * Native clients announce themselves with this header; the web app does not.
+ * The web login form is shared by both portals, and an admin signing in there
+ * is heading for the admin console rather than a player, so it must keep
+ * working.
+ */
+function getClientKind(request) {
+  return String(request.get("x-streamhub-client") || "").trim();
+}
+
+const ADMIN_CLIENT_REFUSAL =
+  "Administrator accounts cannot sign in to a playback client. Use a viewer account.";
 
 function getProvider(name) {
   const provider = providers[name];
@@ -163,12 +203,32 @@ async function ensureBootstrapped() {
   });
 
   if (!existingAdmin) {
+    // Seeding an administrator whose password is "admin" on a box that is about
+    // to be reachable from the internet is not a default worth having. This only
+    // fires on a brand new database; an instance that already has an admin is
+    // unaffected.
+    if (!ADMIN_PASSWORD || ADMIN_PASSWORD === "admin" || ADMIN_PASSWORD.length < 8) {
+      console.error(
+        [
+          "",
+          "StreamHub will not start: there is no administrator yet, and",
+          "ADMIN_PASSWORD is missing or too weak to create one with.",
+          "",
+          "Set it in .env before first boot:",
+          "",
+          "  ADMIN_PASSWORD=$(openssl rand -base64 24)",
+          "",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
+
     await prisma.user.create({
       data: {
         username: "admin",
         email: "admin@local",
         displayName: "Administrator",
-        passwordHash: await hashPassword(process.env.ADMIN_PASSWORD || "admin"),
+        passwordHash: await hashPassword(ADMIN_PASSWORD),
         role: UserRole.ADMIN,
       },
     });
@@ -176,10 +236,17 @@ async function ensureBootstrapped() {
 }
 
 app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+  response.json({ ok: true, apiVersion: API_VERSION });
 });
 
-app.post("/api/auth/login", asyncHandler(async (request, response) => {
+// The only unauthenticated ways in, and the only ones worth guessing at. Only
+// failures count: everyone in a household shares one public address, so a
+// successful sign-in must not spend anyone else's allowance.
+const failed = (status) => status === 401 || status === 403;
+const loginLimiter = rateLimit({ name: "login", windowMs: 15 * 60_000, max: 20, countWhen: failed });
+const refreshLimiter = rateLimit({ name: "refresh", windowMs: 15 * 60_000, max: 20, countWhen: failed });
+
+app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response) => {
   const payload = loginSchema.parse(request.body || {});
   const login = payload.login.trim();
 
@@ -203,6 +270,14 @@ app.post("/api/auth/login", asyncHandler(async (request, response) => {
     return;
   }
 
+  // An admin authenticates perfectly well and then 403s on every content route,
+  // so a client that identifies itself is refused here rather than handed a
+  // session that fails on every screen it has.
+  if (getClientKind(request) && user.role === UserRole.ADMIN) {
+    response.status(403).json({ error: ADMIN_CLIENT_REFUSAL });
+    return;
+  }
+
   const session = await issueSession(user, request);
   response.json({
     user: serializeUser(user),
@@ -210,7 +285,7 @@ app.post("/api/auth/login", asyncHandler(async (request, response) => {
   });
 }));
 
-app.post("/api/auth/refresh", asyncHandler(async (request, response) => {
+app.post("/api/auth/refresh", refreshLimiter, asyncHandler(async (request, response) => {
   const refreshToken = String(request.body?.refreshToken || "");
   if (!refreshToken) {
     response.status(400).json({ error: "Missing refresh token." });
@@ -227,6 +302,13 @@ app.post("/api/auth/refresh", asyncHandler(async (request, response) => {
 
   if (!session || session.user.status !== UserStatus.ACTIVE) {
     response.status(401).json({ error: "Invalid refresh token." });
+    return;
+  }
+
+  // Same rule as login, so an admin token issued elsewhere cannot be carried
+  // into a client by refreshing it.
+  if (getClientKind(request) && session.user.role === UserRole.ADMIN) {
+    response.status(403).json({ error: ADMIN_CLIENT_REFUSAL });
     return;
   }
 
@@ -311,8 +393,17 @@ app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, r
 
 app.get("/api/me/providers", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   const providersForUser = await getEnabledProvidersForUser(request.auth.user);
+
+  // Callers building a search filter want only what they can actually search.
+  // A status view wants the opposite: a provider that is turned off or blocked
+  // is exactly what it needs to show, because "missing from the list" and
+  // "found nothing" look identical otherwise.
+  const includeUnavailable = String(request.query.all || "") === "true";
+
   response.json({
-    providers: providersForUser.filter((provider) => provider.allowed),
+    providers: includeUnavailable
+      ? providersForUser
+      : providersForUser.filter((provider) => provider.allowed),
   });
 }));
 
@@ -1122,6 +1213,10 @@ app.post("/api/check-sources", requireAuth(), forbidAdminPlayback(), asyncHandle
 
 app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleStreamProxy(request, response);
+}));
+
+app.get("/api/manifest", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  await handleCleanManifest(request, response);
 }));
 
 app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {

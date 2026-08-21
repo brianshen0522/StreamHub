@@ -5,6 +5,34 @@ node_modules/
 frontend/dist/
 server/generated/
 
+# Android — Gradle output and machine-local SDK paths
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/build/
+android/*/build/
+android/local.properties
+*.apk
+*.aab
+
+# Xcode — build output and per-user window/breakpoint state
+ios/build/
+ios/DerivedData/
+ios/.swiftpm/
+xcuserdata/
+*.xcuserstate
+
+# Signing material. Never commit these. Android refuses to install an update
+# signed with a different key than the build already on the device, so losing
+# the keystore means uninstalling — and wiping the saved session — on every
+# phone and TV. Back it up outside the repository.
+*.jks
+*.keystore
+keystore.properties
+*.mobileprovision
+*.p12
+*.cer
+
 # Python
 __pycache__/
 *.pyc
@@ -14,6 +42,9 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+
+# Agent worktrees — registered git worktrees, not repository content
+.claude/worktrees/
 
 # OS
 .DS_Store

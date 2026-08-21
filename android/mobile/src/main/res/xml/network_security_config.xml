@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A release build talks to one server over HTTPS, so plain HTTP is refused
+  outright. The debug source set overrides this file to allow cleartext, because
+  local work points the app at a server on the development machine.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

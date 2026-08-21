@@ -22,12 +22,29 @@ export async function getEnabledProvidersForUser(user) {
   });
   const permissionMap = new Map(permissions.map((entry) => [entry.provider.key, entry.isEnabled]));
 
-  return providers.map((provider) => ({
-    key: provider.key,
-    name: provider.name,
-    isEnabled: provider.isEnabled,
-    allowed: provider.isEnabled && (permissionMap.get(provider.key) ?? true),
-  }));
+  // The health poller already knows whether each site is answering. Without it a
+  // client can only report that a search returned nothing, which looks the same
+  // whether the provider is down, disabled, or simply has no match.
+  const latestChecks = await prisma.providerHealthCheck.findMany({
+    where: { providerId: { in: providers.map((provider) => provider.id) } },
+    orderBy: { checkedAt: "desc" },
+    distinct: ["providerId"],
+  });
+  const healthByProvider = new Map(latestChecks.map((check) => [check.providerId, check]));
+
+  return providers.map((provider) => {
+    const health = healthByProvider.get(provider.id);
+    return {
+      key: provider.key,
+      name: provider.name,
+      isEnabled: provider.isEnabled,
+      allowed: provider.isEnabled && (permissionMap.get(provider.key) ?? true),
+      status: health?.status ?? null,
+      responseTimeMs: health?.responseTimeMs ?? null,
+      lastCheckedAt: health?.checkedAt ?? null,
+      errorMessage: health?.errorMessage ?? null,
+    };
+  });
 }
 
 export async function assertProviderAccess(user, providerKey) {
