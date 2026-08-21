@@ -8,6 +8,9 @@ import { fmt, resolveLanguage, storeLanguage, translations } from "./i18n.js";
 import "./portal.css";
 
 const App = lazy(() => import("./App.jsx"));
+// Reached from a QR code and from one link on the profile page — rare enough
+// that it has no business in the bundle everyone loads.
+const LinkTvPage = lazy(() => import("./LinkTv.jsx"));
 
 /** Translations for the active language, shared through LanguageContext. */
 function useT() {
@@ -36,6 +39,7 @@ const IconClose = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></sv
 const IconFilm = () => <svg {...svgProps}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9.5h18M3 14.5h18M8 4v16M16 4v16" /></svg>;
 const IconCheck = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="m8.2 12.2 2.6 2.6 5-5.2" /></svg>;
 const IconAlert = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5M12 16.2h.01" /></svg>;
+const IconTv = () => <svg {...svgProps}><rect x="3" y="5" width="18" height="13" rx="2" /><path d="m8 21 4-3 4 3" /></svg>;
 
 /* ── helpers ───────────────────────────────────────────────── */
 
@@ -730,6 +734,19 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
 
           <section className="usr-panel">
             <header className="usr-panel-head">
+              <div className="usr-panel-title">{t.linkTv}</div>
+              <div className="usr-panel-desc">{t.linkTvDesc}</div>
+            </header>
+            <div className="usr-panel-body">
+              <Link to="/link" className="usr-btn usr-btn-ghost">
+                <IconTv />
+                {t.linkOpen}
+              </Link>
+            </div>
+          </section>
+
+          <section className="usr-panel">
+            <header className="usr-panel-head">
               <div className="usr-panel-title">{t.profSession}</div>
               <div className="usr-panel-desc">{fmt(t.profSignedInAs, { u: session.user.username })}</div>
             </header>
@@ -921,6 +938,7 @@ export default function UserPortal({ session, setSession, onLogout }) {
                 <Route path="continue" element={<ContinuePage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="history" element={<HistoryPage setTopbar={setTopbar} />} />
                 <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} onLogout={onLogout} />} />
+                <Route path="link" element={<Suspense fallback={<GridSkeleton />}><LinkTvPage setTopbar={setTopbar} t={t} /></Suspense>} />
               </Routes>
             </PortalChromeContext.Provider>
           </div>

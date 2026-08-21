@@ -1192,3 +1192,25 @@ body.has-cast-bar .usr-body,
 body.has-cast-bar .usr-body-flush {
   padding-bottom: calc(70px + 58px + env(safe-area-inset-bottom));
 }
+
+/* ── connecting a television ─────────────────────────────────
+   The code is read off a screen on the other side of a room and typed here, so
+   it is set large, monospaced and widely tracked. The characters were already
+   chosen to be hard to confuse; at body size they stop looking it. */
+.usr-link { max-width: 620px; }
+
+.usr-code-input {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.usr-code-shown {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}

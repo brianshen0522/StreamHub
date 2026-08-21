@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   apiJson,
   clearStoredSession,
@@ -49,8 +49,19 @@ function LoginPage({ onLogin, title, subtitle }) {
 }
 
 function ProtectedRoute({ session, role, children }) {
+  const location = useLocation();
   if (!session?.user) {
-    return <Navigate to={role === "ADMIN" ? "/admin/login" : "/login"} replace />;
+    // Where they were going travels with the redirect. Scanning the QR on a
+    // television lands on /link with the pairing code in the address, and
+    // someone who happens to be signed out would otherwise sign in and arrive
+    // at Browse with the code gone and nothing explaining why.
+    return (
+      <Navigate
+        to={role === "ADMIN" ? "/admin/login" : "/login"}
+        state={{ from: location.pathname + location.search }}
+        replace
+      />
+    );
   }
   if (role && session.user.role !== role) {
     return <Navigate to={session.user.role === "ADMIN" ? "/admin" : "/"} replace />;
@@ -60,13 +71,16 @@ function ProtectedRoute({ session, role, children }) {
 
 function RootRouter() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [session, setSession] = useState(() => getStoredSession());
   const [authNotice, setAuthNotice] = useState("");
 
   useEffect(() => subscribeToSession(setSession), []);
   useEffect(() => onAuthFailure(() => {
     setAuthNotice("Session expired. Please sign in again.");
-    navigate("/login");
+    // Read at the moment of failure rather than closed over, so this does not
+    // have to re-subscribe on every navigation to know where the person was.
+    navigate("/login", { state: { from: window.location.pathname + window.location.search } });
   }), [navigate]);
 
   useEffect(() => {
@@ -77,6 +91,25 @@ function RootRouter() {
     return () => window.clearInterval(timer);
   }, [session?.accessToken]);
 
+  /**
+   * Where signing in lands.
+   *
+   * Storing the session re-renders the sign-in route, which redirects on its
+   * own the moment a session exists — so this has to be the answer in *both*
+   * places or whichever fires first decides, and the one that fired first was
+   * throwing the destination away.
+   *
+   * `from` arrives in navigation state and is treated as untrusted: an in-app
+   * path only, never protocol-relative, and never back to sign-in.
+   */
+  function landingFor(role) {
+    if (role === "ADMIN") return "/admin";
+    const from = location.state?.from;
+    const safe = typeof from === "string" && from.startsWith("/")
+      && !from.startsWith("//") && !from.startsWith("/login");
+    return safe ? from : "/";
+  }
+
   async function loginAs(login, password) {
     const payload = await apiJson("/api/auth/login", {
       method: "POST",
@@ -84,7 +117,7 @@ function RootRouter() {
     });
     setAuthNotice("");
     setStoredSession(payload);
-    navigate(payload.user.role === "ADMIN" ? "/admin" : "/");
+    navigate(landingFor(payload.user.role));
   }
 
   async function logout() {
@@ -103,7 +136,7 @@ function RootRouter() {
 
   return (
     <Routes>
-      <Route path="/login" element={session?.user ? <Navigate to={session.user.role === "ADMIN" ? "/admin" : "/"} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="User Sign In" subtitle="Search, watch, resume, and manage your profile." /></div>} />
+      <Route path="/login" element={session?.user ? <Navigate to={landingFor(session.user.role)} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="User Sign In" subtitle="Search, watch, resume, and manage your profile." /></div>} />
       <Route path="/admin/login" element={session?.user ? <Navigate to={session.user.role === "ADMIN" ? "/admin" : "/"} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="Admin Sign In" subtitle="Monitor providers, users, sessions, and system activity." /></div>} />
       <Route path="/admin/*" element={<ProtectedRoute session={session} role="ADMIN"><Suspense fallback={loadingFallback}><AdminPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />
       <Route path="/*" element={<ProtectedRoute session={session} role="USER"><Suspense fallback={loadingFallback}><UserPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />

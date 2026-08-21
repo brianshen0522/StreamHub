@@ -42,6 +42,7 @@ import com.streamhub.core.model.ProviderResults
 import com.streamhub.tv.AppContainer
 import com.streamhub.tv.MediaSelection
 import com.streamhub.tv.ui.PosterCard
+import com.streamhub.tv.ui.StreamHubColors
 import com.streamhub.tv.ui.SectionTitle
 import com.streamhub.tv.ui.Tv
 import com.streamhub.tv.ui.dpadEscapes
@@ -230,7 +231,7 @@ private fun SearchField(
                 width = if (focused) 3.dp else 1.dp,
                 // White, like every other focus indicator here. Red is
                 // reserved for what is selected, not for where the remote is.
-                color = if (focused) androidx.compose.ui.graphics.Color.White
+                color = if (focused) StreamHubColors.T1
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(8.dp),
             )

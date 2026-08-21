@@ -55,7 +55,7 @@ object Tv {
 }
 
 /** Where the remote is. Never the brand colour — see [FocusCard]. */
-private val FocusRing = Color.White
+private val FocusRing = StreamHubColors.T1
 
 /**
  * Lets the d-pad leave a text field.
@@ -163,7 +163,7 @@ fun PosterCard(
                             .align(Alignment.BottomStart)
                             .fillMaxWidth()
                             .padding(6.dp)
-                            .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp)),
+                            .background(StreamHubColors.T1.copy(alpha = 0.25f), RoundedCornerShape(2.dp)),
                     ) {
                         Box(
                             modifier = Modifier
@@ -177,7 +177,7 @@ fun PosterCard(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.White.copy(alpha = 0.08f)),
+                            .background(StreamHubColors.T1.copy(alpha = 0.08f)),
                     )
                 }
             }
@@ -228,7 +228,18 @@ fun TvButton(
                 text = label,
                 style = MaterialTheme.typography.titleSmall,
                 color = when {
-                    focused -> Color.Black
+                    // Focus inverts the fill, which would otherwise throw away
+                    // the selection: the season you are on and the season you
+                    // have merely arrowed onto would look identical, and losing
+                    // that is worst exactly while moving through them. So the
+                    // label carries the brand colour instead — white fill says
+                    // "the remote is here", red ink says "and this is the one
+                    // you are on".
+                    focused && primary -> MaterialTheme.colorScheme.primary
+                    // The app's own near-black, not pure black: on a white fill
+                    // the difference is small, but it is the same ink the rest
+                    // of the product uses.
+                    focused -> StreamHubColors.Bg
                     primary -> MaterialTheme.colorScheme.onPrimary
                     else -> MaterialTheme.colorScheme.onSurface
                 },

@@ -13,6 +13,10 @@ import com.streamhub.core.model.FavoriteResponse
 import com.streamhub.core.model.FavoritesResponse
 import com.streamhub.core.model.HistoryResponse
 import com.streamhub.core.model.ItemDetail
+import com.streamhub.core.model.DevicePairing
+import com.streamhub.core.model.DevicePairingStatus
+import com.streamhub.core.model.DevicePollRequest
+import com.streamhub.core.model.DevicePollResponse
 import com.streamhub.core.model.LoginRequest
 import com.streamhub.core.model.NewFavorite
 import com.streamhub.core.model.ProgressDelete
@@ -141,6 +145,55 @@ class StreamHubApi(
         }
         store.save(session)
         session
+    }
+
+    /**
+     * Asks for a code to put on screen. Unauthenticated by definition — this is
+     * how the set gets a session, so it cannot already have one.
+     */
+    suspend fun startDevicePairing(): DevicePairing = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(path("auth", "device", "start"))
+            .post(ByteArray(0).toRequestBody())
+            .build()
+        bare.newCall(request).execute().use { it.decode<DevicePairing>() }
+    }
+
+    /**
+     * Asks whether anyone has answered yet.
+     *
+     * On approval the session is stored here, exactly as [login] does, so the
+     * two ways of signing in leave the app in the same state. The same role
+     * check applies: an administrator's session would fail on every screen this
+     * app has, and the server refuses to approve one, but an older server might
+     * not.
+     */
+    suspend fun pollDevicePairing(deviceCode: String): DevicePairingStatus = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(path("auth", "device", "poll"))
+            .post(json.encodeToString(DevicePollRequest(deviceCode)).asJson())
+            .build()
+
+        val body = bare.newCall(request).execute().use { it.decode<DevicePollResponse>() }
+        when (body.status) {
+            "approved" -> {
+                val user = body.user
+                val accessToken = body.accessToken
+                val refreshToken = body.refreshToken
+                if (user == null || accessToken == null || refreshToken == null) {
+                    throw StreamHubException(502, "The server approved the sign-in but sent no session.")
+                }
+                if (!user.canPlay) {
+                    throw StreamHubException(403, "This account cannot play anything. Approve with a viewer account.")
+                }
+                val session = Session(user, accessToken, refreshToken)
+                store.save(session)
+                DevicePairingStatus.Approved(session)
+            }
+            "denied" -> DevicePairingStatus.Denied
+            "expired" -> DevicePairingStatus.Expired
+            else -> DevicePairingStatus.Pending
+        }
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {

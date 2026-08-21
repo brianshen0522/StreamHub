@@ -117,6 +117,10 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
 
+    // Drawing a QR code on the sign-in screen. Encoder only — a television has
+    // no camera and no business asking for one.
+    implementation(libs.zxing.core)
+
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
