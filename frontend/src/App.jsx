@@ -3,6 +3,8 @@ import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
+import { useCast } from "./cast.js";
+import { CastButton } from "./CastControls.jsx";
 import VideoPlayer from "./VideoPlayer.jsx";
 import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
@@ -11,12 +13,22 @@ import { canStreamToDisk, downloadStream } from "./download.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
-function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode }) {
+/**
+ * `exact` is the difference between "take me to this" and "take me to this
+ * title". A row of history means the first — it is a bookmark of one viewing —
+ * so its season and episode are honoured as given. Everywhere else they are
+ * only a fallback for a title with no progress; see `getResumeSeason`.
+ *
+ * Duplicated in UserPortal.jsx with different parameter names and an identical
+ * wire format. Change both.
+ */
+function encodeViewState({ provider, url, title, mediaType, posterUrl, seasonUrl, episode, exact }) {
   try {
     const obj = { p: provider, u: url, t: title, m: mediaType };
     if (posterUrl) obj.ps = posterUrl;
     if (seasonUrl) obj.s = seasonUrl;
     if (episode)   obj.ep = episode;
+    if (exact)     obj.x = 1;
     // Unicode-safe: percent-encode → Latin1 bytes → base64
     const latin1 = encodeURIComponent(JSON.stringify(obj)).replace(/%([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
     return btoa(latin1).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -31,7 +43,7 @@ function decodeViewState(encoded) {
     const latin1 = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
     const json = decodeURIComponent(latin1.split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
     const obj = JSON.parse(json);
-    return { provider: obj.p, url: obj.u, title: obj.t, mediaType: obj.m, posterUrl: obj.ps || "", seasonUrl: obj.s || null, episode: obj.ep || null };
+    return { provider: obj.p, url: obj.u, title: obj.t, mediaType: obj.m, posterUrl: obj.ps || "", seasonUrl: obj.s || null, episode: obj.ep || null, exact: Boolean(obj.x) };
   } catch {
     return null;
   }
@@ -133,6 +145,34 @@ function getSeasonStatus(seasonUrl, progressMap) {
   if (entries.every((e) => e.isCompleted)) return "pill-completed";
   if (entries.some((e) => !e.isCompleted && (e.progressPercent || 0) > 0)) return "pill-in-progress";
   return "";
+}
+
+/**
+ * The season to open when a title is picked.
+ *
+ * A title is opened from several places — a search result, a favourite, a row
+ * of history — and only some of them carry a position. None of that should
+ * decide where a person lands: what they watched last should, and it should be
+ * the same answer whichever door they came through. So the season holding the
+ * most recent progress wins, and `fallbackSeasonUrl` is consulted only when
+ * nothing has been watched.
+ *
+ * That fallback is what a favourite remembers: the season that was on screen
+ * when the heart was tapped. It is a reasonable guess for a title never watched
+ * and simply wrong for one that has been, which is why it loses to progress.
+ *
+ * Mirrors `ResumeRules.resumeSeason` in android/core and ios/StreamHub/Core.
+ */
+function getResumeSeason(seasons, progressMap, fallbackSeasonUrl) {
+  if (!seasons.length) return null;
+  const latest = Object.values(progressMap)
+    .filter((entry) => entry.seasonUrl)
+    .sort((a, b) => new Date(b.lastWatchedAt) - new Date(a.lastWatchedAt))[0];
+  // A season can go missing between watching it and coming back: providers
+  // renumber and re-list. Falling through beats landing on nothing.
+  return seasons.find((s) => s.url === latest?.seasonUrl)
+    || seasons.find((s) => s.url === fallbackSeasonUrl)
+    || seasons[0];
 }
 
 // Returns the episode label to resume, or null if the season is fully done.
@@ -276,6 +316,7 @@ function App() {
   const [sources, setSources] = useState([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [activeSource, setActiveSource] = useState(null);
+  const cast = useCast();
   const [playbackMode, setPlaybackMode] = useState("");
   const [autoSelectedFromPreference, setAutoSelectedFromPreference] = useState(false);
   const [itemProgressMap, setItemProgressMap] = useState({});
@@ -287,6 +328,11 @@ function App() {
   const [nextEpPrompt, setNextEpPrompt] = useState(null);
   const [isPromptDismissed, setIsPromptDismissed] = useState(false);
   const [hlsInstance, setHlsInstance] = useState(null);
+  const hlsRef = useRef(null);
+  // Read by the fatal-error handler, which outlives the render that made it:
+  // a reused instance keeps its first handler, and without this it would fall
+  // back to the previous episode's proxy.
+  const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null });
   const [adCuts, setAdCuts] = useState([]);
   const [download, setDownload] = useState(null);
   const downloadAbortRef = useRef(null);
@@ -337,9 +383,27 @@ function App() {
     ));
   }, [favoriteEntries, selectedItem, selectedSeason, itemDetail, selectedEpisode]);
 
+  // Destroying hls.js is what ends a Picture-in-Picture session: destroy()
+  // detaches the media element, an emptied element closes the PiP window, and
+  // the browser does not always say so. Doing it on every source change meant
+  // continuing to the next episode killed the window while the control stayed
+  // lit over nothing. It is torn down here instead — once, when the page goes.
+  useEffect(() => () => {
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || (!activeSource?.directUrl && !activeSource?.proxyUrl)) {
+      return undefined;
+    }
+
+    // Connected to a television, nothing loads here. Opening a title
+    // auto-selects the source this account last used, and letting that start a
+    // video in this tab would contradict the whole point of being connected —
+    // two things playing at once, in two rooms.
+    if (cast.target) {
       return undefined;
     }
 
@@ -349,6 +413,7 @@ function App() {
 
     const directUrl = activeSource.directUrl || activeSource.url;
     const proxyUrl = activeSource.proxyUrl;
+    sourceUrlsRef.current = { directUrl, proxyUrl };
 
     function setMode(mode) { setPlaybackMode(mode); }
 
@@ -367,6 +432,7 @@ function App() {
       });
       setMode(mode);
       setHlsInstance(hls);
+      hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -383,24 +449,42 @@ function App() {
     // playback on DEMUXER_ERROR_COULD_NOT_PARSE. Native is the fallback for
     // engines without MSE (notably iOS Safari), which really do play HLS.
     if (Hls.isSupported()) {
-      let fallbackHls = null;
-      const primaryHls = loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+      const existing = hlsRef.current;
+
+      // Still attached to this element: point it at the new stream rather than
+      // replacing it. loadSource keeps the media attached, so anything holding
+      // on to the element — a Picture-in-Picture window above all — survives
+      // the change of episode.
+      if (existing && existing.media === video) {
+        setMode(directUrl ? "direct" : "proxy");
+        existing.loadSource(directUrl || proxyUrl);
+        void video.play().catch(() => {});
+        return undefined;
+      }
+
+      // Attached to an element that has since gone — leaving the watch page
+      // and coming back to another title. Nothing is holding it now.
+      if (existing) {
+        existing.destroy();
+        hlsRef.current = null;
+      }
+
+      loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+        const urls = sourceUrlsRef.current;
         instance.destroy();
-        if (proxyUrl && directUrl && directUrl !== proxyUrl) {
+        hlsRef.current = null;
+        if (urls.proxyUrl && urls.directUrl && urls.directUrl !== urls.proxyUrl) {
           setPlayerError(tRef.current.playbackFallback);
-          fallbackHls = loadWithHls(proxyUrl, "proxy", (proxyInstance) => {
+          loadWithHls(urls.proxyUrl, "proxy", (proxyInstance) => {
             setPlayerError(tRef.current.statusError);
             proxyInstance.destroy();
+            hlsRef.current = null;
           });
         } else {
           setPlayerError(tRef.current.statusError);
         }
       });
-      return () => {
-        setHlsInstance(null);
-        primaryHls.destroy();
-        fallbackHls?.destroy();
-      };
+      return undefined;
     }
 
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {
@@ -418,7 +502,7 @@ function App() {
 
     setPlayerError(t.statusError);
     return undefined;
-  }, [activeSource]);
+  }, [activeSource, cast.target]);
 
   useEffect(() => {
     let cancelled = false;
@@ -879,6 +963,7 @@ function App() {
       { url: state.url, provider: state.provider, title: state.title, mediaType: state.mediaType, posterUrl: state.posterUrl },
       state.seasonUrl,
       state.episode,
+      state.exact,
     );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -893,6 +978,10 @@ function App() {
       posterUrl: selectedItem.posterUrl,
       seasonUrl: selectedSeason?.url,
       episode: selectedEpisode,
+      // Exact, because this describes what is open right now: reloading the
+      // page, or sharing the address, should land back here and not somewhere
+      // progress happens to point.
+      exact: true,
     });
     history.replaceState(null, "", v ? `?v=${v}` : window.location.pathname);
   }, [selectedItem, selectedSeason, selectedEpisode, detailLoading]);
@@ -1162,7 +1251,7 @@ function App() {
     }
   }
 
-  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null) {
+  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null, exact = false) {
     sourcesAbortRef.current?.abort();
     setSelectedItem(item);
     setItemDetail(null);
@@ -1193,16 +1282,12 @@ function App() {
       setItemProgressMap(progressMap);
 
       if (detail.provider === "movieffm" && Array.isArray(detail.seasons) && detail.seasons.length > 0) {
-        // Determine which season to land on
-        let season;
-        if (targetSeasonUrl) {
-          season = detail.seasons.find((s) => s.url === targetSeasonUrl) || detail.seasons[0];
-        } else {
-          const lastEntry = Object.values(progressMap)
-            .sort((a, b) => new Date(b.lastWatchedAt) - new Date(a.lastWatchedAt))[0];
-          season = (lastEntry && detail.seasons.find((s) => s.url === lastEntry.seasonUrl))
-            || detail.seasons[0];
-        }
+        // Determine which season to land on. Only a pointer at one viewing —
+        // a row of history — overrides what has been watched; anything else
+        // offers its season as a fallback and progress decides.
+        const season = exact && targetSeasonUrl
+          ? (detail.seasons.find((s) => s.url === targetSeasonUrl) || detail.seasons[0])
+          : getResumeSeason(detail.seasons, progressMap, targetSeasonUrl);
         setSelectedSeason(season);
 
         const episodesData = await apiJson(
@@ -1211,12 +1296,20 @@ function App() {
         const nextEpisodes = episodesData.episodes || [];
         setEpisodes(nextEpisodes);
 
-        // Determine which episode to start on
+        // Determine which episode to start on. The episode that came in is
+        // honoured when it points at one viewing, and otherwise only while it
+        // cannot contradict anything: on the season it was recorded against,
+        // and only if that season has never been watched. A favourite made at
+        // episode one must not undo six episodes of progress.
+        const seasonWatched = Object.values(progressMap)
+          .some((entry) => (entry.seasonUrl || "") === (season.url || ""));
+        const usePassedEpisode = exact || (!seasonWatched && season.url === targetSeasonUrl);
+
         let episode;
         const targetEpProg = targetEpisode
           ? progressMap[progressKey(season.url, targetEpisode)]
           : null;
-        if (targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg?.isCompleted) {
+        if (usePassedEpisode && targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg?.isCompleted) {
           episode = targetEpisode;
         } else {
           const resumeEp = getResumeEpisode(nextEpisodes, season.url, progressMap);
@@ -1263,11 +1356,16 @@ function App() {
       const nextEpisodes = detail.episodes || [];
       setEpisodes(nextEpisodes);
 
+      // Same rule as above: no season to get wrong here, but a favourite made
+      // at episode one must still not undo progress.
+      const seriesWatched = Object.values(progressMap)
+        .some((entry) => (entry.seasonUrl || "") === (detail.seasonUrl || ""));
+
       let episode;
       const targetEpProg2 = targetEpisode
         ? progressMap[progressKey(detail.seasonUrl || null, targetEpisode)]
         : null;
-      if (targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg2?.isCompleted) {
+      if ((exact || !seriesWatched) && targetEpisode && nextEpisodes.includes(targetEpisode) && !targetEpProg2?.isCompleted) {
         episode = targetEpisode;
       } else {
         const resumeEp = getResumeEpisode(nextEpisodes, detail.seasonUrl || null, progressMap);
@@ -1309,9 +1407,31 @@ function App() {
   }
 
   async function handleSelectSource(source) {
-    setActiveSource(source);
     setAutoSelectedFromPreference(false);
     await saveSourcePreference(source);
+
+    // Where playback goes. Being connected to a television is app-wide state,
+    // so the decision belongs here rather than in a second button: once one is
+    // chosen, picking a source sends it there instead of starting a player in
+    // this tab.
+    if (cast.target && currentPlaybackPayload) {
+      const sent = cast.play({
+        ...currentPlaybackPayload,
+        sourceLabel: source.sourceLabel,
+        directUrl: source.directUrl || source.url,
+        // The same thirty-second rewind the local player applies, so handing a
+        // title to a television lands where it would have landed here.
+        resumeAtSeconds: resumeProgress?.isCompleted
+          ? 0
+          : Math.max(0, (resumeProgress?.positionSeconds || 0) - 30),
+        nextEpisodeLabel: episodeNeighbours?.next?.label || null,
+      });
+      if (sent) return;
+      // Nothing went out — fall through and play here rather than leaving a
+      // tap that did nothing at all.
+    }
+
+    setActiveSource(source);
   }
 
   async function handleToggleCurrentEpisodeStatus() {
@@ -1507,6 +1627,8 @@ function App() {
       </form>
 
       <div className="usr-topbar-spacer" />
+
+      <CastButton t={t} />
 
       {!selectedItem && providerFilterOptions.length > 1 && (
         <div className="usr-seg" role="group" aria-label={t.providerFilter}>

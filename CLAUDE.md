@@ -73,7 +73,7 @@ Express 4 + Prisma (PostgreSQL) + `ws`. ESM throughout, plain JavaScript, no
 TypeScript. The Prisma client is generated to the non-standard path
 `server/generated/prisma` and imported as `../generated/prisma/index.js`.
 
-`src/index.js` is ~1200 lines and registers **all 48 routes directly on one
+`src/index.js` is ~1400 lines and registers **all 54 routes directly on one
 `app`** — no Router modules.
 
 Every route answers at both `/api/…` and `/api/v1/…`. A middleware rewrites the
@@ -83,8 +83,8 @@ unversioned paths; clients pin to `/api/v1`. Route groups:
 
 | Group | Guards |
 |---|---|
-| `/api/health`, `/api/auth/{login,refresh,logout}` | none |
-| `/api/auth/me*`, `/api/auth/heartbeat` | `requireAuth` |
+| `/api/health`, `/api/auth/{login,refresh,logout}`, `/api/auth/device/{start,poll}` | none |
+| `/api/auth/me*`, `/api/auth/heartbeat`, `/api/auth/device/{pending,approve,deny}` | `requireAuth` |
 | `/api/me/*` — favorites, history, progress, continue-watching, source-preference | `requireAuth` + `forbidAdminPlayback` |
 | `/api/{search,item,episodes,sources,check-sources}` | `requireAuth` + `forbidAdminPlayback` + `assertProviderAccess` |
 | `/api/{stream,manifest,poster}` | `requireAuth` + `forbidAdminPlayback` |
@@ -101,6 +101,7 @@ unversioned paths; clients pin to `/api/v1`. Route groups:
 | `src/monitoring.js` | Provider health poller (every 30 s, runs a real search) |
 | `src/realtime.js` | WebSocket fan-out at `/api/realtime`, and the phone-to-television command channel |
 | `src/backup.js` | Whole-instance export and import, behind `/api/admin/backup` |
+| `src/device-auth.js` | Codes and expiry for signing a television in from a phone |
 | `src/cache.js` | Five LRU caches |
 | `src/validators.js` | Zod schemas — request bodies only |
 | `src/utils/http.js` | `fetchText`/`fetchJson` with a Chrome UA and `zh-TW` accept-language |
@@ -234,11 +235,43 @@ The instance runs on a public domain, which changes what the code has to assume.
   then reconnect, or the client reconnect-loops.
 - **`encodeViewState` is duplicated** in `App.jsx` and `UserPortal.jsx` with
   different parameter names but an identical wire format. Change both.
-- **Resume semantics now exist twice**: `getResumeEpisode` and friends in
-  `frontend/src/App.jsx`, and `ResumeRules` in `android/core`. Which episode
-  resumes, when a season rolls over and what counts as finished have to agree
-  across clients, so changing one means changing the other. They cannot share
-  code — one is JS in a browser, the other Kotlin on a device.
+- **Resume semantics now exist three times**: `getResumeSeason`,
+  `getResumeEpisode` and friends in `frontend/src/App.jsx`, `ResumeRules` in
+  `android/core` (the only one with tests), and `ResumeRules` in
+  `ios/StreamHub/Core`. Which season and episode resume, when a season rolls
+  over and what counts as finished have to agree across clients, so changing
+  one means changing all three. They cannot share code — one is JS in a
+  browser, one Kotlin, one Swift.
+- **Where a title opens is decided by progress, not by the link.** A row in the
+  library carries the season and episode it was recorded with, and only a row of
+  *history* means "take me to that viewing" — it sets `x: 1` in the encoded view
+  state and its position is honoured as given. A favourite carries wherever the
+  heart happened to be tapped, so its season and episode are a fallback used
+  only for a title with nothing watched; otherwise `getResumeSeason` picks the
+  season holding the most recent progress. Adding a new entry point means
+  deciding which of the two it is.
+- **A television signs in by pairing, and the two codes are not alike.** The
+  `deviceCode` collects the session and must never be displayed or encoded into
+  the QR — a photograph of the screen would be a sign-in. The `userCode` is the
+  short one meant to be read out and typed. `POST /api/auth/device/start` also
+  stamps the request's address, user agent and client kind onto the pending row,
+  and the session is minted from *those* rather than from the phone that
+  approves it, so the account's device list names the television.
+- **Never rewrite a code field's text to insert the separator while it is being
+  typed.** Both phone apps did, and both silently corrupted the pairing code:
+  Compose reordered it (`3vxja5wj` → `3VXJ-5WJA`) and SwiftUI dropped the
+  character typed at the group boundary (`5EH5XHS3` → `5EH5HS3`). Inserting a
+  character mid-string moves the caret somewhere the keyboard is not expecting.
+  The handler may only *remove* — uppercase, drop invalid characters, cap the
+  length. Android draws the break with a `VisualTransformation`, which leaves
+  the value alone; iOS has no equivalent and simply does not show one while
+  typing. A code one transposition out fails as "expired", which sends people
+  to look at the television rather than at the field.
+- **The QR on the TV sign-in screen must not be sized off its container's
+  width.** A 1080p television is 540dp tall; a width-derived square overflowed
+  the safe area, and a Compose `Column` that runs out of height crushes its last
+  child rather than clipping it — the address under the code rendered five
+  pixels tall while everything else looked fine.
 - **`AdminPortal.jsx` is not translated** — its strings are hardcoded English.
 - `/api/me/history` and `/api/me/progress` are capped at 200 rows with no
   pagination.

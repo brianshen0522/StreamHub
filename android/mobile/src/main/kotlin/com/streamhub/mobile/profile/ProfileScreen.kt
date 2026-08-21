@@ -25,6 +25,8 @@ fun ProfileScreen(
     modifier: Modifier = Modifier,
     /** Rendered inline so the diagnostics sit where someone looks when stuck. */
     statusSection: @Composable () -> Unit = {},
+    /** Sits above the device list: the television it signs in appears there. */
+    pairTvSection: @Composable () -> Unit = {},
     devicesSection: @Composable () -> Unit = {},
 ) {
     Column(
@@ -60,6 +62,10 @@ fun ProfileScreen(
         HorizontalDivider()
 
         statusSection()
+
+        HorizontalDivider()
+
+        pairTvSection()
 
         HorizontalDivider()
 

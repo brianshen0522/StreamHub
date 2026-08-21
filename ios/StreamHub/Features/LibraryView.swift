@@ -148,6 +148,16 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    PairTvView()
+                } label: {
+                    Label("Connect a TV", systemImage: "tv.badge.wifi")
+                }
+            } footer: {
+                Text("Sign a television in with the code it is showing, instead of typing a password on a remote.")
+            }
+
+            Section {
                 Button("Sign Out", role: .destructive) { model.signOut() }
             }
         }

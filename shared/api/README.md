@@ -77,6 +77,61 @@ a plain `401`. The correct client behaviour is to attempt one refresh on any
 admin console's "online" view counts within a 120-second window. Poll it roughly
 every 30–60 seconds while the app is foregrounded.
 
+## Signing in a device with no keyboard
+
+A television asks for a code and waits for somebody signed in elsewhere to
+approve it. The shape is OAuth's device grant with the parts a single-client,
+single-server instance has no use for removed — no `client_id`, no scope.
+
+`POST /api/auth/device/start` needs no auth and no body. It answers
+`{ deviceCode, userCode, verificationUrl, verificationUrlComplete,
+expiresInSeconds, intervalSeconds }`.
+
+The two codes are **not** interchangeable and confusing them is the one mistake
+that matters here:
+
+- `deviceCode` is long, random, and collects the session. Never display it, and
+  never put it in a QR code — a photograph of the screen would be a sign-in.
+- `userCode` is the short one, formatted `ABCD-EFGH`, meant to be read across a
+  room. It is what goes on screen; it is what the person types.
+
+`verificationUrlComplete` is the same page with the code already in it, and is
+what the QR should encode so scanning is one action. Send
+`X-StreamHub-Client` and a user agent naming the hardware on the *start* call:
+the session is stamped with the address and agent of whoever started the flow,
+not of whoever approved it, so the device list names the television rather than
+the phone. That is also what the approval screen shows the person, and it is the
+only defence against the attack a device flow cannot close by construction —
+somebody being talked into approving a code that is not theirs.
+
+`POST /api/auth/device/poll` with `{ deviceCode }`, every `intervalSeconds`,
+answers `{ status }`:
+
+| `status` | What it means | What to do |
+|---|---|---|
+| `pending` | Nobody has answered | Keep polling |
+| `approved` | Signed in — carries `user`, `accessToken`, `refreshToken` | Store the session and stop |
+| `denied` | Somebody said it was not their device | Start a new code |
+| `expired` | Ran out, already used, or never existed | Start a new code |
+
+`approved` is answered **once**; the row is marked consumed before the tokens
+are built, so two polls racing cannot both collect a session and a retry after a
+dropped response gets `pending`. A code that never existed is reported as
+`expired` rather than as an error, deliberately: an unauthenticated caller
+learning that a code was real learns something it has no use for.
+
+Codes live 10 minutes. Keep a usable one on screen for as long as the sign-in
+screen is up — poll, and on `denied` or `expired` start another — or a set left
+waiting while somebody fetches their phone shows a code that stopped working.
+
+The three approving routes need a session. `GET /api/auth/device/pending?code=`
+answers `{ userCode, deviceName, clientKind, requestedAt, expiresAt }` for a
+live code and `404` otherwise; `POST /api/auth/device/approve` and
+`POST /api/auth/device/deny` take `{ code }`. Approving as an administrator is
+`403` for the same reason signing in as one on a client is. Wrong and malformed
+codes are limited to 10 per 15 minutes per address — a short code that is typed
+is a short code that can be guessed.
+
 ## Errors
 
 Every error is `{ "error": string }`. Two shapes carry more: validation failures

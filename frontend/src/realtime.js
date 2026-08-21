@@ -21,6 +21,7 @@ let socket = null;
 let reconnectTimer = null;
 let attempts = 0;
 let closedByUs = false;
+let ownSessionId = null;
 
 function endpoint() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -80,6 +81,12 @@ function connect() {
     }
     if (payload?.type === "ready") {
       attempts = 0;
+      // The handshake carries this tab's own session id and the receivers
+      // already connected, so a page that opens after the television still
+      // sees it without waiting for the next announcement. It used to be
+      // swallowed here, back when the frame held nothing worth reading.
+      ownSessionId = payload.sessionId ?? null;
+      emit({ type: "receivers", receivers: payload.receivers ?? [] });
       return;
     }
     if (payload?.type) emit(payload);
@@ -87,6 +94,10 @@ function connect() {
 
   ws.addEventListener("close", (event) => {
     if (socket === ws) socket = null;
+    ownSessionId = null;
+    // The receiver list only exists in the server's memory for as long as
+    // those sockets are open, so a drop means this tab knows of none.
+    emit({ type: "receivers", receivers: [] });
     if (closedByUs || !listeners.size) return;
 
     // The socket is only authenticated at handshake, so the server drops it
@@ -130,6 +141,32 @@ export function subscribeRealtime(listener) {
     listeners.delete(listener);
     if (!listeners.size) teardown();
   };
+}
+
+/**
+ * Sends a frame to the server.
+ *
+ * The socket carried only inbound events until casting needed a way out: a
+ * phone driving a television addresses commands at a session id over this same
+ * connection, rather than opening a second one with its own auth and its own
+ * failure modes.
+ *
+ * Returns false when there is nothing open to send on, which the caller shows
+ * rather than leaving a control that silently does nothing.
+ */
+export function sendRealtime(frame) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(frame));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** This tab's own session, as the server sees it. Null until the handshake. */
+export function getRealtimeSessionId() {
+  return ownSessionId;
 }
 
 /** Reconnect with a fresh token — used after the session is renewed. */

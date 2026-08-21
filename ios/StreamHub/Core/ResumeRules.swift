@@ -34,6 +34,40 @@ enum ResumeRules {
         return map
     }
 
+    /// The season to open when a title is picked.
+    ///
+    /// A title is opened from several places — a search result, a favourite, a
+    /// row of history — and only some of them carry a position. None of that
+    /// should decide where a person lands: what they watched last should, and it
+    /// is the same answer whichever door they came through. So the season
+    /// holding the most recent progress wins, and `fallbackSeasonUrl` is
+    /// consulted only when nothing has been watched.
+    ///
+    /// Rolling over from a season watched to its end is not decided here — that
+    /// needs the season's episode list, which the caller fetches next, so
+    /// `resumeEpisode` handles it.
+    static func resumeSeason(
+        seasons: [SeasonRef],
+        progress: [String: WatchProgress],
+        fallbackSeasonUrl: String? = nil
+    ) -> SeasonRef? {
+        guard let first = seasons.first else { return nil }
+
+        let latest = progress.values
+            .filter { !($0.seasonUrl ?? "").isEmpty }
+            .max { epochMillis($0.lastWatchedAt) < epochMillis($1.lastWatchedAt) }
+
+        // A season can go missing between watching it and coming back: providers
+        // renumber and re-list. Falling through beats landing on nothing.
+        if let url = latest?.seasonUrl, let match = seasons.first(where: { $0.url == url }) {
+            return match
+        }
+        if let url = fallbackSeasonUrl, let match = seasons.first(where: { $0.url == url }) {
+            return match
+        }
+        return first
+    }
+
     /// The episode to open when a title is picked.
     ///
     /// Nothing watched yet starts at the first episode. Otherwise the most

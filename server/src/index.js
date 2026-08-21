@@ -3,7 +3,7 @@ import http from "node:http";
 import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
-import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
+import { DeviceAuthStatus, Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
 import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { rateLimit } from "./rate-limit.js";
 import { providers } from "./providers/index.js";
@@ -22,6 +22,18 @@ import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./m
 import { startMonitoring } from "./monitoring.js";
 import { attachRealtime, broadcast } from "./realtime.js";
 import { describeDevice } from "./devices.js";
+import {
+  DEVICE_CODE_TTL_SECONDS,
+  DEVICE_POLL_INTERVAL_SECONDS,
+  createDeviceCode,
+  createUserCode,
+  formatUserCode,
+  getDeviceCodeExpiresAt,
+  hashDeviceCode,
+  isValidUserCodeShape,
+  normaliseUserCode,
+  verificationUrls,
+} from "./device-auth.js";
 import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
@@ -154,7 +166,23 @@ async function createAuditLog(actorUserId, action, payload = {}, targetUserId = 
 }
 
 
-async function issueSession(user, request) {
+/** Who a session belongs to, as opposed to who asked for it to exist. */
+function sessionOrigin(request) {
+  return {
+    ip: request.ip,
+    userAgent: request.get("user-agent") || null,
+    clientKind: getClientKind(request) || null,
+  };
+}
+
+/**
+ * @param origin the device the session is *for*. Normally the caller, but a
+ *   television signed in by pairing is approved from a phone, and a session
+ *   stamped with the phone's address and user agent would put the wrong device
+ *   in the account's device list — and offer the phone to itself as a cast
+ *   target. So this is passed rather than read off the request.
+ */
+async function issueSession(user, origin) {
   const refreshToken = createRefreshToken();
 
   // The row is created first so its id can go into the token: a request that
@@ -163,9 +191,9 @@ async function issueSession(user, request) {
     data: {
       userId: user.id,
       refreshTokenHash: hashRefreshToken(refreshToken),
-      ip: request.ip,
-      userAgent: request.get("user-agent") || null,
-      clientKind: getClientKind(request) || null,
+      ip: origin.ip,
+      userAgent: origin.userAgent,
+      clientKind: origin.clientKind,
       lastSeenAt: new Date(),
       expiresAt: getRefreshTokenExpiresAt(),
     },
@@ -284,7 +312,7 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response)
     return;
   }
 
-  const session = await issueSession(user, request);
+  const session = await issueSession(user, sessionOrigin(request));
   response.json({
     user: serializeUser(user),
     ...session,
@@ -346,6 +374,218 @@ app.post("/api/auth/logout", asyncHandler(async (request, response) => {
       where: { refreshTokenHash: hashRefreshToken(refreshToken) },
     });
   }
+  response.json({ ok: true });
+}));
+
+/**
+ * Pairing a television.
+ *
+ * See `src/device-auth.js` for why the two codes are shaped so differently.
+ * The three unauthenticated routes here are reachable by anyone who can reach
+ * the server, so each is limited: starting, because a flood would fill the
+ * table; polling, because it is designed to be called in a loop; and approving
+ * — the authenticated one — because a short code that is typed is a short code
+ * that can be guessed.
+ */
+const deviceStartLimiter = rateLimit({ name: "device-start", windowMs: 15 * 60_000, max: 30 });
+const devicePollLimiter = rateLimit({ name: "device-poll", windowMs: 60_000, max: 60 });
+const deviceApproveLimiter = rateLimit({
+  name: "device-approve",
+  windowMs: 15 * 60_000,
+  max: 10,
+  // Only wrong codes count. Approving several televisions in a row is a normal
+  // evening; walking the code space is not.
+  countWhen: (status) => status === 404 || status === 400,
+});
+
+/** Rows are only ever read while PENDING and unexpired; everything else is gone. */
+function liveRequestWhere(extra) {
+  return { ...extra, status: DeviceAuthStatus.PENDING, expiresAt: { gt: new Date() } };
+}
+
+app.post("/api/auth/device/start", deviceStartLimiter, asyncHandler(async (request, response) => {
+  // Swept here rather than on a timer: the only thing that creates these rows
+  // is this route, so it is the only place the table can grow, and a request
+  // that is already writing is the cheapest place to also tidy.
+  await prisma.deviceAuthRequest.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+
+  const deviceCode = createDeviceCode();
+
+  // A collision here is a birthday problem over the codes alive at one moment,
+  // which for a household is a handful — but retrying is three lines and the
+  // alternative is a unique-constraint crash on somebody's television.
+  let record = null;
+  for (let attempt = 0; attempt < 5 && !record; attempt += 1) {
+    const userCode = createUserCode();
+    try {
+      record = await prisma.deviceAuthRequest.create({
+        data: {
+          deviceCodeHash: hashDeviceCode(deviceCode),
+          userCode,
+          ...sessionOrigin(request),
+          expiresAt: getDeviceCodeExpiresAt(),
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+    }
+  }
+  if (!record) {
+    response.status(503).json({ error: "Could not start pairing. Try again." });
+    return;
+  }
+
+  response.json({
+    deviceCode,
+    userCode: formatUserCode(record.userCode),
+    ...verificationUrls(request, record.userCode),
+    expiresInSeconds: DEVICE_CODE_TTL_SECONDS,
+    intervalSeconds: DEVICE_POLL_INTERVAL_SECONDS,
+  });
+}));
+
+/**
+ * The television asking whether anyone has said yes yet.
+ *
+ * Answers `pending` for everything that is not a finished approval, including
+ * codes that never existed: an unauthenticated caller learning that a code was
+ * real, but expired, learns something it has no use for.
+ */
+app.post("/api/auth/device/poll", devicePollLimiter, asyncHandler(async (request, response) => {
+  const deviceCode = String(request.body?.deviceCode || "");
+  if (!deviceCode) {
+    response.status(400).json({ error: "Missing device code." });
+    return;
+  }
+
+  const record = await prisma.deviceAuthRequest.findUnique({
+    where: { deviceCodeHash: hashDeviceCode(deviceCode) },
+    include: { user: true },
+  });
+
+  if (!record || record.expiresAt <= new Date()) {
+    // A code that never existed and one that ran out are answered the same
+    // way. Expiry is the one outcome the television can act on — start again
+    // and show a fresh code — and it is the right move for both.
+    response.json({ status: "expired" });
+    return;
+  }
+
+  if (record.status === DeviceAuthStatus.DENIED) {
+    response.json({ status: "denied" });
+    return;
+  }
+
+  if (record.status !== DeviceAuthStatus.APPROVED || !record.user) {
+    response.json({ status: "pending", intervalSeconds: DEVICE_POLL_INTERVAL_SECONDS });
+    return;
+  }
+
+  if (record.user.status !== UserStatus.ACTIVE) {
+    response.json({ status: "denied" });
+    return;
+  }
+
+  // Marked consumed *before* the tokens are built, and conditioned on it still
+  // being APPROVED, so two polls racing cannot both collect a session.
+  const claimed = await prisma.deviceAuthRequest.updateMany({
+    where: { id: record.id, status: DeviceAuthStatus.APPROVED },
+    data: { status: DeviceAuthStatus.CONSUMED },
+  });
+  if (claimed.count === 0) {
+    response.json({ status: "pending", intervalSeconds: DEVICE_POLL_INTERVAL_SECONDS });
+    return;
+  }
+
+  // The session belongs to the television that started this, not to whoever
+  // approved it from a phone.
+  const session = await issueSession(record.user, {
+    ip: record.ip,
+    userAgent: record.userAgent,
+    clientKind: record.clientKind,
+  });
+
+  response.json({
+    status: "approved",
+    user: serializeUser(record.user),
+    ...session,
+  });
+}));
+
+/**
+ * What is asking, so the person approving can tell their own television from
+ * somebody else's. This is the only defence against the one attack a device
+ * flow cannot close by construction — talking a person into approving a code
+ * that is not theirs — so it answers with the device, not just with "valid".
+ */
+app.get("/api/auth/device/pending", requireAuth(), deviceApproveLimiter, asyncHandler(async (request, response) => {
+  const userCode = normaliseUserCode(request.query.code);
+  if (!isValidUserCodeShape(userCode)) {
+    response.status(400).json({ error: "That code does not look right." });
+    return;
+  }
+
+  const record = await prisma.deviceAuthRequest.findFirst({ where: liveRequestWhere({ userCode }) });
+  if (!record) {
+    response.status(404).json({ error: "That code has expired or was already used." });
+    return;
+  }
+
+  response.json({
+    userCode: formatUserCode(record.userCode),
+    deviceName: describeDevice(record),
+    clientKind: record.clientKind,
+    requestedAt: record.createdAt,
+    expiresAt: record.expiresAt,
+  });
+}));
+
+app.post("/api/auth/device/approve", requireAuth(), deviceApproveLimiter, asyncHandler(async (request, response) => {
+  const userCode = normaliseUserCode(request.body?.code);
+  if (!isValidUserCodeShape(userCode)) {
+    response.status(400).json({ error: "That code does not look right." });
+    return;
+  }
+
+  // Same rule as signing in on a client that names itself: an administrator
+  // would be handed a session that 403s on every screen the television has.
+  if (request.auth.user.role === UserRole.ADMIN) {
+    response.status(403).json({ error: ADMIN_CLIENT_REFUSAL });
+    return;
+  }
+
+  const approved = await prisma.deviceAuthRequest.updateMany({
+    where: liveRequestWhere({ userCode }),
+    data: {
+      status: DeviceAuthStatus.APPROVED,
+      userId: request.auth.user.id,
+      approvedAt: new Date(),
+    },
+  });
+
+  if (approved.count === 0) {
+    response.status(404).json({ error: "That code has expired or was already used." });
+    return;
+  }
+
+  response.json({ ok: true });
+}));
+
+app.post("/api/auth/device/deny", requireAuth(), deviceApproveLimiter, asyncHandler(async (request, response) => {
+  const userCode = normaliseUserCode(request.body?.code);
+  if (!isValidUserCodeShape(userCode)) {
+    response.status(400).json({ error: "That code does not look right." });
+    return;
+  }
+
+  await prisma.deviceAuthRequest.updateMany({
+    where: liveRequestWhere({ userCode }),
+    data: { status: DeviceAuthStatus.DENIED },
+  });
+
+  // Denying something that is already gone is not a failure worth reporting:
+  // the outcome the person wanted — that code cannot sign anything in — holds
+  // either way.
   response.json({ ok: true });
 }));
 

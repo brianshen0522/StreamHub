@@ -251,3 +251,44 @@ struct ServerHealth: Codable, Sendable {
     var status: String = "unknown"
     var apiVersion: Int = 1
 }
+
+/// What is asking to be signed in, shown before anything is granted.
+///
+/// The point of it is `deviceName`. A device flow cannot stop somebody being
+/// talked into approving a code that is not theirs, so the only defence is that
+/// the person can recognise whether the thing asking is their own television.
+struct PendingDevice: Codable, Hashable, Sendable {
+    var userCode: String
+    var deviceName: String = "Unknown device"
+    var clientKind: String?
+    var requestedAt: String?
+    var expiresAt: String?
+}
+
+/// The short pairing code, as a person handles it rather than as it is stored.
+///
+/// What gets typed is never quite what was displayed: people put the separator
+/// back, or leave it out, or the keyboard capitalises for them. Only the
+/// characters carry meaning, so everything is reduced to those before it goes
+/// near the server, and the break is put back only for display.
+///
+/// Mirrors `UserCode` in android/core and `normalise` in frontend/src/LinkTv.jsx.
+enum UserCode {
+    static let length = 8
+
+    static func normalise(_ input: String) -> String {
+        input.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
+
+    static func isComplete(_ input: String) -> Bool {
+        normalise(input).count == length
+    }
+
+    /// `ABCD-EFGH` — one break, because eight unbroken characters get miscounted.
+    static func forDisplay(_ input: String) -> String {
+        let clean = String(normalise(input).prefix(length))
+        guard clean.count > 4 else { return clean }
+        let split = clean.index(clean.startIndex, offsetBy: 4)
+        return "\(clean[..<split])-\(clean[split...])"
+    }
+}

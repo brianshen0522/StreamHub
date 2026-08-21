@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     // AGP 9 has built-in Kotlin support; applying kotlin-android on top of it
     // is an error, not a redundancy.
@@ -31,9 +33,37 @@ fun serverUrl(): String =
     (findProperty("streamhub.serverUrl") as String?)?.trimEnd('/')
         ?: "https://streamhub.gugulu.tw"
 
+/**
+ * Release signing, when a keystore has been configured.
+ *
+ * The keystore and its passwords live outside the repository and are read from
+ * `android/keystore.properties`, which is gitignored — a signing key committed
+ * to a public repository is a key anyone can sign with. Without that file the
+ * release build is simply unsigned, so a fresh clone still builds.
+ *
+ * Losing the keystore is not recoverable: Android refuses an update signed
+ * with a different key, so every phone and television would have to uninstall
+ * first, taking its saved session with it. Back it up.
+ */
+val streamhubKeystore = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.streamhub.tv"
     compileSdk = 37
+
+    signingConfigs {
+        if (streamhubKeystore.containsKey("storeFile")) {
+            create("release") {
+                storeFile = file(streamhubKeystore.getProperty("storeFile"))
+                storePassword = streamhubKeystore.getProperty("storePassword")
+                keyAlias = streamhubKeystore.getProperty("keyAlias")
+                keyPassword = streamhubKeystore.getProperty("keyPassword")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.streamhub.tv"
@@ -49,6 +79,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Null when no keystore is configured, which leaves the build
+            // unsigned rather than failing.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -83,6 +116,10 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+
+    // Drawing a QR code on the sign-in screen. Encoder only — a television has
+    // no camera and no business asking for one.
+    implementation(libs.zxing.core)
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)

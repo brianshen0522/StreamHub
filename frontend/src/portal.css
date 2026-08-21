@@ -168,6 +168,7 @@
 .usr-main { min-width: 0; display: flex; flex-direction: column; }
 
 .usr-topbar {
+  padding-top: env(safe-area-inset-top);
   position: sticky;
   top: 0;
   z-index: 25;
@@ -995,4 +996,221 @@
   .usr-seg::-webkit-scrollbar { display: none; }
   .usr-seg button { flex: 0 0 auto; }
   .usr-lang { flex: 0 0 auto; }
+}
+
+/* ── Casting ──────────────────────────────────────────────────────────────
+   Shared by the browse page and the portal shell. Kept out of the usr-*
+   namespace on purpose: the cast bar is drawn over the shell rather than
+   inside it, and the picker is used from the browse page too. */
+
+.cast-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--t1);
+  cursor: pointer;
+}
+.cast-btn:hover { background: var(--s2); }
+.cast-btn-on { color: var(--accent); }
+
+.cast-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  padding: 16px;
+  /* Standalone on iOS has no browser chrome, so the home indicator is the
+     only thing between this and the bottom edge. */
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+@media (min-width: 861px) {
+  .cast-scrim { align-items: center; }
+}
+
+.cast-sheet,
+.cast-remote {
+  width: 100%;
+  max-width: 420px;
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.cast-sheet-title {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.cast-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--t1);
+  text-align: left;
+  cursor: pointer;
+}
+.cast-device:hover { background: var(--s2); }
+.cast-device-on { color: var(--accent); }
+.cast-device span { display: flex; flex-direction: column; }
+.cast-device small { color: var(--t2); font-size: 12px; }
+
+.cast-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--s1);
+  border-top: 1px solid var(--border);
+  /* Above the bottom tab bar on a phone, and clear of the home indicator.
+     70px is the tab bar's own height, the same figure .usr-body-flush pads by. */
+  bottom: calc(70px + env(safe-area-inset-bottom));
+}
+@media (min-width: 861px) {
+  .cast-bar { left: auto; right: 20px; bottom: 20px; width: 360px; border-radius: 14px; border: 1px solid var(--border); }
+}
+.cast-bar-lost { color: var(--danger); }
+
+.cast-bar-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cast-bar-text { display: flex; flex-direction: column; min-width: 0; }
+.cast-bar-text b,
+.cast-bar-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cast-bar-text small { color: var(--t2); font-size: 12px; }
+
+.cast-bar-toggle {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--t1);
+  font-size: 15px;
+  cursor: pointer;
+}
+.cast-bar-toggle:hover { background: var(--s2); }
+
+.cast-remote-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cast-remote-head small { display: block; color: var(--t2); font-size: 12px; }
+.cast-remote-close {
+  border: 0;
+  background: transparent;
+  color: var(--t2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cast-remote-title { margin: 18px 0 10px; }
+.cast-remote-title b { display: block; font-size: 17px; }
+.cast-remote-title small { color: var(--t2); }
+
+.cast-remote-seek { width: 100%; accent-color: var(--accent); }
+.cast-remote-times {
+  display: flex;
+  justify-content: space-between;
+  color: var(--t2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cast-remote-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin: 18px 0;
+}
+.cast-remote-transport button {
+  min-width: 52px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--s2);
+  color: var(--t1);
+  cursor: pointer;
+}
+.cast-remote-transport button:disabled { opacity: 0.4; cursor: not-allowed; }
+.cast-remote-play {
+  width: 64px !important;
+  height: 64px !important;
+  border-radius: 32px !important;
+  background: var(--accent) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  font-size: 18px;
+}
+
+.cast-remote-actions { display: flex; gap: 10px; }
+.cast-remote-actions button {
+  flex: 1;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+}
+.cast-remote-stop { color: var(--danger) !important; }
+
+/* Only while a cast is running — see CastBar. Without it the bar sits on top
+   of the last rows of whatever page is open. */
+body.has-cast-bar .usr-body,
+body.has-cast-bar .usr-body-flush {
+  padding-bottom: calc(70px + 58px + env(safe-area-inset-bottom));
+}
+
+/* ── connecting a television ─────────────────────────────────
+   The code is read off a screen on the other side of a room and typed here, so
+   it is set large, monospaced and widely tracked. The characters were already
+   chosen to be hard to confuse; at body size they stop looking it. */
+.usr-link { max-width: 620px; }
+
+.usr-code-input {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.usr-code-shown {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }

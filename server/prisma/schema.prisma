@@ -18,6 +18,13 @@ enum UserStatus {
   DISABLED
 }
 
+enum DeviceAuthStatus {
+  PENDING
+  APPROVED
+  DENIED
+  CONSUMED
+}
+
 enum ProviderHealthStatus {
   HEALTHY
   DEGRADED
@@ -45,8 +52,40 @@ model User {
   sourcePreferences UserSourcePreference[]
   providerAccess UserProviderPermission[]
   adminAuditLogs AuditLog[] @relation("AuditActor")
+  deviceAuthRequests DeviceAuthRequest[]
 
   @@map("users")
+}
+
+/// A television asking to be signed in from somewhere with a keyboard.
+///
+/// Two secrets, deliberately unalike. The device code is long, random and
+/// never shown to anybody: the television keeps it and polls with it, and it
+/// is stored hashed for the same reason refresh tokens are. The user code is
+/// short enough to read off a screen and type on a phone, which is exactly
+/// what makes it guessable — hence a short expiry, one use, and a rate limit
+/// on approving.
+///
+/// The address and user agent are the *television's*, captured when it asked.
+/// The session minted on approval has to look like it came from the set, not
+/// from the phone that approved it, or the device list names the wrong thing.
+model DeviceAuthRequest {
+  id             String   @id @default(cuid())
+  deviceCodeHash String   @unique @map("device_code_hash")
+  userCode       String   @unique @map("user_code")
+  status         DeviceAuthStatus @default(PENDING)
+  userId         String?  @map("user_id")
+  ip             String?
+  userAgent      String?  @map("user_agent")
+  clientKind     String?  @map("client_kind")
+  approvedAt     DateTime? @map("approved_at")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("device_auth_requests")
 }
 
 model UserSession {

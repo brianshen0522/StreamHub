@@ -39,6 +39,43 @@ object ResumeRules {
         entries.associateBy { progressKey(it.seasonUrl, it.episodeLabel) }
 
     /**
+     * The season to open when a title is picked.
+     *
+     * A title is opened from several places — a search result, a favourite, a
+     * row of history — and only some of them carry a position. None of that
+     * should decide where a person lands: what they watched last should, and it
+     * is the same answer whichever door they came through. So the season
+     * holding the most recent progress wins, and [fallbackSeasonUrl] is
+     * consulted only when nothing has been watched.
+     *
+     * That fallback is what a favourite remembers: the season that was on
+     * screen when the heart was tapped. It is a reasonable guess for a title
+     * never watched and simply wrong for one that has been, which is why it
+     * loses to progress rather than overriding it.
+     *
+     * Rolling over from a season watched to its end is not decided here — that
+     * needs the season's episode list, which the caller fetches next, so
+     * [resumeEpisode] handles it.
+     */
+    fun resumeSeason(
+        seasons: List<SeasonRef>,
+        progress: Map<String, WatchProgress>,
+        fallbackSeasonUrl: String? = null,
+    ): SeasonRef? {
+        if (seasons.isEmpty()) return null
+
+        val latest = progress.values
+            .filter { !it.seasonUrl.isNullOrBlank() }
+            .maxByOrNull { it.lastWatchedAt.toEpochMillis() }
+
+        // A season can go missing between watching it and coming back: providers
+        // renumber and re-list. Falling through beats landing on nothing.
+        return latest?.let { row -> seasons.firstOrNull { it.url == row.seasonUrl } }
+            ?: fallbackSeasonUrl?.let { url -> seasons.firstOrNull { it.url == url } }
+            ?: seasons.first()
+    }
+
+    /**
      * The episode to open when a title is picked.
      *
      * Nothing watched yet starts at the first episode. Otherwise the most

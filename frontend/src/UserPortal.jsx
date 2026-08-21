@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { CastBar } from "./CastControls.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
 import { subscribeRealtime } from "./realtime.js";
@@ -7,6 +8,9 @@ import { fmt, resolveLanguage, storeLanguage, translations } from "./i18n.js";
 import "./portal.css";
 
 const App = lazy(() => import("./App.jsx"));
+// Reached from a QR code and from one link on the profile page — rare enough
+// that it has no business in the bundle everyone loads.
+const LinkTvPage = lazy(() => import("./LinkTv.jsx"));
 
 /** Translations for the active language, shared through LanguageContext. */
 function useT() {
@@ -35,6 +39,7 @@ const IconClose = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></sv
 const IconFilm = () => <svg {...svgProps}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9.5h18M3 14.5h18M8 4v16M16 4v16" /></svg>;
 const IconCheck = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="m8.2 12.2 2.6 2.6 5-5.2" /></svg>;
 const IconAlert = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5M12 16.2h.01" /></svg>;
+const IconTv = () => <svg {...svgProps}><rect x="3" y="5" width="18" height="13" rx="2" /><path d="m8 21 4-3 4 3" /></svg>;
 
 /* ── helpers ───────────────────────────────────────────────── */
 
@@ -82,12 +87,13 @@ function formatClock(value, t) {
   return new Date(value).toLocaleTimeString(t.locale, { hour: "2-digit", minute: "2-digit" });
 }
 
-function encodeViewState({ providerKey, itemUrl, title, mediaType, posterUrl, seasonUrl, episodeLabel }) {
+function encodeViewState({ providerKey, itemUrl, title, mediaType, posterUrl, seasonUrl, episodeLabel, exact }) {
   try {
     const obj = { p: providerKey, u: itemUrl, t: title, m: mediaType };
     if (posterUrl) obj.ps = posterUrl;
     if (seasonUrl) obj.s = seasonUrl;
     if (episodeLabel) obj.ep = episodeLabel;
+    if (exact) obj.x = 1;
     const latin1 = encodeURIComponent(JSON.stringify(obj)).replace(/%([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
     return btoa(latin1).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   } catch {
@@ -95,7 +101,21 @@ function encodeViewState({ providerKey, itemUrl, title, mediaType, posterUrl, se
   }
 }
 
-function playbackHref(item) {
+/**
+ * Where a row goes when it is opened.
+ *
+ * The season and episode on a row are not all alike. A row of history is a
+ * bookmark of one viewing, so opening it goes there — `exact`. A favourite is a
+ * bookmark of the *title*, and the season it carries is merely wherever the
+ * heart was tapped; a show favourited during season one would otherwise open at
+ * season one forever. A continue-watching row is a resume point already, and
+ * left inexact so the same rule decides it as everywhere else, which keeps the
+ * web agreeing with the phone and the television.
+ *
+ * So: history pins, everything else lets watch progress choose and offers what
+ * it carries only as a fallback. See `getResumeSeason` in App.jsx.
+ */
+function playbackHref(item, { exact = false } = {}) {
   const state = encodeViewState({
     providerKey: item.providerKey,
     itemUrl: item.itemUrl,
@@ -104,6 +124,7 @@ function playbackHref(item) {
     posterUrl: item.posterUrl || "",
     seasonUrl: item.seasonUrl || "",
     episodeLabel: item.episodeLabel || "",
+    exact,
   });
   return state ? `/?v=${state}` : "/";
 }
@@ -535,7 +556,7 @@ function HistoryPage({ setTopbar }) {
 
               return (
                 <div key={title.key} className="usr-hist">
-                  <Link to={playbackHref(entry)} className="usr-row usr-hist-main">
+                  <Link to={playbackHref(entry, { exact: true })} className="usr-row usr-hist-main">
                     <div className="usr-row-thumb"><Thumb src={entry.posterUrl} alt={entry.title} /></div>
                     <div className="usr-row-main">
                       <div className="usr-row-title">{entry.title}</div>
@@ -571,7 +592,7 @@ function HistoryPage({ setTopbar }) {
                       {[...title.episodes.values()]
                         .sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt))
                         .map((episode) => (
-                          <Link key={episode.id} to={playbackHref(episode)} className="usr-hist-line">
+                          <Link key={episode.id} to={playbackHref(episode, { exact: true })} className="usr-hist-line">
                             <span>{episode.episodeLabel || entry.title}</span>
                             <span className="usr-row-time">
                               {episode.durationSeconds > 0
@@ -708,6 +729,19 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
                   </button>
                 </div>
               </form>
+            </div>
+          </section>
+
+          <section className="usr-panel">
+            <header className="usr-panel-head">
+              <div className="usr-panel-title">{t.linkTv}</div>
+              <div className="usr-panel-desc">{t.linkTvDesc}</div>
+            </header>
+            <div className="usr-panel-body">
+              <Link to="/link" className="usr-btn usr-btn-ghost">
+                <IconTv />
+                {t.linkOpen}
+              </Link>
             </div>
           </section>
 
@@ -904,11 +938,16 @@ export default function UserPortal({ session, setSession, onLogout }) {
                 <Route path="continue" element={<ContinuePage setTopbar={setTopbar} toast={toast} onCountsChanged={loadCounts} />} />
                 <Route path="history" element={<HistoryPage setTopbar={setTopbar} />} />
                 <Route path="profile" element={<ProfilePage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} onLogout={onLogout} />} />
+                <Route path="link" element={<Suspense fallback={<GridSkeleton />}><LinkTvPage setTopbar={setTopbar} t={t} /></Suspense>} />
               </Routes>
             </PortalChromeContext.Provider>
           </div>
         </main>
       </div>
+
+      {/* Outside the shell so it survives navigation: leaving the player
+          is not the same as stopping what a television is showing. */}
+      <CastBar t={t} />
 
       <Toast message={toastState?.message} tone={toastState?.tone} onDismiss={dismissToast} />
     </div>
