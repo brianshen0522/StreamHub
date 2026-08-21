@@ -82,6 +82,14 @@ class StreamHubApi(
         .authenticator(TokenAuthenticator(refresher))
         .build()
 
+    /**
+     * For anything that fetches from this server outside these methods — the
+     * image loader in particular. `/api/poster` sits behind auth, so a plain
+     * unauthenticated request for a poster answers 401 and the grid renders
+     * empty.
+     */
+    val authenticatedClient: OkHttpClient get() = authed
+
     // ── auth ────────────────────────────────────────────────────────────────
 
     /**

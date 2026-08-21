@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android blocks cleartext HTTP by default from targetSdk 28 onwards, and this
+  app would otherwise be unable to reach any server at all: StreamHub is
+  self-hosted, its address is typed in by the person running it, and on a home
+  network that address is almost always plain http:// against a LAN IP.
+
+  The address cannot be allow-listed by domain for the same reason — it is
+  whatever the user entered. So cleartext is permitted generally. Anyone
+  exposing their server beyond the LAN should put it behind HTTPS and enter the
+  https:// address, which this config does not prevent or downgrade.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
