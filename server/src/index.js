@@ -4,7 +4,7 @@ import express from "express";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
-import { PORT } from "./config.js";
+import { CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { providers } from "./providers/index.js";
 import { streamCheckedSources, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
@@ -375,14 +375,58 @@ app.get("/api/me/history", requireAuth(), forbidAdminPlayback(), asyncHandler(as
 }));
 
 app.get("/api/me/continue-watching", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
-  const items = await prisma.watchProgress.findMany({
-    where: {
-      userId: request.auth.user.id,
-      isCompleted: false,
-    },
+  const rows = await prisma.watchProgress.findMany({
+    where: { userId: request.auth.user.id },
     orderBy: { lastWatchedAt: "desc" },
-    take: 100,
+    take: CONTINUE_SCAN_LIMIT,
   });
+
+  // One card per title, not per episode. Progress is stored per episode, so a
+  // series being worked through buried the shelf: 39 rows collapsed to 14
+  // titles in practice, one show alone holding 21 of them.
+  //
+  // Rows arrive newest-first, so the first one seen for a title is what the
+  // user was last watching, and insertion order already ranks the groups.
+  // Keyed on title rather than itemUrl because the providers disagree on what
+  // an "item" is: movieffm keeps one page per show, but dramasq gives every
+  // episode its own detail page (…342, …343, …344 for one drama), so grouping
+  // by URL left that show holding four cards.
+  //
+  // mediaType stays out of the key: it is written as "unknown" on some paths,
+  // and one show here carries both "tv" and "unknown" rows, which split it in
+  // two the moment the field took part.
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.providerKey}::${row.title}`;
+    const group = groups.get(key);
+    if (group) {
+      group.episodesTouched += 1;
+      if (row.isCompleted) group.episodesCompleted += 1;
+      continue;
+    }
+    groups.set(key, {
+      latest: row,
+      episodesTouched: 1,
+      episodesCompleted: row.isCompleted ? 1 : 0,
+    });
+  }
+
+  const items = [];
+  for (const { latest, episodesTouched, episodesCompleted } of groups.values()) {
+    // Derived from the row rather than trusted from mediaType, for the same
+    // reason: only episodes carry a label, films never do.
+    const isSeries = Boolean(latest.episodeLabel) || latest.mediaType === "tv";
+
+    // A finished film has nothing left to continue, so it drops off. A finished
+    // episode does not mean a finished show: the title stays and points at
+    // what comes next, which the player resolves from the episode list on
+    // arrival. Filtering completed rows out entirely used to make a series
+    // vanish the moment an episode ended.
+    if (latest.isCompleted && !isSeries) continue;
+
+    items.push({ ...latest, nextUp: latest.isCompleted, episodesTouched, episodesCompleted });
+  }
+
   response.json({ items });
 }));
 
@@ -460,11 +504,20 @@ app.delete("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandle
     response.status(400).json({ error: "Missing providerKey or itemUrl." });
     return;
   }
-  const seasonUrl = String(request.body?.seasonUrl || "").trim();
-  const episodeLabel = String(request.body?.episodeLabel || "").trim();
-  await prisma.watchProgress.deleteMany({
-    where: { userId: request.auth.user.id, providerKey, itemUrl, seasonUrl, episodeLabel },
-  });
+  const where = { userId: request.auth.user.id, providerKey, itemUrl };
+  // The continue shelf shows one card per title, so its dismiss button has to
+  // clear the whole title; without this it would drop a single episode and the
+  // card would reappear pointing at the next-newest one.
+  if (String(request.body?.scope || "") === "title") {
+    // Match how the continue shelf groups: one card stands for a whole title,
+    // and for providers that page per episode that spans several itemUrls.
+    delete where.itemUrl;
+    where.title = String(request.body?.title || "").trim();
+  } else {
+    where.seasonUrl = String(request.body?.seasonUrl || "").trim();
+    where.episodeLabel = String(request.body?.episodeLabel || "").trim();
+  }
+  await prisma.watchProgress.deleteMany({ where });
   broadcast(request.auth.user.id, { type: "progress", action: "removed" });
   response.json({ ok: true });
 }));
@@ -1071,7 +1124,7 @@ app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
   await handleStreamProxy(request, response);
 }));
 
-app.get("/api/poster", requireAuth(), asyncHandler(async (request, response) => {
+app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handlePosterProxy(request, response);
 }));
 

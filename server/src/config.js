@@ -17,6 +17,10 @@ export const STREAM_PROXY_TIMEOUT_MS = parseDurationMs(process.env.STREAM_PROXY_
 export const ACCESS_TOKEN_TTL_SECONDS = parsePositiveInt(process.env.ACCESS_TOKEN_TTL_SECONDS, 60 * 60 * 4);
 export const REFRESH_TOKEN_TTL_DAYS = parsePositiveInt(process.env.REFRESH_TOKEN_TTL_DAYS, 30);
 export const HEARTBEAT_ONLINE_WINDOW_SECONDS = parsePositiveInt(process.env.HEARTBEAT_ONLINE_WINDOW_SECONDS, 120);
+// Progress rows scanned when building the continue shelf. Rows group by title,
+// so this bounds episodes across all shows, not the number of shows.
+export const CONTINUE_SCAN_LIMIT = parsePositiveInt(process.env.CONTINUE_SCAN_LIMIT, 500);
+
 export const PROVIDER_CHECK_INTERVAL_MS = parseDurationMs(process.env.PROVIDER_CHECK_INTERVAL_MS, 30_000);
 export const PROVIDER_POLL_QUERY = String(process.env.PROVIDER_POLL_QUERY || "the");
 export const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "admin");
