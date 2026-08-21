@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Fixed at build time. There is one deployment, so asking for its address
+	     would be a setup step with exactly one right answer. Override for local
+	     work: xcodebuild ... STREAMHUB_SERVER_URL=http://127.0.0.1:58787 -->
+	<key>StreamHubServerURL</key>
+	<string>$(STREAMHUB_SERVER_URL)</string>
+
+	<!-- Playback continues with the screen locked, and AVPlayerViewController's
+	     lock-screen and Control Center integration depends on this. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+
+	<!-- Only local addresses, and only over the loopback and local network. A
+	     development server runs on the Mac over plain http; the real deployment
+	     is https and needs no exception, so this is not a hole in it. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,12 +35,20 @@ import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.streamhub.core.model.Session
+import androidx.compose.foundation.layout.Column
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.streamhub.mobile.auth.LoginScreen
+import com.streamhub.mobile.cast.CastBar
+import com.streamhub.mobile.cast.CastButton
+import com.streamhub.mobile.cast.CastSheet
+import com.streamhub.mobile.cast.RemoteScreen
 import com.streamhub.mobile.auth.LoginViewModel
 import com.streamhub.mobile.continuewatching.ContinueScreen
 import com.streamhub.mobile.continuewatching.ContinueViewModel
 import com.streamhub.mobile.detail.DetailScreen
 import com.streamhub.mobile.detail.DetailViewModel
+import com.streamhub.mobile.devices.DevicesSection
+import com.streamhub.mobile.devices.DevicesViewModel
 import com.streamhub.mobile.library.FavoritesScreen
 import com.streamhub.mobile.library.FavoritesViewModel
 import com.streamhub.mobile.library.HistoryScreen
@@ -63,6 +72,7 @@ private enum class Destination(val route: String, val label: String, val icon: I
 
 private const val ROUTE_DETAIL = "detail"
 private const val ROUTE_PLAYER = "player"
+private const val ROUTE_REMOTE = "remote"
 
 @Composable
 fun StreamHubApp(container: AppContainer) {
@@ -111,6 +121,36 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
     val route = backStack?.destination?.route
     val scope = rememberCoroutineScope()
 
+    val receivers by container.cast.receivers.collectAsStateWithLifecycle()
+    val castTarget by container.cast.target.collectAsStateWithLifecycle()
+    val castLost by container.cast.lost.collectAsStateWithLifecycle()
+    var pickingDevice by remember { mutableStateOf(false) }
+
+    // Supplied to the screens that have somewhere to put it. It renders nothing
+    // when there is no device to cast to, so those screens are unchanged on a
+    // network with no television on it.
+    val castAction: @Composable () -> Unit = {
+        CastButton(
+            receivers = receivers,
+            connected = castTarget != null,
+            onClick = { pickingDevice = true },
+        )
+    }
+
+    /**
+     * Where Play goes. Casting is app-wide state, so the decision belongs here
+     * rather than in each screen: once a television is chosen, every Play in
+     * the app follows it until that choice is undone.
+     */
+    val startPlayback: (PlaybackRequest) -> Unit = { request ->
+        container.handover.playback = request
+        if (castTarget != null && container.cast.play(request)) {
+            navController.navigate(ROUTE_REMOTE)
+        } else {
+            navController.navigate(ROUTE_PLAYER)
+        }
+    }
+
     val posterUrl: (String) -> String? = { target ->
         target.takeIf { it.isNotBlank() }?.let { container.api.posterUrl(it) }
     }
@@ -122,6 +162,22 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
     Scaffold(
         bottomBar = {
             if (!showTabs) return@Scaffold
+            Column {
+                // Above the tabs, so leaving the remote screen does not look
+                // like the cast stopped. Hidden on the remote screen itself,
+                // where it would only duplicate what is already on screen.
+                val active = castTarget
+                if (active != null && route != ROUTE_REMOTE) {
+                    CastBar(
+                        target = active,
+                        lost = castLost,
+                        onOpen = { navController.navigate(ROUTE_REMOTE) },
+                        onTogglePlay = {
+                            if (active.state?.paused == true) container.cast.resume()
+                            else container.cast.pause()
+                        },
+                    )
+                }
             NavigationBar {
                 for (destination in Destination.entries) {
                     NavigationBarItem(
@@ -140,16 +196,24 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     )
                 }
             }
+            }
         },
     ) { padding ->
+        // Deliberately unpadded. The tab screens below take the inset
+        // individually; the detail screen has its own Scaffold, and the player
+        // needs the whole screen — padding it here is what kept "full screen"
+        // from ever reaching the edges.
+        val tabPadding = Modifier.padding(padding)
+
         NavHost(
             navController = navController,
             startDestination = Destination.SEARCH.route,
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize(),
         ) {
             composable(Destination.SEARCH.route) {
                 SearchScreen(
                     viewModel = viewModel { SearchViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
@@ -166,6 +230,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.CONTINUE.route) {
                 ContinueScreen(
                     viewModel = viewModel { ContinueViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
@@ -186,14 +251,38 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     LaunchedEffect(Unit) { navController.popBackStack() }
                 } else {
                     val detailViewModel = viewModel { DetailViewModel(container, selection) }
+                    val detailState by detailViewModel.state.collectAsStateWithLifecycle()
+                    var startWhenReady by rememberSaveable { mutableStateOf(false) }
+
+                    // Coming back from the player's next-episode button. The
+                    // screen kept its state on the back stack, so this only has
+                    // to move the selection.
+                    LaunchedEffect(Unit) {
+                        container.handover.pendingEpisode?.let { episode ->
+                            container.handover.pendingEpisode = null
+                            detailViewModel.selectEpisode(episode)
+                            startWhenReady = true
+                        }
+                    }
+
+                    // Answering "play the next episode" by selecting it and
+                    // stopping there asks for a second tap to do the thing that
+                    // was already asked for. It waits here rather than starting
+                    // immediately because the episode's sources arrive one at a
+                    // time over NDJSON, so there is nothing to play yet.
+                    LaunchedEffect(startWhenReady, detailState.sources.firstOrNull()) {
+                        if (!startWhenReady) return@LaunchedEffect
+                        val best = detailState.sources.firstOrNull() ?: return@LaunchedEffect
+                        startWhenReady = false
+                        startPlayback(detailViewModel.playbackFor(best))
+                    }
+
                     DetailScreen(
                         viewModel = detailViewModel,
                         posterUrl = posterUrl,
                         onBack = { navController.popBackStack() },
-                        onPlay = { source ->
-                            container.handover.playback = detailViewModel.playbackFor(source)
-                            navController.navigate(ROUTE_PLAYER)
-                        },
+                        onPlay = { source -> startPlayback(detailViewModel.playbackFor(source)) },
+                        castAction = castAction,
                     )
                 }
             }
@@ -206,13 +295,68 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         container = container,
                         request = request,
                         viewModel = viewModel { PlayerViewModel(container, request) },
+                        castAction = {
+                            CastButton(
+                                receivers = receivers,
+                                connected = castTarget != null,
+                                onClick = { pickingDevice = true },
+                                tint = androidx.compose.ui.graphics.Color.White,
+                            )
+                        },
+                        onNextEpisode = { episode ->
+                            container.handover.pendingEpisode = episode
+                            navController.popBackStack()
+                        },
                         onBack = { navController.popBackStack() },
+                    )
+                }
+            }
+            composable(ROUTE_REMOTE) {
+                val active = castTarget
+                // Always by name, never a bare pop. This screen keeps
+                // recomposing while it animates out, by which time the cast is
+                // already disconnected — a bare pop then removes whatever
+                // replaced it, which is what stopped "Play on this phone" from
+                // ever reaching the player.
+                val leaveRemote = { navController.popBackStack(ROUTE_REMOTE, inclusive = true) }
+                if (active == null) {
+                    // The chosen device went away for good, or the cast was
+                    // stopped from elsewhere. There is nothing to control.
+                    LaunchedEffect(Unit) { leaveRemote() }
+                } else {
+                    RemoteScreen(
+                        target = active,
+                        lost = castLost,
+                        onPause = container.cast::pause,
+                        onResume = container.cast::resume,
+                        onSeek = container.cast::seekTo,
+                        onStop = {
+                            container.cast.stopAndDisconnect()
+                            leaveRemote()
+                        },
+                        onPlayHere = {
+                            // Pick up where the television is, rather than at
+                            // the start: this is a handover, not a restart.
+                            val request = container.handover.playback?.let { pending ->
+                                active.state?.positionMs?.let { position ->
+                                    pending.copy(resumeAtSeconds = (position / 1000).toInt())
+                                } ?: pending
+                            }
+                            container.cast.stopAndDisconnect()
+                            leaveRemote()
+                            if (request != null) {
+                                container.handover.playback = request
+                                navController.navigate(ROUTE_PLAYER)
+                            }
+                        },
+                        onBack = { leaveRemote() },
                     )
                 }
             }
             composable(Destination.FAVORITES.route) {
                 FavoritesScreen(
                     viewModel = viewModel { FavoritesViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { favorite ->
                         container.handover.selection = MediaSelection(
@@ -229,6 +373,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             composable(Destination.HISTORY.route) {
                 HistoryScreen(
                     viewModel = viewModel { HistoryViewModel(container) },
+                    modifier = tabPadding,
                     posterUrl = posterUrl,
                     onOpen = { entry ->
                         container.handover.selection = MediaSelection(
@@ -247,8 +392,15 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     user = session.user,
                     serverUrl = container.serverUrl,
                     buildId = BuildConfig.GIT_SHA,
+                    modifier = tabPadding,
                     statusSection = {
                         StatusSection(viewModel = viewModel { StatusViewModel(container) })
+                    },
+                    devicesSection = {
+                        DevicesSection(
+                            viewModel = viewModel { DevicesViewModel(container) },
+                            onSignedOutHere = onSignedOut,
+                        )
                     },
                     onSignOut = {
                         scope.launch {
@@ -259,5 +411,30 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 )
             }
         }
+    }
+
+    if (pickingDevice) {
+        CastSheet(
+            container = container,
+            receivers = receivers,
+            target = castTarget,
+            onPick = { receiver ->
+                pickingDevice = false
+                container.cast.connect(receiver.sessionId)
+                // Only move an existing playback across. Choosing a device with
+                // nothing playing simply arms the next Play, which is why the
+                // sheet can be opened from the detail screen at all.
+                val pending = container.handover.playback
+                if (route == ROUTE_PLAYER && pending != null && container.cast.play(pending)) {
+                    navController.popBackStack()
+                    navController.navigate(ROUTE_REMOTE)
+                }
+            },
+            onPlayHere = {
+                pickingDevice = false
+                container.cast.disconnect()
+            },
+            onDismiss = { pickingDevice = false },
+        )
     }
 }

@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Compose draws the UI; this only has to be a valid app theme with no
-         action bar, so the system does not draw one above the composition. -->
-    <style name="Theme.StreamHub" parent="android:Theme.Material.NoActionBar" />
+    <!--
+      Compose draws the UI, but this theme is what the system paints between the
+      launcher tap and the first frame. Left on the platform default it is a
+      white flash in front of an app that is entirely near-black, so the window
+      background matches the bg token from the web client.
+    -->
+    <style name="Theme.StreamHub" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/streamhub_bg</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
 </resources>

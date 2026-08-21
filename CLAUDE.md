@@ -57,7 +57,7 @@ cd android && ./gradlew :core:testDebugUnitTest
 | `server/` | Express API, scrapers, stream proxy |
 | `frontend/` | React SPA (the web client) served by nginx in production |
 | `shared/` | Code and contract notes used by more than one client |
-| `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` and `:tv` apps whose UI is still a placeholder |
+| `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` phone app, `:tv` Android TV app. Both play video; the phone can drive the television — see `android/CASTING.md` |
 | `ios/` | Native client — README only so far |
 | `PoC/` | Standalone Python scrapers used for provider spelunking; not part of the app |
 
@@ -73,7 +73,7 @@ Express 4 + Prisma (PostgreSQL) + `ws`. ESM throughout, plain JavaScript, no
 TypeScript. The Prisma client is generated to the non-standard path
 `server/generated/prisma` and imported as `../generated/prisma/index.js`.
 
-`src/index.js` is ~1200 lines and registers **all 44 routes directly on one
+`src/index.js` is ~1200 lines and registers **all 48 routes directly on one
 `app`** — no Router modules.
 
 Every route answers at both `/api/…` and `/api/v1/…`. A middleware rewrites the
@@ -99,7 +99,8 @@ unversioned paths; clients pin to `/api/v1`. Route groups:
 | `src/providers/*.js` | One scraper per provider + the registry |
 | `src/provider-access.js` | Global and per-user provider gating |
 | `src/monitoring.js` | Provider health poller (every 30 s, runs a real search) |
-| `src/realtime.js` | WebSocket fan-out at `/api/realtime` |
+| `src/realtime.js` | WebSocket fan-out at `/api/realtime`, and the phone-to-television command channel |
+| `src/backup.js` | Whole-instance export and import, behind `/api/admin/backup` |
 | `src/cache.js` | Five LRU caches |
 | `src/validators.js` | Zod schemas — request bodies only |
 | `src/utils/http.js` | `fetchText`/`fetchJson` with a Chrome UA and `zh-TW` accept-language |

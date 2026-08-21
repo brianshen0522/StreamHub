@@ -104,14 +104,6 @@ fun LoginScreen(viewModel: LoginViewModel, onSignedIn: () -> Unit) {
                     Text("Sign in")
                 }
             }
-
-            // Which deployment this build talks to. Not adjustable, but worth
-            // being able to see when something is not behaving.
-            Text(
-                text = viewModel.serverUrl,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Mirrors the bg and accent tokens from frontend/src/styles.css. Only the values
+  the platform needs before Compose starts live here; the rest are in
+  ui/Color.kt.
+-->
+<resources>
+    <color name="streamhub_bg">#FF0A0A0A</color>
+    <color name="streamhub_accent">#FFE50914</color>
+</resources>

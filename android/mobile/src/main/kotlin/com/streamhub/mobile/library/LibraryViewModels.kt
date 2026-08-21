@@ -64,6 +64,19 @@ data class HistoryUiState(
 
 class HistoryViewModel(private val container: AppContainer) : ViewModel() {
 
+    /**
+     * One row per title, the most recent one.
+     *
+     * The server keeps history as an append-only log, so watching a series
+     * produces an entry per session and per episode. Listing those raw turns a
+     * handful of shows into a wall of near-identical lines. The web client
+     * groups by title for the same reason; this matches it, so a viewer sees the
+     * same list on both.
+     */
+    private fun collapse(entries: List<WatchHistoryEntry>): List<WatchHistoryEntry> =
+        entries.distinctBy { "${it.providerKey}::${it.title}" }
+
+
     private val _state = MutableStateFlow(HistoryUiState())
     val state: StateFlow<HistoryUiState> = _state.asStateFlow()
 
@@ -82,7 +95,7 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = it.items.isEmpty(), error = null) }
             try {
-                _state.update { it.copy(loading = false, items = container.api.history()) }
+                _state.update { it.copy(loading = false, items = collapse(container.api.history())) }
             } catch (error: StreamHubException) {
                 _state.update { it.copy(loading = false, error = error.message) }
             } catch (error: Exception) {

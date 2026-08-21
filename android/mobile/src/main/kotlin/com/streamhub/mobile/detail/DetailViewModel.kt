@@ -9,6 +9,7 @@ import com.streamhub.core.model.Source
 import com.streamhub.core.model.WatchProgress
 import com.streamhub.core.net.StreamHubException
 import com.streamhub.core.resume.ResumeRules
+import com.streamhub.core.resume.UpNext
 import com.streamhub.mobile.AppContainer
 import com.streamhub.mobile.MediaSelection
 import com.streamhub.mobile.PlaybackRequest
@@ -170,7 +171,7 @@ class DetailViewModel(
                     .collect { source ->
                         // Sources land one at a time as each health probe finishes,
                         // so they are appended rather than waited for.
-                        _state.update { it.copy(sources = it.sources + source, loadingSources = false) }
+                        _state.update { it.copy(sources = rank(it.sources + source), loadingSources = false) }
                     }
                 _state.update { it.copy(loadingSources = false, sourcesFinished = true) }
             } catch (error: Exception) {
@@ -186,7 +187,7 @@ class DetailViewModel(
             try {
                 container.api.checkSources(selection.provider, movieStreams)
                     .collect { source ->
-                        _state.update { it.copy(sources = it.sources + source, loadingSources = false) }
+                        _state.update { it.copy(sources = rank(it.sources + source), loadingSources = false) }
                     }
             } catch (error: Exception) {
                 /* whatever arrived is still usable */
@@ -215,8 +216,27 @@ class DetailViewModel(
             directUrl = source.directUrl,
             durationSeconds = source.durationSeconds,
             resumeAtSeconds = ResumeRules.resumePositionSeconds(existing),
+            // Only within this season. Rolling over to the next one needs a
+            // different season's episode list, which the player does not have.
+            nextEpisodeLabel = (ResumeRules.upNext(current.episodes, episode) as? UpNext.Episode)?.label,
         )
     }
+
+    /**
+     * Sources where advertising was found and cut come first.
+     *
+     * A non-zero ad figure means the filter recognised this stream's ad breaks
+     * and removed them, so what plays is known to be clean. Zero says nothing
+     * either way: the source may genuinely carry no ads, or it may serve them
+     * from the same directory as the feature, which the filter deliberately
+     * leaves alone because there is no dependable evidence for those. Preferring
+     * the first kind is preferring the case that was actually verified.
+     *
+     * Stable, so within each group the arrival order — which the server already
+     * biases towards this account's last choice — is kept.
+     */
+    private fun rank(sources: List<Source>): List<Source> =
+        sources.sortedWith(compareByDescending { it.adSeconds > 0 })
 
     private fun completed(episodes: List<String>, seasonUrl: String?): Set<String> =
         episodes.filterTo(mutableSetOf()) { episode ->

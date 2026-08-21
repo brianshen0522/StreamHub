@@ -7,7 +7,7 @@ import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
 import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { rateLimit } from "./rate-limit.js";
 import { providers } from "./providers/index.js";
-import { streamCheckedSources, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
+import { streamCheckedSources, handleAdCuts, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
   createAccessToken,
   createRefreshToken,
@@ -21,6 +21,8 @@ import { prisma } from "./db.js";
 import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./middleware.js";
 import { startMonitoring } from "./monitoring.js";
 import { attachRealtime, broadcast } from "./realtime.js";
+import { describeDevice } from "./devices.js";
+import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
   adminResetPasswordSchema,
@@ -153,19 +155,23 @@ async function createAuditLog(actorUserId, action, payload = {}, targetUserId = 
 
 
 async function issueSession(user, request) {
-  const accessToken = createAccessToken(user);
   const refreshToken = createRefreshToken();
 
-  await prisma.userSession.create({
+  // The row is created first so its id can go into the token: a request that
+  // cannot say which session it belongs to cannot be pointed at either.
+  const session = await prisma.userSession.create({
     data: {
       userId: user.id,
       refreshTokenHash: hashRefreshToken(refreshToken),
       ip: request.ip,
       userAgent: request.get("user-agent") || null,
+      clientKind: getClientKind(request) || null,
       lastSeenAt: new Date(),
       expiresAt: getRefreshTokenExpiresAt(),
     },
   });
+
+  const accessToken = createAccessToken(user, session.id);
 
   await prisma.user.update({
     where: { id: user.id },
@@ -328,7 +334,7 @@ app.post("/api/auth/refresh", refreshLimiter, asyncHandler(async (request, respo
 
   response.json({
     user: serializeUser(session.user),
-    accessToken: createAccessToken(session.user),
+    accessToken: createAccessToken(session.user, session.id),
     refreshToken: nextRefreshToken,
   });
 }));
@@ -388,6 +394,44 @@ app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, r
     data: { passwordHash: await hashPassword(payload.nextPassword) },
   });
 
+  response.json({ ok: true });
+}));
+
+/**
+ * The devices signed in to this account.
+ *
+ * A refresh token is a thirty-day credential, so being able to see where they
+ * are and end one is the difference between noticing a stray sign-in and being
+ * able to do anything about it. `current` is how a client knows not to offer to
+ * sign itself out by surprise.
+ */
+app.get("/api/me/sessions", requireAuth(), asyncHandler(async (request, response) => {
+  const sessions = await prisma.userSession.findMany({
+    where: { userId: request.auth.user.id, expiresAt: { gt: new Date() } },
+    orderBy: { lastSeenAt: "desc" },
+  });
+
+  response.json({
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      clientKind: session.clientKind,
+      // The raw user agent is a fingerprint of the device; a viewer only needs
+      // to recognise which of their own devices this is.
+      deviceName: describeDevice(session),
+      lastSeenAt: session.lastSeenAt,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      current: session.id === request.auth.sessionId,
+    })),
+  });
+}));
+
+app.delete("/api/me/sessions/:id", requireAuth(), asyncHandler(async (request, response) => {
+  // Scoped to this user, so an id belonging to somebody else simply matches
+  // nothing rather than being an error worth reporting.
+  await prisma.userSession.deleteMany({
+    where: { id: request.params.id, userId: request.auth.user.id },
+  });
   response.json({ ok: true });
 }));
 
@@ -657,7 +701,17 @@ app.put("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(a
     },
   });
 
-  if (payload.event !== "progress" || positionSeconds >= 60) {
+  // History is a log of viewing sessions, not of heartbeats. This used to be an
+  // `||`, which meant every routine progress tick past the first minute appended
+  // a row — a player reporting every fifteen seconds turned one episode into
+  // hundreds of entries, and the list was unusable long before the table was.
+  //
+  // A row is worth writing when something actually happened: the viewer paused,
+  // finished, switched source, or opened it again. The minute threshold still
+  // keeps out sessions that were abandoned immediately, except for "ended",
+  // which is worth recording however short the thing was.
+  const isMilestone = payload.event !== "progress";
+  if (isMilestone && (positionSeconds >= 60 || payload.event === "ended")) {
     await prisma.watchHistory.create({
       data: {
         userId: request.auth.user.id,
@@ -821,6 +875,47 @@ app.get("/api/admin/audit-logs", requireAuth(), requireRole(UserRole.ADMIN), asy
   });
   response.json({ logs });
 }));
+
+/**
+ * The whole instance, as one file.
+ *
+ * Sent as a download rather than a plain body so a browser saves it instead of
+ * rendering a wall of JSON containing every password hash on the server.
+ */
+app.get("/api/admin/backup", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (request, response) => {
+  const document = await exportEverything();
+
+  await createAuditLog(request.auth.user.id, "backup.export", {
+    users: document.users.length,
+    providers: document.providers.length,
+  });
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Content-Disposition", `attachment; filename="streamhub-backup-${stamp}.json"`);
+  response.send(JSON.stringify(document, null, 2));
+}));
+
+/**
+ * Puts one back.
+ *
+ * The body limit is raised here and only here: a backup of an instance with
+ * real watch history is far past the default, and raising it globally would
+ * widen every other route for the sake of this one.
+ */
+app.post(
+  "/api/admin/backup",
+  requireAuth(),
+  requireRole(UserRole.ADMIN),
+  express.json({ limit: "64mb" }),
+  asyncHandler(async (request, response) => {
+    const summary = await importEverything(request.body, request.auth.user.id);
+
+    await createAuditLog(request.auth.user.id, "backup.import", summary);
+
+    response.json({ summary });
+  }),
+);
 
 app.get("/api/admin/providers", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (_request, response) => {
   const providerRows = await prisma.provider.findMany({
@@ -1100,11 +1195,22 @@ app.get("/api/search", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
 
   const availableProviders = await getEnabledProvidersForUser(request.auth.user);
   const allowedKeys = availableProviders.filter((provider) => provider.allowed).map((provider) => provider.key);
-  const providerNames = providerFilter === "all" ? allowedKeys : [providerFilter];
 
-  if (providerFilter !== "all") {
-    await assertProviderAccess(request.auth.user, providerFilter);
+  // "all", one key, or several separated by commas. Narrowing on the server
+  // rather than filtering the results afterwards is the point: a provider the
+  // caller excluded is never scraped, so the search also finishes sooner.
+  const requested = providerFilter === "all"
+    ? allowedKeys
+    : providerFilter.split(",").map((key) => key.trim()).filter(Boolean);
+
+  for (const key of requested) {
+    await assertProviderAccess(request.auth.user, key);
   }
+
+  // Deduplicated, and empty means the caller asked for nothing rather than
+  // everything — answering with every provider would be the opposite of what
+  // was asked.
+  const providerNames = [...new Set(requested)];
 
   const settled = await Promise.allSettled(
     providerNames.map(async (providerName) => ({
@@ -1217,6 +1323,10 @@ app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
 
 app.get("/api/manifest", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleCleanManifest(request, response);
+}));
+
+app.get("/api/ad-cuts", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  await handleAdCuts(request, response);
 }));
 
 app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {

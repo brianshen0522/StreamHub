@@ -2,8 +2,12 @@
 <resources>
     <!-- Ten-foot UIs are dark by default, and Compose draws everything, so the
          platform theme only has to avoid painting an action bar or a light
-         background behind the composition. -->
+         background behind the composition.
+
+         Pure black would be a visible step against the near-black the app
+         actually draws, so this uses the same bg token as the web and phone
+         clients. -->
     <style name="Theme.StreamHubTv" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@color/streamhub_bg</item>
     </style>
 </resources>

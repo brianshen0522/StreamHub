@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
-import { apiJson, setStoredSession } from "./api.js";
+import { apiFetch, apiJson, setStoredSession } from "./api.js";
 import "./admin.css";
 
 /* ── icons ─────────────────────────────────────────────────── */
@@ -19,6 +19,7 @@ const IconServer = () => <svg {...svgProps}><rect x="3" y="4" width="18" height=
 const IconUsers = () => <svg {...svgProps}><path d="M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20" /><circle cx="9" cy="7" r="3.2" /><path d="M22 20v-1.5a4 4 0 0 0-3-3.87M16.5 3.9a4 4 0 0 1 0 6.2" /></svg>;
 const IconShield = () => <svg {...svgProps}><path d="M12 21s7-3.5 7-9V5.5L12 3 5 5.5V12c0 5.5 7 9 7 9Z" /><path d="M9.5 12.2l1.8 1.8 3.4-3.6" /></svg>;
 const IconUser = () => <svg {...svgProps}><circle cx="12" cy="8" r="3.6" /><path d="M4.5 20a7.5 7.5 0 0 1 15 0" /></svg>;
+const IconDownload = () => <svg {...svgProps}><path d="M12 3v12" /><path d="m7.5 10.5 4.5 4.5 4.5-4.5" /><path d="M4 20h16" /></svg>;
 const IconSearch = () => <svg {...svgProps}><circle cx="11" cy="11" r="6.5" /><path d="m20 20-3.6-3.6" /></svg>;
 const IconPlus = () => <svg {...svgProps}><path d="M12 5v14M5 12h14" /></svg>;
 const IconRefresh = () => <svg {...svgProps}><path d="M20 11a8 8 0 0 0-13.7-5.3L3 9" /><path d="M3 4v5h5" /><path d="M4 13a8 8 0 0 0 13.7 5.3L21 15" /><path d="M21 20v-5h-5" /></svg>;
@@ -1247,6 +1248,171 @@ function AuditPage({ setTopbar }) {
 
 /* ── page: account ─────────────────────────────────────────── */
 
+/**
+ * Moving the whole instance somewhere else.
+ *
+ * The file this produces carries every account's password hash. It is not
+ * plaintext — nothing here has ever held plaintext — but it is still what those
+ * accounts are, so the screen says so rather than presenting a download button
+ * with no context and letting someone leave it in a downloads folder.
+ */
+function BackupPage({ setTopbar, toast }) {
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [pending, setPending] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [error, setError] = useState("");
+  const fileInput = useRef(null);
+
+  useEffect(() => {
+    setTopbar({ title: "Backup", sub: "Export and import everything on this server", actions: null });
+  }, [setTopbar]);
+
+  async function exportAll() {
+    setExporting(true);
+    setError("");
+    try {
+      const response = await apiFetch("/api/admin/backup");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || "Export failed.");
+      }
+      // Read as a blob and save it here rather than pointing the browser at the
+      // URL: the request needs an Authorization header, which a plain link
+      // cannot carry.
+      const blob = await response.blob();
+      const name = (response.headers.get("content-disposition") || "")
+        .match(/filename="([^"]+)"/)?.[1] || "streamhub-backup.json";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast("Backup downloaded", "good");
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function chooseFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    setSummary(null);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (parsed?.format !== "streamhub.backup") {
+          throw new Error("That file is not a StreamHub backup.");
+        }
+        // Held for confirmation rather than sent straight away, and read here
+        // so what is about to happen can be described in counts instead of a
+        // file name.
+        setPending({ name: file.name, document: parsed });
+      } catch (failure) {
+        setError(failure.message || "That file could not be read.");
+      }
+    };
+    reader.onerror = () => setError("That file could not be read.");
+    reader.readAsText(file);
+  }
+
+  async function confirmImport() {
+    if (!pending) return;
+    setImporting(true);
+    setError("");
+    try {
+      const payload = await apiJson("/api/admin/backup", {
+        method: "POST",
+        body: JSON.stringify(pending.document),
+      });
+      setSummary(payload.summary);
+      setPending(null);
+      toast("Backup imported", "good");
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const incoming = pending?.document;
+
+  return (
+    <>
+      {error && <Alert>{error}</Alert>}
+
+      <Card
+        title="Export"
+        desc="Every account, what each one can reach, and everything they have watched — as one file."
+      >
+        <p className="adm-muted">
+          The file contains password hashes, so accounts keep their passwords when it is
+          imported. Nothing in it is a readable password, but it is still what those accounts
+          are: keep it wherever the database itself would be kept.
+        </p>
+        <p className="adm-muted">
+          Sign-in sessions are left out — everyone signs in again after a move — as are the
+          provider health history and the audit log.
+        </p>
+        <Btn variant="primary" busy={exporting} onClick={exportAll}>
+          Download backup
+        </Btn>
+      </Card>
+
+      <Card title="Import" desc="Restore a backup onto this server.">
+        <p className="adm-muted">
+          Accounts are matched by username: existing ones are updated, missing ones are
+          created. Nothing is deleted, so importing onto a server that already has data
+          cannot destroy it. Your own administrator account is skipped, so an import cannot
+          change the password you are signed in with.
+        </p>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          onChange={chooseFile}
+          style={{ display: "none" }}
+        />
+        <Btn busy={importing} onClick={() => fileInput.current?.click()}>
+          Choose a backup file
+        </Btn>
+
+        {summary && (
+          <div className="adm-stats" style={{ marginTop: 16 }}>
+            <Stat label="Accounts created" value={summary.usersCreated} />
+            <Stat label="Accounts updated" value={summary.usersUpdated} />
+            <Stat label="Skipped" value={summary.usersSkipped} />
+            <Stat label="Favourites" value={summary.favorites} />
+            <Stat label="Progress" value={summary.watchProgress} />
+            <Stat label="History" value={summary.watchHistory} />
+          </div>
+        )}
+      </Card>
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title="Import this backup?"
+        description={
+          incoming
+            ? `${pending.name} holds ${incoming.users?.length ?? 0} accounts, taken on ${formatDate(incoming.generatedAt)}. Existing accounts with the same username will be updated, including their passwords.`
+            : ""
+        }
+        confirmLabel="Import"
+        busy={importing}
+        onConfirm={confirmImport}
+        onCancel={() => setPending(null)}
+      />
+    </>
+  );
+}
+
 function AccountPage({ session, setSession, setTopbar, toast }) {
   const [form, setForm] = useState({
     username: session.user.username,
@@ -1342,6 +1508,7 @@ const NAV = [
   { to: "/admin/providers", label: "Providers", icon: <IconServer /> },
   { to: "/admin/users", label: "Users", icon: <IconUsers /> },
   { to: "/admin/audit", label: "Audit", icon: <IconShield /> },
+  { to: "/admin/backup", label: "Backup", icon: <IconDownload /> },
   { to: "/admin/account", label: "Account", icon: <IconUser /> },
 ];
 
@@ -1405,6 +1572,7 @@ export default function AdminPortal({ session, setSession, onLogout }) {
               <Route path="providers" element={<ProvidersPage setTopbar={setTopbar} toast={toast} />} />
               <Route path="users" element={<UsersPage setTopbar={setTopbar} toast={toast} />} />
               <Route path="audit" element={<AuditPage setTopbar={setTopbar} />} />
+              <Route path="backup" element={<BackupPage setTopbar={setTopbar} toast={toast} />} />
               <Route path="account" element={<AccountPage session={session} setSession={setSession} setTopbar={setTopbar} toast={toast} />} />
             </Routes>
           </div>

@@ -2,7 +2,9 @@ package com.streamhub.core.net
 
 import com.streamhub.core.ApiConfig
 import com.streamhub.core.ClientKind
+import com.streamhub.core.model.AdCuts
 import com.streamhub.core.model.ContinueItem
+import com.streamhub.core.model.DeviceSession
 import com.streamhub.core.model.ContinueResponse
 import com.streamhub.core.model.EpisodesResponse
 import com.streamhub.core.model.ErrorEnvelope
@@ -21,6 +23,7 @@ import com.streamhub.core.model.ProvidersResponse
 import com.streamhub.core.model.RawStream
 import com.streamhub.core.model.RefreshRequest
 import com.streamhub.core.model.SearchResponse
+import com.streamhub.core.model.SessionsResponse
 import com.streamhub.core.model.ServerHealth
 import com.streamhub.core.model.Session
 import com.streamhub.core.model.Source
@@ -77,6 +80,10 @@ class StreamHubApi(
             chain.proceed(
                 chain.request().newBuilder()
                     .header(ApiConfig.CLIENT_HEADER, clientKind.header)
+                    // Sign-in creates the session row, and the user agent it
+                    // records is what the device list shows. Without this here
+                    // every device is recorded as "okhttp".
+                    .header("User-Agent", userAgentFor(clientKind))
                     .build()
             )
         }
@@ -151,6 +158,16 @@ class StreamHubApi(
 
     suspend fun me(): User = get(path("auth", "me")) { body -> decodeField(body, "user") }
 
+    /** Every device currently signed in to this account, most recent first. */
+    suspend fun sessions(): List<DeviceSession> =
+        get(path("me", "sessions")) { json.decodeFromString<SessionsResponse>(it).sessions }
+
+    /** Ends one. Passing the current device's id signs this device out. */
+    suspend fun revokeSession(id: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(path("me", "sessions", id)).delete().build()
+        authed.newCall(request).execute().use { it.expectSuccess() }
+    }
+
     /** Keeps the account visible in the admin console's online list. Poll every 30-60s. */
     suspend fun heartbeat() = withContext(Dispatchers.IO) {
         val request = Request.Builder()
@@ -212,10 +229,18 @@ class StreamHubApi(
      * Answers 200 even when a provider fails, so check [ProviderResults.error]
      * on each entry rather than trusting the status code.
      */
-    suspend fun search(query: String, provider: String = "all"): SearchResponse =
-        get(path("search") { addQueryParameter("q", query); addQueryParameter("provider", provider) }) {
-            json.decodeFromString(it)
-        }
+    /**
+     * @param providers which sources to search, or empty for all of them. The
+     *   server narrows before scraping, so excluding one also makes the search
+     *   finish sooner.
+     */
+    suspend fun search(query: String, providers: Set<String> = emptySet()): SearchResponse =
+        get(
+            path("search") {
+                addQueryParameter("q", query)
+                addQueryParameter("provider", if (providers.isEmpty()) "all" else providers.joinToString(","))
+            }
+        ) { json.decodeFromString(it) }
 
     suspend fun item(
         provider: String,
@@ -315,6 +340,13 @@ class StreamHubApi(
      */
     fun manifestUrl(target: String): String =
         path("manifest") { addQueryParameter("target", target) }.toString()
+
+    /**
+     * Where the ads were in the stream the player is about to show. Shares the
+     * server's parse with [manifestUrl], so asking costs no extra fetch.
+     */
+    suspend fun adCuts(target: String): AdCuts =
+        get(path("ad-cuts") { addQueryParameter("target", target) }) { json.decodeFromString(it) }
 
     fun posterUrl(target: String): String =
         path("poster") { addQueryParameter("target", target) }.toString()

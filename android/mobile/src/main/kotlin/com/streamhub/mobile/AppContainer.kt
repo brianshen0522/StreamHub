@@ -7,6 +7,7 @@ import com.streamhub.core.net.RealtimeClient
 import com.streamhub.core.net.RealtimeEvent
 import com.streamhub.core.net.SessionStore
 import com.streamhub.core.net.StreamHubApi
+import com.streamhub.mobile.cast.CastController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,5 +57,14 @@ class AppContainer(context: Context) {
     val realtimeEvents: SharedFlow<RealtimeEvent> by lazy {
         realtime.events()
             .shareIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), replay = 0)
+    }
+
+    /**
+     * Which device this phone is driving. App-wide rather than owned by the
+     * player, because the choice outlives any one screen: picking a television
+     * on the detail page has to still hold when the next episode starts.
+     */
+    val cast: CastController by lazy {
+        CastController(realtime, realtimeEvents, scope)
     }
 }

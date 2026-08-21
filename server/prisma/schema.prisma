@@ -55,6 +55,11 @@ model UserSession {
   refreshTokenHash String   @map("refresh_token_hash")
   ip               String?
   userAgent        String?  @map("user_agent")
+  /// "android", "tv", "ios" — from the X-StreamHub-Client header at sign-in.
+  /// Null for the web app, which does not identify itself. Needed to tell a
+  /// television apart from a phone when listing devices, and to know what can
+  /// be cast to.
+  clientKind       String?  @map("client_kind")
   lastSeenAt       DateTime? @map("last_seen_at")
   expiresAt        DateTime @map("expires_at")
   createdAt        DateTime @default(now()) @map("created_at")

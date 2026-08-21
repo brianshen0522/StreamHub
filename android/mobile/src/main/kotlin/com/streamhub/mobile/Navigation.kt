@@ -26,6 +26,8 @@ data class PlaybackRequest(
     val directUrl: String,
     val durationSeconds: Int?,
     val resumeAtSeconds: Int,
+    /** What follows this episode, so the player can offer it. Null at the end. */
+    val nextEpisodeLabel: String? = null,
 )
 
 /**
@@ -39,4 +41,11 @@ data class PlaybackRequest(
 class Handover {
     var selection: MediaSelection? = null
     var playback: PlaybackRequest? = null
+
+    /**
+     * Set when the player asks for the next episode. The detail screen is still
+     * on the back stack with its state intact, so it picks this up on the way
+     * back rather than reloading the title from scratch.
+     */
+    var pendingEpisode: String? = null
 }

@@ -36,6 +36,7 @@ import com.streamhub.core.model.Source
 import com.streamhub.mobile.ui.ErrorState
 import com.streamhub.mobile.ui.LoadingState
 import com.streamhub.mobile.ui.Poster
+import com.streamhub.mobile.ui.StreamHubColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +45,8 @@ fun DetailScreen(
     posterUrl: (String) -> String?,
     onBack: () -> Unit,
     onPlay: (Source) -> Unit,
+    /** The cast button, supplied by the host so this screen stays unaware of it. */
+    castAction: @Composable () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -56,6 +59,7 @@ fun DetailScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = { castAction() },
             )
         },
     ) { padding ->
@@ -136,7 +140,20 @@ fun DetailScreen(
                 items(state.sources, key = { it.sourceLabel + it.directUrl }) { source ->
                     ListItem(
                         headlineContent = { Text(source.sourceLabel) },
-                        supportingContent = { Text(source.describe()) },
+                        supportingContent = {
+                            Text(
+                                text = source.describe(),
+                                // Green, not the accent: ads having been found and
+                                // removed is a good outcome, and red on a detail
+                                // line reads as a warning about the source rather
+                                // than a point in its favour.
+                                color = if (source.adSeconds > 0) {
+                                    StreamHubColors.Green
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        },
                         modifier = Modifier.clickable { onPlay(source) },
                     )
                 }

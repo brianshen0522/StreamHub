@@ -112,11 +112,14 @@ data class ProviderInfo(
     val isEnabled: Boolean = true,
     /** Enabled *and* permitted for this account. Only these can be searched. */
     val allowed: Boolean = true,
-    /** HEALTHY, DEGRADED, DOWN or DISABLED, from the server's own poller. */
+    /**
+     * HEALTHY, DEGRADED, DOWN or DISABLED, from the server's own poller.
+     *
+     * Deliberately the only health field a client gets. The underlying error
+     * text and response times describe the server rather than anything a viewer
+     * can act on, so they stay in the admin console.
+     */
     val status: String? = null,
-    val responseTimeMs: Int? = null,
-    val lastCheckedAt: String? = null,
-    val errorMessage: String? = null,
 ) {
     /**
      * Why this provider cannot be searched, or null when it can. Distinguishing
@@ -127,13 +130,29 @@ data class ProviderInfo(
         get() = when {
             !isEnabled -> "Turned off by the administrator"
             !allowed -> "Not enabled for this account"
-            status == "DOWN" -> errorMessage?.takeIf { it.isNotBlank() } ?: "Not responding"
+            status == "DOWN" -> "Not responding"
             else -> null
         }
 }
 
 @Serializable
 data class ServerHealth(val ok: Boolean = false, val apiVersion: Int? = null)
+
+/**
+ * A stretch of advertising that was cut out, positioned on the *cleaned*
+ * timeline — the one the player shows. Marking these on the scrub bar is why
+ * they are worth fetching: a jump in the picture with nothing to explain it
+ * looks like a broken stream.
+ */
+@Serializable
+data class AdCut(val at: Double, val removed: Double)
+
+@Serializable
+data class AdCuts(
+    val removedSeconds: Double = 0.0,
+    val reason: String? = null,
+    val cuts: List<AdCut> = emptyList(),
+)
 
 @Serializable
 internal data class ProvidersResponse(val providers: List<ProviderInfo> = emptyList())

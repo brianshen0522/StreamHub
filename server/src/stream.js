@@ -462,12 +462,14 @@ function rewriteMasterPlaylist(sourceUrl, content) {
  * to embed one because hls.js cannot put a header on a segment request. Here
  * the segment URLs are the CDN's own and need no credential of ours.
  */
-export async function handleCleanManifest(request, response) {
-  const target = request.query.target;
-  if (typeof target !== "string") {
-    response.status(400).json({ error: "Invalid target URL." });
-    return;
-  }
+/**
+ * Fetches a playlist and cleans it, or returns the cached result.
+ *
+ * @throws {BlockedTargetError|Object} an error carrying `statusCode`.
+ */
+async function cleanedManifestFor(target) {
+  const cached = caches.cleanedManifest.get(target);
+  if (cached) return cached;
 
   let upstream;
   let landedOn;
@@ -480,46 +482,132 @@ export async function handleCleanManifest(request, response) {
       signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
     }));
   } catch (error) {
-    if (error instanceof BlockedTargetError) {
-      response.status(400).json({ error: error.message });
-      return;
-    }
-    response.status(502).json({ error: "Upstream playlist unreachable." });
-    return;
+    if (error instanceof BlockedTargetError) throw error;
+    const failure = new Error("Upstream playlist unreachable.");
+    failure.statusCode = 502;
+    throw failure;
   }
 
   if (!upstream.ok) {
-    response.status(upstream.status).json({ error: `Upstream responded ${upstream.status}.` });
-    return;
+    const failure = new Error(`Upstream responded ${upstream.status}.`);
+    failure.statusCode = upstream.status;
+    throw failure;
   }
 
   const text = await upstream.text();
   if (!isValidM3u8Content(text)) {
-    response.status(415).json({ error: "Target is not an HLS playlist." });
-    return;
+    const failure = new Error("Target is not an HLS playlist.");
+    failure.statusCode = 415;
+    throw failure;
   }
 
   // Relative URIs resolve against wherever the redirect chain landed, not
   // against the URL we asked for. Redirects are followed by hand so each hop can
   // be checked, so this comes back from safeFetch rather than from response.url.
   const baseUrl = landedOn || target;
+  const isMaster = !text.includes("#EXTINF");
+
+  const result = isMaster
+    ? {
+        isMaster: true,
+        body: rewriteMasterPlaylist(baseUrl, text),
+        cuts: [],
+        removedSeconds: 0,
+        reason: null,
+        // Kept because the ads live in the variants, not here, and the rewritten
+        // body no longer contains their real addresses.
+        variants: extractVariantPlaylistUrls(baseUrl, text),
+      }
+    : (() => {
+        const stripped = stripAds(text, baseUrl);
+        return {
+          isMaster: false,
+          body: absolutizeMediaPlaylist(baseUrl, stripped.text),
+          cuts: stripped.cuts,
+          removedSeconds: stripped.removedSeconds,
+          reason: stripped.reason,
+        };
+      })();
+
+  caches.cleanedManifest.set(target, result);
+  return result;
+}
+
+export async function handleCleanManifest(request, response) {
+  const target = request.query.target;
+  if (typeof target !== "string") {
+    response.status(400).json({ error: "Invalid target URL." });
+    return;
+  }
+
+  let result;
+  try {
+    result = await cleanedManifestFor(target);
+  } catch (error) {
+    response.status(error.statusCode || 502).json({ error: error.message });
+    return;
+  }
 
   response.type("application/vnd.apple.mpegurl");
   // No credentials in the body, but the route is per-user gated, so keep it out
   // of shared caches all the same.
   response.setHeader("cache-control", "private, max-age=30");
+  if (!result.isMaster) {
+    response.setHeader("x-adfilter-removed-seconds", String(result.removedSeconds));
+    if (result.reason) response.setHeader("x-adfilter-reason", result.reason);
+  }
+  response.send(result.body);
+}
 
-  if (!text.includes("#EXTINF")) {
-    response.send(rewriteMasterPlaylist(baseUrl, text));
+/**
+ * Where the ads were, so a player can mark them on its scrub bar.
+ *
+ * The positions cannot come off the manifest response, because the player
+ * fetches that itself and the app never sees it. They also cannot come from the
+ * source list, which measures a 256 KB prefix rather than the whole playlist.
+ * Both this and the manifest read the same cache entry, so asking for cuts
+ * before playback costs no extra fetch.
+ *
+ * `at` is a position in the *cleaned* timeline, which is the one the player is
+ * showing.
+ */
+export async function handleAdCuts(request, response) {
+  const target = request.query.target;
+  if (typeof target !== "string") {
+    response.status(400).json({ error: "Invalid target URL." });
     return;
   }
 
-  const result = stripAds(text, baseUrl);
-  response.setHeader("x-adfilter-removed-seconds", String(result.removedSeconds));
-  if (result.reason) {
-    response.setHeader("x-adfilter-reason", result.reason);
+  let result;
+  try {
+    result = await cleanedManifestFor(target);
+
+    // A master playlist has no segments of its own. The ads are inside whichever
+    // variant the player picks, so the variants are inspected and the one
+    // carrying the most advertising answers — the same choice the source list
+    // makes when it reports a runtime.
+    if (result.isMaster) {
+      const inspected = await Promise.all(
+        (result.variants || []).slice(0, 5).map((url) =>
+          cleanedManifestFor(url).catch(() => null),
+        ),
+      );
+      result = inspected
+        .filter((variant) => variant && !variant.isMaster)
+        .reduce((best, variant) => (variant.removedSeconds > (best?.removedSeconds ?? -1) ? variant : best), null)
+        ?? result;
+    }
+  } catch (error) {
+    response.status(error.statusCode || 502).json({ error: error.message });
+    return;
   }
-  response.send(absolutizeMediaPlaylist(baseUrl, result.text));
+
+  response.setHeader("cache-control", "private, max-age=30");
+  response.json({
+    removedSeconds: result.removedSeconds,
+    reason: result.reason,
+    cuts: result.cuts,
+  });
 }
 
 export async function handlePosterProxy(request, response) {

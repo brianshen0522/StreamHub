@@ -12,19 +12,28 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +74,12 @@ fun SearchScreen(
             content = {},
         )
 
+        SourceFilter(
+            state = state,
+            onToggle = viewModel::toggleProvider,
+            onSelectAll = viewModel::selectAll,
+        )
+
         when {
             state.loading -> LoadingState()
 
@@ -81,6 +96,53 @@ fun SearchScreen(
             )
 
             else -> Results(state, posterUrl, onOpen)
+        }
+    }
+}
+
+/**
+ * Which sources to search.
+ *
+ * A plain text button that opens a menu of checkboxes, rather than a row of
+ * chips: there are only three providers today but the row would reflow awkwardly
+ * as soon as there are more, and the collapsed state should say what is on
+ * without taking a line to do it.
+ */
+@Composable
+private fun SourceFilter(
+    state: SearchUiState,
+    onToggle: (String) -> Unit,
+    onSelectAll: () -> Unit,
+) {
+    if (state.available.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.padding(start = 20.dp, top = 4.dp)) {
+        TextButton(onClick = { open = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+            Text(state.sourcesLabel, style = MaterialTheme.typography.labelLarge)
+            Icon(
+                Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("All sources") },
+                leadingIcon = { Checkbox(checked = state.allSelected, onCheckedChange = null) },
+                onClick = { onSelectAll() },
+            )
+            HorizontalDivider()
+            for (provider in state.available) {
+                DropdownMenuItem(
+                    text = { Text(provider.name) },
+                    leadingIcon = {
+                        Checkbox(checked = state.isSelected(provider.key), onCheckedChange = null)
+                    },
+                    onClick = { onToggle(provider.key) },
+                )
+            }
         }
     }
 }

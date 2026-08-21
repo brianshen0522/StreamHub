@@ -32,7 +32,9 @@ export function requireAuth() {
       return;
     }
 
-    request.auth = { user };
+    // sessionId is null for tokens issued before it was a claim; they expire
+    // within the access-token lifetime, so nothing needs migrating.
+    request.auth = { user, sessionId: payload.sid ?? null };
     next();
   });
 }
