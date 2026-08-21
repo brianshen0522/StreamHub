@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds only. Local development points the app at a server on the
+  development machine, which is plain http over 10.0.2.2 from an emulator.
+  The release build uses the main source set's copy, which refuses cleartext.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
