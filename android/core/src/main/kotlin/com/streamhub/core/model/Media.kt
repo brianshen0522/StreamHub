@@ -108,9 +108,32 @@ data class EpisodesResponse(
 data class ProviderInfo(
     val key: String,
     val name: String,
+    /** Turned off for everyone by an admin. */
     val isEnabled: Boolean = true,
+    /** Enabled *and* permitted for this account. Only these can be searched. */
     val allowed: Boolean = true,
-)
+    /** HEALTHY, DEGRADED, DOWN or DISABLED, from the server's own poller. */
+    val status: String? = null,
+    val responseTimeMs: Int? = null,
+    val lastCheckedAt: String? = null,
+    val errorMessage: String? = null,
+) {
+    /**
+     * Why this provider cannot be searched, or null when it can. Distinguishing
+     * these is the whole point: an empty search looks the same whether a site is
+     * down, switched off, or simply has no match.
+     */
+    val unavailableReason: String?
+        get() = when {
+            !isEnabled -> "Turned off by the administrator"
+            !allowed -> "Not enabled for this account"
+            status == "DOWN" -> errorMessage?.takeIf { it.isNotBlank() } ?: "Not responding"
+            else -> null
+        }
+}
+
+@Serializable
+data class ServerHealth(val ok: Boolean = false, val apiVersion: Int? = null)
 
 @Serializable
 internal data class ProvidersResponse(val providers: List<ProviderInfo> = emptyList())

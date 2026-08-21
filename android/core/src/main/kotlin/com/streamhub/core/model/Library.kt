@@ -128,6 +128,31 @@ data class ProgressDelete(
     val episodeLabel: String? = null,
 )
 
+/**
+ * An append-only record of what was watched. The server only writes one when an
+ * event is not a routine progress tick, or when at least a minute was watched,
+ * so this is not a duplicate of [WatchProgress].
+ */
+@Serializable
+data class WatchHistoryEntry(
+    val id: String,
+    val providerKey: String,
+    val mediaType: String = "unknown",
+    val title: String,
+    val posterUrl: String? = null,
+    val itemUrl: String,
+    val seasonUrl: String? = null,
+    val seasonLabel: String? = null,
+    val episodeLabel: String? = null,
+    val sourceLabel: String? = null,
+    val positionSeconds: Int = 0,
+    val durationSeconds: Int = 0,
+    val watchedAt: String? = null,
+)
+
+@Serializable
+internal data class HistoryResponse(val history: List<WatchHistoryEntry> = emptyList())
+
 @Serializable
 data class SourcePreference(
     val providerKey: String,

@@ -14,6 +14,26 @@ pushes updates.
 `GET /api/health` answers `{ ok: true, apiVersion: 1 }`, which is the cheapest
 way for a client to check what it is talking to.
 
+## Telling one failure from another
+
+An empty search looks identical whether the server is unreachable, a provider is
+switched off, or the site simply has no match. Three endpoints separate them:
+
+- `GET /api/health` — is the server there, and how long did it take.
+- `GET /api/me/providers` — each provider's `status` from the server's own
+  health poller (`HEALTHY`, `DEGRADED`, `DOWN`, `DISABLED`), plus
+  `responseTimeMs`, `lastCheckedAt` and `errorMessage`. By default it returns
+  only providers this account can search; add **`?all=true`** to get the ones
+  that are switched off or not permitted too, which is exactly what a status
+  view needs and a search filter does not.
+- The realtime socket — live sync being down is a different problem from the
+  server being unreachable, and should not be reported as the same thing.
+
+One caveat on provider health: the poller checks a site by running a real
+search, and that search is cached for five minutes, so every poll after the
+first answers from cache with a response time near zero. Treat a very low
+`responseTimeMs` as "not actually measured" rather than "extremely fast".
+
 ---
 
 ## Auth

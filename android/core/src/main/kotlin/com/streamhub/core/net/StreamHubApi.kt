@@ -9,6 +9,7 @@ import com.streamhub.core.model.ErrorEnvelope
 import com.streamhub.core.model.Favorite
 import com.streamhub.core.model.FavoriteResponse
 import com.streamhub.core.model.FavoritesResponse
+import com.streamhub.core.model.HistoryResponse
 import com.streamhub.core.model.ItemDetail
 import com.streamhub.core.model.LoginRequest
 import com.streamhub.core.model.NewFavorite
@@ -20,10 +21,12 @@ import com.streamhub.core.model.ProvidersResponse
 import com.streamhub.core.model.RawStream
 import com.streamhub.core.model.RefreshRequest
 import com.streamhub.core.model.SearchResponse
+import com.streamhub.core.model.ServerHealth
 import com.streamhub.core.model.Session
 import com.streamhub.core.model.Source
 import com.streamhub.core.model.SourcePreference
 import com.streamhub.core.model.User
+import com.streamhub.core.model.WatchHistoryEntry
 import com.streamhub.core.model.WatchProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -186,8 +189,24 @@ class StreamHubApi(
 
     // ── catalogue ───────────────────────────────────────────────────────────
 
-    suspend fun providers(): List<ProviderInfo> =
-        get(path("me", "providers")) { json.decodeFromString<ProvidersResponse>(it).providers }
+    /**
+     * @param includeUnavailable also return providers that are switched off or
+     *   not permitted for this account — what a status view needs, and what a
+     *   search filter does not.
+     */
+    suspend fun providers(includeUnavailable: Boolean = false): List<ProviderInfo> =
+        get(
+            path("me", "providers") {
+                if (includeUnavailable) addQueryParameter("all", "true")
+            }
+        ) { json.decodeFromString<ProvidersResponse>(it).providers }
+
+    /** Is the server there at all, and what version is it. */
+    suspend fun health(): ServerHealth = withContext(Dispatchers.IO) {
+        bare.newCall(Request.Builder().url(path("health")).build()).execute().use {
+            json.decodeFromString(it.bodyOrThrow())
+        }
+    }
 
     /**
      * Answers 200 even when a provider fails, so check [ProviderResults.error]
@@ -317,6 +336,10 @@ class StreamHubApi(
         val request = Request.Builder().url(path("me", "favorites", id)).delete().build()
         authed.newCall(request).execute().use { it.expectSuccess() }
     }
+
+    /** Capped at 200 rows server-side, with no pagination past that. */
+    suspend fun history(): List<WatchHistoryEntry> =
+        get(path("me", "history")) { json.decodeFromString<HistoryResponse>(it).history }
 
     suspend fun continueWatching(): List<ContinueItem> =
         get(path("me", "continue-watching")) { json.decodeFromString<ContinueResponse>(it).items }

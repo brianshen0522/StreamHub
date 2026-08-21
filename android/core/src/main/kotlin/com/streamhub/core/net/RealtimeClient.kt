@@ -5,6 +5,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.Serializable
@@ -42,11 +45,21 @@ class RealtimeClient(
         .build()
         .toString()
 
+    private val _connected = MutableStateFlow(false)
+
+    /**
+     * Whether a socket is currently authenticated and carrying events. Useful in
+     * a status view: live sync being down is a different problem from the server
+     * being unreachable, and they should not look the same.
+     */
+    val connected: StateFlow<Boolean> = _connected.asStateFlow()
+
     fun events(): Flow<RealtimeEvent> = channelFlow {
         var attempts = 0
 
         while (true) {
             val outcome = runSocket { trySend(it) }
+            _connected.value = false
 
             when {
                 // Nothing to authenticate with, or the server rejected the token
@@ -101,6 +114,7 @@ class RealtimeClient(
                 val type = frame["type"]?.jsonPrimitive?.contentOrNull ?: return
                 if (type == READY) {
                     sawReady = true
+                    _connected.value = true
                     return
                 }
                 onEvent(toEvent(type, frame))

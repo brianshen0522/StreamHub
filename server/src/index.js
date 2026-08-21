@@ -360,8 +360,17 @@ app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, r
 
 app.get("/api/me/providers", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   const providersForUser = await getEnabledProvidersForUser(request.auth.user);
+
+  // Callers building a search filter want only what they can actually search.
+  // A status view wants the opposite: a provider that is turned off or blocked
+  // is exactly what it needs to show, because "missing from the list" and
+  // "found nothing" look identical otherwise.
+  const includeUnavailable = String(request.query.all || "") === "true";
+
   response.json({
-    providers: providersForUser.filter((provider) => provider.allowed),
+    providers: includeUnavailable
+      ? providersForUser
+      : providersForUser.filter((provider) => provider.allowed),
   });
 }));
 

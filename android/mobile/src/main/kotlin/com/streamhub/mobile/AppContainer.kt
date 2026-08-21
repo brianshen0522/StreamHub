@@ -4,8 +4,15 @@ import android.content.Context
 import com.streamhub.core.ClientKind
 import com.streamhub.core.net.EncryptedSessionStore
 import com.streamhub.core.net.RealtimeClient
+import com.streamhub.core.net.RealtimeEvent
 import com.streamhub.core.net.SessionStore
 import com.streamhub.core.net.StreamHubApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.shareIn
 
 /**
  * Where the server lives.
@@ -56,21 +63,52 @@ class AppContainer(context: Context) {
 
     private var cached: Pair<String, StreamHubApi>? = null
 
-    /** Rebuilt whenever the server address changes, which it can at any sign-in. */
+    /**
+     * Rebuilt whenever the server address changes, which it can at any sign-in.
+     *
+     * There is nothing sensible to return before an address is known, so this
+     * says so rather than letting the URL parser throw something cryptic from
+     * deep inside the client.
+     */
     fun api(): StreamHubApi {
         val url = settings.baseUrl
+        require(url.isNotBlank()) { "No server address has been set yet." }
         cached?.let { (cachedUrl, api) -> if (cachedUrl == url) return api }
         val api = StreamHubApi(url, sessionStore, ClientKind.PHONE)
         cached = url to api
         return api
     }
 
+    private var cachedRealtime: Pair<String, RealtimeClient>? = null
+
+    /**
+     * One socket for the whole app, not one per screen. Each `events()`
+     * collection opens its own connection, so the flow is shared: several
+     * screens subscribing at once share a single socket, and it closes shortly
+     * after the last of them goes away.
+     */
     fun realtime(): RealtimeClient {
+        val url = settings.baseUrl
+        cachedRealtime?.let { (cachedUrl, client) -> if (cachedUrl == url) return client }
         val api = api()
-        return RealtimeClient(
-            baseUrl = settings.baseUrl,
+        val client = RealtimeClient(
+            baseUrl = url,
             store = sessionStore,
             renew = { stale -> api.renewSession(stale) },
         )
+        cachedRealtime = url to client
+        sharedEvents = null
+        return client
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var sharedEvents: SharedFlow<RealtimeEvent>? = null
+
+    fun realtimeEvents(): SharedFlow<RealtimeEvent> {
+        sharedEvents?.let { return it }
+        val shared = realtime().events()
+            .shareIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), replay = 0)
+        sharedEvents = shared
+        return shared
     }
 }

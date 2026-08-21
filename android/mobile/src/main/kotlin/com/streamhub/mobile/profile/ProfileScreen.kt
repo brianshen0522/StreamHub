@@ -23,6 +23,8 @@ fun ProfileScreen(
     buildId: String,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Rendered inline so the diagnostics sit where someone looks when stuck. */
+    statusSection: @Composable () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -49,6 +51,10 @@ fun ProfileScreen(
         // With nothing pushing updates, "which build is on this device" is a
         // real question, and a commit is the only answer that is never ambiguous.
         Row("Build", buildId)
+
+        HorizontalDivider()
+
+        statusSection()
 
         HorizontalDivider()
 

@@ -49,7 +49,7 @@ class ContinueViewModel(private val container: AppContainer) : ViewModel() {
      */
     private fun watchForChanges() {
         viewModelScope.launch {
-            container.realtime().events().collect { event ->
+            container.realtimeEvents().collect { event ->
                 if (event is RealtimeEvent.Progress) refresh()
             }
         }

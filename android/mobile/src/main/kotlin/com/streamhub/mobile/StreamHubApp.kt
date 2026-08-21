@@ -3,9 +3,11 @@ package com.streamhub.mobile
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -38,6 +40,12 @@ import com.streamhub.mobile.continuewatching.ContinueScreen
 import com.streamhub.mobile.continuewatching.ContinueViewModel
 import com.streamhub.mobile.detail.DetailScreen
 import com.streamhub.mobile.detail.DetailViewModel
+import com.streamhub.mobile.library.FavoritesScreen
+import com.streamhub.mobile.library.FavoritesViewModel
+import com.streamhub.mobile.library.HistoryScreen
+import com.streamhub.mobile.library.HistoryViewModel
+import com.streamhub.mobile.status.StatusSection
+import com.streamhub.mobile.status.StatusViewModel
 import com.streamhub.mobile.player.PlayerScreen
 import com.streamhub.mobile.player.PlayerViewModel
 import com.streamhub.mobile.profile.ProfileScreen
@@ -48,7 +56,9 @@ import kotlinx.coroutines.launch
 private enum class Destination(val route: String, val label: String, val icon: ImageVector) {
     SEARCH("search", "Search", Icons.Default.Search),
     CONTINUE("continue", "Continue", Icons.Default.PlayArrow),
-    PROFILE("profile", "Settings", Icons.Default.Person),
+    FAVORITES("favorites", "Saved", Icons.Default.Favorite),
+    HISTORY("history", "History", Icons.Default.DateRange),
+    PROFILE("profile", "Settings", Icons.Default.Settings),
 }
 
 private const val ROUTE_DETAIL = "detail"
@@ -71,7 +81,11 @@ fun StreamHubApp(container: AppContainer) {
     // A session that cannot be renewed has to take the app back to sign-in.
     // Otherwise every screen keeps failing with a server message and a Try again
     // button that can never succeed.
-    LaunchedEffect(container) {
+    //
+    // Guarded on there being a session: before the first sign-in there is no
+    // server address either, and building an API client without one throws.
+    LaunchedEffect(container, session != null) {
+        if (session == null) return@LaunchedEffect
         container.api().sessionEnded.collect { session = null }
     }
 
@@ -196,11 +210,46 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     )
                 }
             }
+            composable(Destination.FAVORITES.route) {
+                FavoritesScreen(
+                    viewModel = viewModel { FavoritesViewModel(container) },
+                    posterUrl = posterUrl,
+                    onOpen = { favorite ->
+                        container.handover.selection = MediaSelection(
+                            provider = favorite.providerKey,
+                            itemUrl = favorite.itemUrl,
+                            title = favorite.title,
+                            mediaType = favorite.mediaType,
+                            posterUrl = favorite.posterUrl,
+                        )
+                        navController.navigate(ROUTE_DETAIL)
+                    },
+                )
+            }
+            composable(Destination.HISTORY.route) {
+                HistoryScreen(
+                    viewModel = viewModel { HistoryViewModel(container) },
+                    posterUrl = posterUrl,
+                    onOpen = { entry ->
+                        container.handover.selection = MediaSelection(
+                            provider = entry.providerKey,
+                            itemUrl = entry.itemUrl,
+                            title = entry.title,
+                            mediaType = entry.mediaType,
+                            posterUrl = entry.posterUrl,
+                        )
+                        navController.navigate(ROUTE_DETAIL)
+                    },
+                )
+            }
             composable(Destination.PROFILE.route) {
                 ProfileScreen(
                     user = session.user,
                     serverUrl = container.settings.baseUrl,
                     buildId = BuildConfig.GIT_SHA,
+                    statusSection = {
+                        StatusSection(viewModel = viewModel { StatusViewModel(container) })
+                    },
                     onSignOut = {
                         scope.launch {
                             runCatching { container.api().logout() }
