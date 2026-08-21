@@ -158,7 +158,12 @@ export async function getMovieffmItem(item) {
       if (seen.has(url)) {
         return;
       }
-      const text = ($(element).parent().text() || $(element).text()).trim().replace(/\s+/g, " ");
+      // The link is <span class="se-t">2</span><span class="title">Season 2
+      // <i>2005</i><i>全24集</i></span>. Reading the whole anchor glues the
+      // numbering badge onto the title ("2Season 2 2005全24集"), so drop it.
+      const node = $(element).clone();
+      node.find(".se-t").remove();
+      const text = (node.text() || $(element).text()).trim().replace(/\s+/g, " ");
       if (!text.includes("Season") && !text.includes("全")) {
         return;
       }
