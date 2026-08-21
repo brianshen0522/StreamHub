@@ -14,7 +14,9 @@ services:
 
   server:
     build:
-      context: ./server
+      # Root context so shared/ is available to the image.
+      context: .
+      dockerfile: server/Dockerfile
     container_name: streamhub-server
     env_file:
       - ./.env
@@ -28,7 +30,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: streamhub-frontend
     env_file:
       - ./.env

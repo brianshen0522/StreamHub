@@ -18,12 +18,10 @@
  * untouched — there is no dependable manifest-level evidence for those.
  */
 
+import { classifyRuns } from "../../shared/adfilter-core.js";
+
 const PROXY_PATH = "/api/stream";
 
-/** Guards — if any fails the playlist is passed through unmodified. */
-const MIN_CONTENT_SHARE = 0.6;      // dominant directory must hold most of the runtime
-const MAX_AD_RUN_SECONDS = 240;     // a long foreign run is more likely content than an ad
-const MAX_STRIP_SHARE = 0.35;       // never remove more than this much of the playlist
 
 /** Segments reach us wrapped by /api/stream when playback fell back to the proxy. */
 function unwrapProxy(url) {
@@ -35,15 +33,6 @@ function unwrapProxy(url) {
     }
   } catch { /* not a URL we can parse — fall through */ }
   return url;
-}
-
-function directoryOf(uri, baseUrl) {
-  try {
-    const absolute = new URL(unwrapProxy(uri), unwrapProxy(baseUrl));
-    return absolute.origin + absolute.pathname.replace(/\/[^/]*$/, "/");
-  } catch {
-    return "";
-  }
 }
 
 /**
@@ -133,43 +122,16 @@ export function stripAds(text, playlistUrl) {
   }
 
   const { header, runs, trailer } = parsePlaylist(text.split(/\r?\n/));
-  if (runs.length < 2) return unchanged("no-discontinuities");
 
-  // Weight every directory by how much runtime it accounts for.
-  const byDirectory = new Map();
-  let totalDuration = 0;
-  for (const run of runs) {
-    const directory = directoryOf(run.segments[0].uri, playlistUrl);
-    const seconds = runDuration(run);
-    run.directory = directory;
-    run.seconds = seconds;
-    totalDuration += seconds;
-    byDirectory.set(directory, (byDirectory.get(directory) || 0) + seconds);
-  }
+  // Segment URIs arrive wrapped by /api/stream when playback fell back to the
+  // proxy; the shared classifier needs the real CDN paths to compare.
+  const verdict = classifyRuns(
+    runs.map((run) => ({ segments: run.segments.map((s) => ({ uri: unwrapProxy(s.uri), duration: s.duration })) })),
+    unwrapProxy(playlistUrl),
+  );
+  if (!verdict.ads) return unchanged(verdict.reason);
 
-  if (byDirectory.size < 2) return unchanged("single-directory");
-
-  let contentDirectory = null;
-  let contentSeconds = 0;
-  for (const [directory, seconds] of byDirectory) {
-    if (seconds > contentSeconds) {
-      contentSeconds = seconds;
-      contentDirectory = directory;
-    }
-  }
-
-  if (!totalDuration || contentSeconds / totalDuration < MIN_CONTENT_SHARE) {
-    return unchanged("no-dominant-directory");
-  }
-
-  const isAd = (run) => run.directory !== contentDirectory && run.seconds <= MAX_AD_RUN_SECONDS;
-  const adRuns = runs.filter(isAd);
-  if (!adRuns.length) return unchanged("no-foreign-runs");
-
-  const removedSeconds = adRuns.reduce((total, run) => total + run.seconds, 0);
-  if (removedSeconds / totalDuration > MAX_STRIP_SHARE) {
-    return unchanged("would-remove-too-much");
-  }
+  const isAd = (index) => verdict.isAd(index);
 
   // Rebuild, keeping one discontinuity wherever a break was excised so the
   // player still resets timestamp continuity across the splice.
@@ -182,10 +144,10 @@ export function stripAds(text, playlistUrl) {
   let discontinuityPending = false;
   let pendingRemoved = 0;
 
-  for (const run of runs) {
-    if (isAd(run)) {
+  for (const [index, run] of runs.entries()) {
+    if (isAd(index)) {
       discontinuityPending = true;
-      pendingRemoved += run.seconds;
+      pendingRemoved += runDuration(run);
       continue;
     }
 
@@ -224,8 +186,8 @@ export function stripAds(text, playlistUrl) {
     text: out.join("\n") + "\n",
     cuts,
     reason: null,
-    removedSeconds: Number(removedSeconds.toFixed(3)),
-    contentDirectory,
+    removedSeconds: Number(verdict.adSeconds.toFixed(3)),
+    contentDirectory: verdict.contentDirectory,
   };
 }
 
