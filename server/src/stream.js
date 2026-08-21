@@ -1,3 +1,4 @@
+import { getBearerToken } from "./auth.js";
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 import { analyzePlaylist } from "./utils/adfilter.js";
@@ -27,8 +28,17 @@ function copyHeaders(upstreamHeaders, response) {
   });
 }
 
+/**
+ * Segment, key and variant URLs inside a rewritten playlist point back at this
+ * proxy, and hls.js fetches them as plain media requests that cannot carry an
+ * Authorization header. The token has to ride along in the query string the
+ * same way it does on the playlist request that got us here — without it every
+ * segment answers 401 and proxy playback stalls on a black screen.
+ */
 function buildProxyUrl(request, targetUrl) {
-  return `/api/stream?target=${encodeURIComponent(targetUrl)}`;
+  const url = `/api/stream?target=${encodeURIComponent(targetUrl)}`;
+  const token = getBearerToken(request);
+  return token ? `${url}&accessToken=${encodeURIComponent(token)}` : url;
 }
 
 function rewritePlaylist(request, sourceUrl, content) {
