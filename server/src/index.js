@@ -7,7 +7,7 @@ import { Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
 import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { rateLimit } from "./rate-limit.js";
 import { providers } from "./providers/index.js";
-import { streamCheckedSources, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
+import { streamCheckedSources, handleAdCuts, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
   createAccessToken,
   createRefreshToken,
@@ -657,7 +657,17 @@ app.put("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(a
     },
   });
 
-  if (payload.event !== "progress" || positionSeconds >= 60) {
+  // History is a log of viewing sessions, not of heartbeats. This used to be an
+  // `||`, which meant every routine progress tick past the first minute appended
+  // a row — a player reporting every fifteen seconds turned one episode into
+  // hundreds of entries, and the list was unusable long before the table was.
+  //
+  // A row is worth writing when something actually happened: the viewer paused,
+  // finished, switched source, or opened it again. The minute threshold still
+  // keeps out sessions that were abandoned immediately, except for "ended",
+  // which is worth recording however short the thing was.
+  const isMilestone = payload.event !== "progress";
+  if (isMilestone && (positionSeconds >= 60 || payload.event === "ended")) {
     await prisma.watchHistory.create({
       data: {
         userId: request.auth.user.id,
@@ -1100,11 +1110,22 @@ app.get("/api/search", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
 
   const availableProviders = await getEnabledProvidersForUser(request.auth.user);
   const allowedKeys = availableProviders.filter((provider) => provider.allowed).map((provider) => provider.key);
-  const providerNames = providerFilter === "all" ? allowedKeys : [providerFilter];
 
-  if (providerFilter !== "all") {
-    await assertProviderAccess(request.auth.user, providerFilter);
+  // "all", one key, or several separated by commas. Narrowing on the server
+  // rather than filtering the results afterwards is the point: a provider the
+  // caller excluded is never scraped, so the search also finishes sooner.
+  const requested = providerFilter === "all"
+    ? allowedKeys
+    : providerFilter.split(",").map((key) => key.trim()).filter(Boolean);
+
+  for (const key of requested) {
+    await assertProviderAccess(request.auth.user, key);
   }
+
+  // Deduplicated, and empty means the caller asked for nothing rather than
+  // everything — answering with every provider would be the opposite of what
+  // was asked.
+  const providerNames = [...new Set(requested)];
 
   const settled = await Promise.allSettled(
     providerNames.map(async (providerName) => ({
@@ -1217,6 +1238,10 @@ app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
 
 app.get("/api/manifest", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleCleanManifest(request, response);
+}));
+
+app.get("/api/ad-cuts", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  await handleAdCuts(request, response);
 }));
 
 app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {

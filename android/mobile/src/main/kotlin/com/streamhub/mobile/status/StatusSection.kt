@@ -53,15 +53,20 @@ fun StatusSection(viewModel: StatusViewModel, modifier: Modifier = Modifier) {
             }
         }
 
+        // Deliberately no address, version or millisecond figure. Those describe
+        // the deployment rather than anything a viewer can act on, and this
+        // screen is for telling one kind of failure from another.
         StatusRow(
-            level = if (state.serverReachable) StatusLevel.GOOD else StatusLevel.BAD,
-            label = "Server",
+            level = when {
+                !state.serverReachable -> StatusLevel.BAD
+                state.slowToRespond -> StatusLevel.WARNING
+                else -> StatusLevel.GOOD
+            },
+            label = "Connection",
             detail = when {
                 state.serverError != null -> state.serverError!!
-                state.serverReachable -> listOfNotNull(
-                    state.serverLatencyMs?.let { "${it} ms" },
-                    state.apiVersion?.let { "API v$it" },
-                ).joinToString(" · ")
+                state.slowToRespond -> "Reachable, but responding slowly"
+                state.serverReachable -> "Connected"
                 else -> "Unknown"
             },
         )
@@ -105,13 +110,10 @@ private fun ProviderInfo.level(): StatusLevel = when {
 private fun ProviderInfo.detail(): String {
     unavailableReason?.let { return it }
     return when (status) {
-        // A time under a few ms means the server answered its own health probe
-        // from cache rather than reaching the site, so quoting it would be
-        // stating a measurement that was not taken.
-        "HEALTHY" -> responseTimeMs?.takeIf { it > 5 }?.let { "Responding in $it ms" } ?: "Responding"
-        "DEGRADED" -> responseTimeMs?.takeIf { it > 5 }?.let { "Slow — $it ms" } ?: "Slow"
+        "HEALTHY" -> "Responding"
+        "DEGRADED" -> "Slow to respond"
         null -> "Not checked yet"
-        else -> status ?: "Unknown"
+        else -> "Unknown"
     }
 }
 

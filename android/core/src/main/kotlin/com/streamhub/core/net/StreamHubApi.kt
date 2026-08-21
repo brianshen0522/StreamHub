@@ -2,6 +2,7 @@ package com.streamhub.core.net
 
 import com.streamhub.core.ApiConfig
 import com.streamhub.core.ClientKind
+import com.streamhub.core.model.AdCuts
 import com.streamhub.core.model.ContinueItem
 import com.streamhub.core.model.ContinueResponse
 import com.streamhub.core.model.EpisodesResponse
@@ -212,10 +213,18 @@ class StreamHubApi(
      * Answers 200 even when a provider fails, so check [ProviderResults.error]
      * on each entry rather than trusting the status code.
      */
-    suspend fun search(query: String, provider: String = "all"): SearchResponse =
-        get(path("search") { addQueryParameter("q", query); addQueryParameter("provider", provider) }) {
-            json.decodeFromString(it)
-        }
+    /**
+     * @param providers which sources to search, or empty for all of them. The
+     *   server narrows before scraping, so excluding one also makes the search
+     *   finish sooner.
+     */
+    suspend fun search(query: String, providers: Set<String> = emptySet()): SearchResponse =
+        get(
+            path("search") {
+                addQueryParameter("q", query)
+                addQueryParameter("provider", if (providers.isEmpty()) "all" else providers.joinToString(","))
+            }
+        ) { json.decodeFromString(it) }
 
     suspend fun item(
         provider: String,
@@ -315,6 +324,13 @@ class StreamHubApi(
      */
     fun manifestUrl(target: String): String =
         path("manifest") { addQueryParameter("target", target) }.toString()
+
+    /**
+     * Where the ads were in the stream the player is about to show. Shares the
+     * server's parse with [manifestUrl], so asking costs no extra fetch.
+     */
+    suspend fun adCuts(target: String): AdCuts =
+        get(path("ad-cuts") { addQueryParameter("target", target) }) { json.decodeFromString(it) }
 
     fun posterUrl(target: String): String =
         path("poster") { addQueryParameter("target", target) }.toString()

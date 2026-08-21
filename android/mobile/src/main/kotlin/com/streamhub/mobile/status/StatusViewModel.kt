@@ -13,8 +13,8 @@ import kotlinx.coroutines.launch
 data class StatusUiState(
     val checking: Boolean = true,
     val serverReachable: Boolean = false,
-    val serverLatencyMs: Long? = null,
-    val apiVersion: Int? = null,
+    /** Measured, but never shown as a figure — see StatusSection. */
+    val slowToRespond: Boolean = false,
     val serverError: String? = null,
     val providers: List<ProviderInfo> = emptyList(),
     val realtimeConnected: Boolean = false,
@@ -62,22 +62,18 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(
                         checking = false,
                         serverReachable = false,
-                        serverLatencyMs = null,
+                        slowToRespond = false,
                         // Nothing else can be judged if the server is unreachable,
                         // so stale provider rows would be actively misleading.
                         providers = emptyList(),
-                        serverError = "No response from ${container.serverUrl}",
+                        serverError = "No response. Check your internet connection.",
                     )
                 }
                 return@launch
             }
 
             _state.update {
-                it.copy(
-                    serverReachable = true,
-                    serverLatencyMs = elapsed,
-                    apiVersion = health.getOrNull()?.apiVersion,
-                )
+                it.copy(serverReachable = true, slowToRespond = elapsed > SLOW_MS)
             }
 
             val providers = runCatching { container.api.providers(includeUnavailable = true) }
@@ -85,9 +81,13 @@ class StatusViewModel(private val container: AppContainer) : ViewModel() {
                 it.copy(
                     checking = false,
                     providers = providers.getOrDefault(emptyList()),
-                    serverError = if (providers.isFailure) "Signed in, but the server refused the provider list." else null,
+                    serverError = if (providers.isFailure) "Signed in, but the source list could not be loaded." else null,
                 )
             }
         }
+    }
+
+    private companion object {
+        const val SLOW_MS = 2_000L
     }
 }

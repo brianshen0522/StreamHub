@@ -186,6 +186,17 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     LaunchedEffect(Unit) { navController.popBackStack() }
                 } else {
                     val detailViewModel = viewModel { DetailViewModel(container, selection) }
+
+                    // Coming back from the player's next-episode button. The
+                    // screen kept its state on the back stack, so this only has
+                    // to move the selection.
+                    LaunchedEffect(Unit) {
+                        container.handover.pendingEpisode?.let { episode ->
+                            container.handover.pendingEpisode = null
+                            detailViewModel.selectEpisode(episode)
+                        }
+                    }
+
                     DetailScreen(
                         viewModel = detailViewModel,
                         posterUrl = posterUrl,
@@ -206,6 +217,10 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         container = container,
                         request = request,
                         viewModel = viewModel { PlayerViewModel(container, request) },
+                        onNextEpisode = { episode ->
+                            container.handover.pendingEpisode = episode
+                            navController.popBackStack()
+                        },
                         onBack = { navController.popBackStack() },
                     )
                 }

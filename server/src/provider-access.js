@@ -39,10 +39,12 @@ export async function getEnabledProvidersForUser(user) {
       name: provider.name,
       isEnabled: provider.isEnabled,
       allowed: provider.isEnabled && (permissionMap.get(provider.key) ?? true),
+      // Status only. errorMessage is whatever the upstream fetch threw and can
+      // carry hostnames, paths or stack detail; a viewer needs to know a
+      // provider is down, not why, and the admin console already has the full
+      // text. responseTimeMs is left out for the same reason — it describes the
+      // server, not anything the viewer can act on.
       status: health?.status ?? null,
-      responseTimeMs: health?.responseTimeMs ?? null,
-      lastCheckedAt: health?.checkedAt ?? null,
-      errorMessage: health?.errorMessage ?? null,
     };
   });
 }

@@ -47,7 +47,11 @@ fun ProfileScreen(
 
         HorizontalDivider()
 
-        Row("Server", serverUrl)
+        // No server address here. It is not a secret — it is compiled into the
+        // APK and the device is talking to it — but it is deployment detail with
+        // nothing a viewer can do about it, and it was left over from
+        // development.
+        //
         // With nothing pushing updates, "which build is on this device" is a
         // real question, and a commit is the only answer that is never ambiguous.
         Row("Build", buildId)
