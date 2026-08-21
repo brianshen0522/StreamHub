@@ -12,12 +12,33 @@ later on every content screen.
 
 ---
 
-## Creating the project
+## The project
 
-Create it **into this directory** with Xcode's New Project wizard (SwiftUI app,
-iPhone + iPad destinations) so the ignore rules and the Docker build context
-exclusions already in place apply from the first commit. Xcode 26.6 and Swift
-6.3 are installed.
+`StreamHub.xcodeproj`, one app target plus `StreamHubUITests`. The project file
+uses a **synchronized file group**, so a new Swift file under `StreamHub/` is
+picked up without editing the project — but note that `xcodebuild test` does not
+reliably rebuild the UI test target after a source change under that
+arrangement. Clean first, or you will spend a while debugging a failure that was
+already fixed.
+
+Build and run against a local server:
+
+```sh
+xcodebuild -project StreamHub.xcodeproj -scheme StreamHub -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=<your simulator>' \
+  STREAMHUB_SERVER_URL=http://127.0.0.1:58787 build
+```
+
+The address is fixed at build time through `STREAMHUB_SERVER_URL`, which lands
+in Info.plist. The default is the real deployment.
+
+## Verifying it
+
+`simctl` has no input injection — unlike `adb` there is no way to tap or type
+from outside — and AppleScript needs an Accessibility grant. `StreamHubUITests`
+exists for that reason: it signs in, walks every tab, opens a title and plays
+it, capturing each screen as an attachment. Run it the same way with `test`
+instead of `build`.
 
 ## The one rule that matters: no custom chrome
 
