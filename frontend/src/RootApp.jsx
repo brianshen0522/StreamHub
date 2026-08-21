@@ -12,6 +12,22 @@ import {
 const AdminPortal = lazy(() => import("./AdminPortal.jsx"));
 const UserPortal = lazy(() => import("./UserPortal.jsx"));
 
+/**
+ * Keeps the API's own vocabulary off the sign-in screen.
+ *
+ * Everything else the server says here is already written for a person — wrong
+ * credentials, too many attempts, an admin account on a client — and is passed
+ * through unchanged. Only the request-schema failure is machine talk, and it
+ * only appears when a field is empty, which the form now catches first; this is
+ * the belt to that pair of braces.
+ */
+function readableAuthError(message) {
+  if (/^validation failed/i.test(message || "")) {
+    return "Enter your username and password.";
+  }
+  return message;
+}
+
 function LoginPage({ onLogin, title, subtitle }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
@@ -20,12 +36,22 @@ function LoginPage({ onLogin, title, subtitle }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+
+    // Caught here rather than sent: an empty form fails the request body
+    // schema, and the server's answer to that is "Validation failed." — which
+    // is true, and tells a person nothing about what to do next. It was
+    // reaching the sign-in screen verbatim.
+    if (!login.trim() || !password) {
+      setError("Enter your username and password.");
+      return;
+    }
+
     setSubmitting(true);
     setError("");
     try {
       await onLogin(login, password);
     } catch (submitError) {
-      setError(submitError.message);
+      setError(readableAuthError(submitError.message));
     } finally {
       setSubmitting(false);
     }
