@@ -1,4 +1,18 @@
+# Both images build with the repository root as their context so that shared/ is
+# reachable (see compose.yml). Only server/, frontend/ and shared/ are ever
+# copied, so everything listed here is pure transfer cost on every build.
 node_modules
 dist
 npm-debug.log
 __pycache__
+
+# Native clients. No image consumes them, and Gradle and Xcode build output runs
+# to hundreds of megabytes.
+android
+ios
+
+# Not part of any image. .claude holds agent worktrees, each a full checkout.
+PoC
+.git
+.claude
+*.log

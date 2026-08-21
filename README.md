@@ -87,6 +87,21 @@ Single `App.jsx` component. UI flow:
 4. Select episode → sources checked and listed as compact pills (green dot = direct, orange = proxy)
 5. Source selected → HLS plays; on fatal error auto-falls back to proxy URL
 
+### Native clients (`android/`, `ios/`)
+
+Sideloaded phone and TV clients that talk to the same Express API — pure clients,
+signing in with user credentials only, with the admin console staying on the web.
+
+| Directory | Contents |
+|---|---|
+| `android/` | One Gradle project: `:core` data layer, `:mobile` phone UI, `:tv` Android TV UI |
+| `ios/` | One Xcode project, one target, adaptive for iPhone and iPad |
+| `shared/api/` | API behaviour notes every client has to get right |
+
+Each directory has a README covering its module layout, signing and design rules.
+Both are excluded from the Docker build context, since neither image consumes
+them.
+
 ---
 
 ## Providers
