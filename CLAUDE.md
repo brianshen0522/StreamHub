@@ -52,7 +52,8 @@ running the affected surface.
 | `server/` | Express API, scrapers, stream proxy |
 | `frontend/` | React SPA (the web client) served by nginx in production |
 | `shared/` | Code and contract notes used by more than one client |
-| `android/`, `ios/` | Native clients — READMEs only so far |
+| `android/` | Gradle project: `:core` data layer, `:mobile` phone app, `:tv` Android TV app. Builds; the UI is a placeholder |
+| `ios/` | Native client — README only so far |
 | `PoC/` | Standalone Python scrapers used for provider spelunking; not part of the app |
 
 `shared/` is why both Dockerfiles build with the **repository root** as their

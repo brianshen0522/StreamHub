@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The leanback launcher shows a 320x180 banner for every TV app. A placeholder
+  vector keeps a binary out of the repository until there is real artwork.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <path
+        android:fillColor="#141018"
+        android:pathData="M0,0h320v180h-320z" />
+
+    <!-- A play triangle, centred. -->
+    <path
+        android:fillColor="#C4121B"
+        android:pathData="M136,62 L136,118 L184,90 z" />
+
+</vector>

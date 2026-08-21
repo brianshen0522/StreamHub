@@ -94,8 +94,8 @@ signing in with user credentials only, with the admin console staying on the web
 
 | Directory | Contents |
 |---|---|
-| `android/` | One Gradle project: `:core` data layer, `:mobile` phone UI, `:tv` Android TV UI |
-| `ios/` | One Xcode project, one target, adaptive for iPhone and iPad |
+| `android/` | One Gradle project: `:core` data layer, `:mobile` phone UI, `:tv` Android TV UI. Builds two APKs; UI is still a placeholder |
+| `ios/` | One Xcode project, one target, adaptive for iPhone and iPad — not created yet |
 | `shared/api/` | API behaviour notes every client has to get right |
 
 Each directory has a README covering its module layout, signing and design rules.

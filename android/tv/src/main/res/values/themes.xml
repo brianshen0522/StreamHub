@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ten-foot UIs are dark by default, and Compose draws everything, so the
+         platform theme only has to avoid painting an action bar or a light
+         background behind the composition. -->
+    <style name="Theme.StreamHubTv" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

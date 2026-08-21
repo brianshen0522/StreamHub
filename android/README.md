@@ -25,19 +25,37 @@ Two application modules means two APKs with two application IDs, which can be
 installed side by side. Everything that is not a screen belongs in `:core`; if
 `:mobile` and `:tv` both need it, it is not UI.
 
-## Creating the project
+## Building
 
-There is no system JDK and no Gradle CLI on this machine — Android Studio's
-bundled JBR is the toolchain, so the project has to come from the New Project
-wizard rather than being hand-written. Create it **into this directory** so the
-ignore rules and the Docker build context exclusions already in place apply from
-the first commit.
+```bash
+cd android
+./gradlew assembleDebug          # both APKs
+./gradlew :mobile:installDebug   # phone, over adb
+./gradlew :tv:installDebug       # TV, over adb
+```
 
-Installed SDK: platform 37, build-tools 36.0.0.
+Open the `android/` directory in Android Studio and it will import as-is.
 
-Commit the Gradle wrapper (`gradlew`, `gradle/wrapper/`) — it is how the build
-stays reproducible. Do not commit `local.properties`; it hard-codes this
-machine's SDK path.
+`local.properties` is required and deliberately not committed, because it
+hard-codes one machine's SDK path. A fresh clone needs:
+
+```bash
+echo "sdk.dir=$HOME/Library/Android/sdk" > android/local.properties
+```
+
+There is no JDK on the `PATH` on this machine — Android Studio's bundled one is
+the toolchain. To build from a terminal:
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+```
+
+Toolchain: AGP 9.3.1, Kotlin 2.4.10, Gradle 9.7.1, compileSdk 37, minSdk 26.
+Note that **AGP 9 has built-in Kotlin support** — applying the
+`org.jetbrains.kotlin.android` plugin on top of it fails the build rather than
+being merely redundant. The Compose compiler plugin is still applied separately.
+
+The Gradle wrapper is committed, which is what keeps the build reproducible.
 
 ## Signing
 

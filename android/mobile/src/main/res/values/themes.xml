@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose draws the UI; this only has to be a valid app theme with no
+         action bar, so the system does not draw one above the composition. -->
+    <style name="Theme.StreamHub" parent="android:Theme.Material.NoActionBar" />
+</resources>
