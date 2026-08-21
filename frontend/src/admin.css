@@ -120,6 +120,7 @@
 }
 
 .adm-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1200,38 +1201,124 @@
   .adm-provider-row > *:nth-child(4) { grid-column: 1 / -1; }
 }
 
+/* Phone: the console keeps all of its data, but the sidebar becomes a bottom
+   tab bar and the users table restacks as cards instead of scrolling
+   sideways. Previously the nav alone pushed content 249px down and the four
+   stat tiles ran one-per-row before the table even started. */
 @media (max-width: 860px) {
   .adm-shell { grid-template-columns: minmax(0, 1fr); }
 
   .adm-side {
-    position: static;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 60;
     height: auto;
     flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
+    gap: 0;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
     border-right: 0;
-    border-bottom: 1px solid var(--adm-line);
+    border-top: 1px solid var(--adm-line);
+    background: rgba(13, 13, 15, 0.96);
+    backdrop-filter: blur(14px);
+  }
+
+  .adm-brand,
+  .adm-nav-label,
+  .adm-side-foot { display: none; }
+
+  .adm-nav { flex-direction: row; flex: 1; justify-content: space-around; }
+
+  .adm-nav-item {
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+    background: none;
+  }
+
+  .adm-nav-item svg { width: 20px; height: 20px; }
+  .adm-nav-item:hover { background: none; }
+  .adm-nav-item.is-active { background: none; color: var(--adm-accent-hi); }
+
+  /* Title and actions collided; let them stack. */
+  .adm-topbar {
+    position: static;
+    height: auto;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
     padding: 12px 16px;
   }
+  .adm-topbar-actions { width: 100%; }
+  .adm-topbar-actions .adm-btn { flex: 1; }
 
-  .adm-brand { padding: 0; }
-  .adm-nav-label { display: none; }
-  .adm-nav { flex-direction: row; flex-wrap: wrap; }
+  .adm-body { padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
 
-  .adm-side-foot {
-    margin-top: 0;
-    margin-left: auto;
-    padding-top: 0;
-    border-top: 0;
-    grid-auto-flow: column;
+  .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .adm-stat { padding: 12px 13px; }
+  .adm-stat-value { font-size: 21px; }
+  .adm-stat-sub { font-size: 11px; }
+
+  .adm-cols-2,
+  .adm-cols-3 { grid-template-columns: minmax(0, 1fr); }
+
+  /* Rows become cards: the header row is dropped and each cell carries its
+     own label, so nothing is hidden and nothing scrolls sideways. */
+  .adm-table-wrap { overflow-x: visible; }
+  .adm-table { min-width: 0; }
+  .adm-table thead { display: none; }
+  .adm-table,
+  .adm-table tbody,
+  .adm-table tr,
+  .adm-table td { display: block; width: 100%; }
+
+  .adm-table tbody tr {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--adm-line);
+  }
+  .adm-table tbody tr.is-selected td:first-child { box-shadow: none; }
+
+  .adm-table td { padding: 0; border: 0; }
+  .adm-table td.adm-num { text-align: left; }
+
+  .adm-table td + td {
+    display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 7px;
   }
 
-  .adm-side-user { display: none; }
-  .adm-topbar { padding: 0 16px; }
-  .adm-body { padding: 16px 16px 48px; }
-  .adm-form-row { grid-template-columns: minmax(0, 1fr); }
+  .adm-table td + td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    font-weight: 650;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--adm-fg-3);
+  }
+
+  .adm-provider-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 10px;
+  }
+  .adm-provider-toggle { justify-content: flex-start; }
+
+  .adm-audit-row { grid-template-columns: 26px minmax(0, 1fr); }
+  .adm-audit-time { grid-column: 2; text-align: left; }
+
+  /* Full-screen on a phone; keep the last control clear of the home indicator. */
+  .adm-drawer { width: 100vw; }
+  .adm-drawer-body { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
   .adm-mini-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .adm-form-row { grid-template-columns: minmax(0, 1fr); }
   .adm-danger-zone { flex-direction: column; align-items: stretch; }
+  .adm-toolbar .adm-select { width: 100%; min-width: 0; }
 }

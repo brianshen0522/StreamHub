@@ -1049,24 +1049,24 @@ function UsersPage({ setTopbar, toast }) {
                           </div>
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Role">
                         <Badge tone={user.role === "ADMIN" ? "accent" : undefined}>{user.role}</Badge>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <div className="adm-chip-row">
                           <Badge tone={user.status === "ACTIVE" ? "ok" : "bad"} dot>{user.status}</Badge>
                           {isOnline(user.lastSeenAt) ? <Badge tone="info" dot>Online</Badge> : null}
                         </div>
                       </td>
-                      <td className="adm-cell-meta adm-nowrap">
+                      <td className="adm-cell-meta adm-nowrap" data-label="Providers">
                         {user.role === "ADMIN"
                           ? "—"
                           : access.length
                             ? `${allowed} of ${access.length} providers`
                             : "All providers"}
                       </td>
-                      <td className="adm-cell-meta adm-nowrap">{formatRelative(user.lastSeenAt)}</td>
-                      <td className="adm-cell-meta adm-nowrap adm-num">{formatRelative(user.createdAt)}</td>
+                      <td className="adm-cell-meta adm-nowrap" data-label="Last seen">{formatRelative(user.lastSeenAt)}</td>
+                      <td className="adm-cell-meta adm-nowrap adm-num" data-label="Joined">{formatRelative(user.createdAt)}</td>
                     </tr>
                   );
                 })}
