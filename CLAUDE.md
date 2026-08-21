@@ -67,8 +67,13 @@ Express 4 + Prisma (PostgreSQL) + `ws`. ESM throughout, plain JavaScript, no
 TypeScript. The Prisma client is generated to the non-standard path
 `server/generated/prisma` and imported as `../generated/prisma/index.js`.
 
-`src/index.js` is ~1170 lines and registers **all 44 routes directly on one
-`app`** — no Router modules. Route groups:
+`src/index.js` is ~1200 lines and registers **all 44 routes directly on one
+`app`** — no Router modules.
+
+Every route answers at both `/api/…` and `/api/v1/…`. A middleware rewrites the
+version prefix away before routing, so there is one registration per route and
+`req.originalUrl` still shows what the client asked for. The web app uses the
+unversioned paths; clients pin to `/api/v1`. Route groups:
 
 | Group | Guards |
 |---|---|
@@ -173,9 +178,11 @@ are the CDN's own.
 
 - **`App.jsx` is not the application root.** `RootApp.jsx` is. `App.jsx` is the
   Browse/Watch page and, at ~1770 lines, the largest component in the repo.
-- **Login does not check role.** An admin authenticates fine and gets tokens, but
-  every content and library route then 403s via `forbidAdminPlayback`. Clients
-  must branch on `user.role` immediately after login.
+- **Login does not check role by default.** An admin authenticates fine and gets
+  tokens, but every content and library route then 403s via
+  `forbidAdminPlayback`. A request carrying `X-StreamHub-Client` is refused at
+  login and refresh instead; the web app deliberately does not send that header,
+  because its login form is shared with the admin console.
 - **Refresh rotates.** `POST /api/auth/refresh` invalidates the old refresh token,
   so concurrent refreshes kill the session. Any client needs a single-flight
   refresh; `api.js` does this with a module-level `refreshPromise`.

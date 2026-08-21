@@ -92,7 +92,8 @@ Standalone Python scripts (`requests` + `BeautifulSoup`) used for testing scrapi
 
 *   **Surgical Updates:** When modifying scrapers, always verify against the current structure of the target site. Use `PoC/` scripts for rapid testing.
 *   **Ordering matters in the stream path:** ad stripping must run *before* proxy URL rewriting. `rewritePlaylist` collapses every segment into the same `/api/stream` directory, which destroys the directory signal the ad classifier depends on.
-*   **Type Safety:** Zod validates request bodies (`server/src/validators.js`). Responses are hand-built literals with no schema — there is no OpenAPI document and no API version segment.
+*   **Type Safety:** Zod validates request bodies (`server/src/validators.js`). Responses are hand-built literals with no schema, and there is no OpenAPI document.
+*   **API Versioning:** every route answers at both `/api/…` and `/api/v1/…`; a middleware rewrites the prefix away before routing. The web app uses the unversioned paths, native clients pin to `/api/v1`, so the unversioned surface can change without breaking an installed build that nothing updates automatically.
 *   **Naming:** Backend uses `camelCase` for variables and `snake_case` for database mappings in Prisma.
 *   **HLS Playback:** `Hls.isSupported()` is checked *before* `canPlayType`, because Chrome on macOS claims "maybe" for HLS and then fails to demux. Direct play is preferred; the proxy is the fallback.
 *   **Commits:** lower-case subjects with an area scope (`feat(player):`, `fix(stream):`). Bodies explain why, and state what was verified.
@@ -103,4 +104,4 @@ Standalone Python scripts (`requests` + `BeautifulSoup`) used for testing scrapi
 *   **Watch Progress:** Saved via `/api/me/progress`; `progressPercent` and `isCompleted` are derived server-side. `/api/me/continue-watching` collapses rows to one per title and flags `nextUp`.
 *   **Health Checks:** Providers are monitored and can be disabled globally by an admin, or per user.
 *   **Poster Proxy:** Images are proxied via `/api/poster?target=...` to avoid 403 errors. The parameter is `target`, and the route is behind auth.
-*   **Admins cannot watch:** `forbidAdminPlayback` 403s every content and library route, but login does not check role — an admin gets a valid token and an app that fails everywhere. Clients must branch on `user.role` after login.
+*   **Admins cannot watch:** `forbidAdminPlayback` 403s every content and library route. Login itself does not check role, so a request carrying `X-StreamHub-Client` is refused at login and refresh instead of being handed a token that fails everywhere. The web app omits that header because its login form is shared with the admin console.

@@ -4,10 +4,15 @@ Behaviour every StreamHub client has to get right, kept in one place so the web,
 Android and iOS clients cannot quietly disagree about it. This is prose, not a
 schema — a generated `openapi.json` belongs here too and is not written yet.
 
-The server is Express on port 8787; every route lives under `/api`. **There is no
-version segment.** Adding a second and third client is the moment to decide
-whether to freeze this surface or move it to `/api/v1`, because an installed
-sideloaded build stays on a device until it is reinstalled by hand.
+The server is Express on port 8787. Every route is reachable at both `/api/…`
+and **`/api/v1/…`**, which are the same routes — the version prefix is rewritten
+away before routing. The web app uses the unversioned paths; **clients should
+pin themselves to `/api/v1`**, so the unversioned surface stays free to change
+without breaking a build already sitting on a phone or a TV, where nothing
+pushes updates.
+
+`GET /api/health` answers `{ ok: true, apiVersion: 1 }`, which is the cheapest
+way for a client to check what it is talking to.
 
 ---
 
@@ -26,11 +31,17 @@ token. A client that fires two refreshes concurrently will kill its own session,
 so the refresh must be single-flight — one in-flight request that every waiting
 caller awaits. The web client does this in `frontend/src/api.js`.
 
-**Login does not check role.** An admin authenticates successfully and receives a
-working token, but every content and library route then answers
-`403 Admin playback access is disabled.` — so an admin who signs in on a phone
-gets a session and an app that fails on every screen. Clients must check
-`user.role !== "USER"` at the login screen and refuse with a clear message.
+**Identify yourself and the server will refuse admin accounts for you.** Send
+`X-StreamHub-Client: <android|tv|ios>` on every request. Login and refresh then
+answer `403` with a message fit to show on the login screen, instead of handing
+back a working token for an account that would `403` on every content route
+afterwards. The web app does not send the header, because its login form is
+shared with the admin console.
+
+Send it anyway even though the rule is enforced server-side, and still check
+`user.role === "USER"` before storing a session — the header is what activates
+the refusal, and a client that forgets it gets the old behaviour: a valid
+session and an app that fails on every screen.
 
 `requireAuth` cannot distinguish an expired token from a malformed one; both are
 a plain `401`. The correct client behaviour is to attempt one refresh on any

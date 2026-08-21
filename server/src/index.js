@@ -36,9 +36,43 @@ import {
 
 const app = express();
 
+const API_VERSION = 1;
+const VERSION_PREFIX = `/api/v${API_VERSION}`;
+
+/**
+ * Clients pin themselves to /api/v1 so the unversioned paths stay free to
+ * change without breaking a build that is already installed. Nothing pushes
+ * updates here — a sideloaded phone or TV build stays on the device until
+ * someone reinstalls it by hand — so the version has to exist before the first
+ * client ships, not once something needs to break.
+ *
+ * A rewrite rather than a Router leaves all 44 route registrations untouched.
+ * Express keeps req.originalUrl, so logs and error reports still show the path
+ * the client actually asked for.
+ */
+app.use((request, _response, next) => {
+  if (request.url.startsWith(`${VERSION_PREFIX}/`)) {
+    request.url = "/api" + request.url.slice(VERSION_PREFIX.length);
+  }
+  next();
+});
+
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
+
+/**
+ * Native clients announce themselves with this header; the web app does not.
+ * The web login form is shared by both portals, and an admin signing in there
+ * is heading for the admin console rather than a player, so it must keep
+ * working.
+ */
+function getClientKind(request) {
+  return String(request.get("x-streamhub-client") || "").trim();
+}
+
+const ADMIN_CLIENT_REFUSAL =
+  "Administrator accounts cannot sign in to a playback client. Use a viewer account.";
 
 function getProvider(name) {
   const provider = providers[name];
@@ -176,7 +210,7 @@ async function ensureBootstrapped() {
 }
 
 app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+  response.json({ ok: true, apiVersion: API_VERSION });
 });
 
 app.post("/api/auth/login", asyncHandler(async (request, response) => {
@@ -200,6 +234,14 @@ app.post("/api/auth/login", asyncHandler(async (request, response) => {
   const valid = await verifyPassword(payload.password, user.passwordHash);
   if (!valid) {
     response.status(401).json({ error: "Invalid credentials." });
+    return;
+  }
+
+  // An admin authenticates perfectly well and then 403s on every content route,
+  // so a client that identifies itself is refused here rather than handed a
+  // session that fails on every screen it has.
+  if (getClientKind(request) && user.role === UserRole.ADMIN) {
+    response.status(403).json({ error: ADMIN_CLIENT_REFUSAL });
     return;
   }
 
@@ -227,6 +269,13 @@ app.post("/api/auth/refresh", asyncHandler(async (request, response) => {
 
   if (!session || session.user.status !== UserStatus.ACTIVE) {
     response.status(401).json({ error: "Invalid refresh token." });
+    return;
+  }
+
+  // Same rule as login, so an admin token issued elsewhere cannot be carried
+  // into a client by refreshing it.
+  if (getClientKind(request) && session.user.role === UserRole.ADMIN) {
+    response.status(403).json({ error: ADMIN_CLIENT_REFUSAL });
     return;
   }
 

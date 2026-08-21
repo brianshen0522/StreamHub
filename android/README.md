@@ -6,6 +6,10 @@ different input models, so they are two UI modules rather than two projects.
 
 Read [`shared/api/README.md`](../shared/api/README.md) before writing any
 networking code — it holds the API behaviour that every client has to get right.
+Two things belong in the HTTP client from the first commit: pin the base URL to
+**`/api/v1`**, and send **`X-StreamHub-Client: android`** (or `tv`) on every
+request, which is what makes the server refuse admin accounts at the login
+screen rather than later on every content screen.
 
 ---
 
