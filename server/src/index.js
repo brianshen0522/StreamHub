@@ -80,6 +80,31 @@ function getClientKind(request) {
 const ADMIN_CLIENT_REFUSAL =
   "Administrator accounts cannot sign in to a playback client. Use a viewer account.";
 
+/**
+ * Something a person would recognise as one of their own devices.
+ *
+ * The native clients send a user agent naming the hardware; browsers send a
+ * fingerprint nobody wants to read, so those are reduced to the browser name.
+ */
+function describeDevice(session) {
+  const agent = String(session.userAgent || "");
+
+  const native = /^StreamHub-\w+\/\S+ \(([^)]+)\)/.exec(agent);
+  if (native) return native[1];
+
+  for (const [pattern, name] of [
+    [/\bEdg\//, "Microsoft Edge"],
+    [/\bOPR\//, "Opera"],
+    [/\bFirefox\//, "Firefox"],
+    [/\bChrome\//, "Chrome"],
+    [/\bSafari\//, "Safari"],
+  ]) {
+    if (pattern.test(agent)) return name;
+  }
+
+  return session.clientKind ? `StreamHub (${session.clientKind})` : "Unknown device";
+}
+
 function getProvider(name) {
   const provider = providers[name];
   if (!provider) {
@@ -153,19 +178,23 @@ async function createAuditLog(actorUserId, action, payload = {}, targetUserId = 
 
 
 async function issueSession(user, request) {
-  const accessToken = createAccessToken(user);
   const refreshToken = createRefreshToken();
 
-  await prisma.userSession.create({
+  // The row is created first so its id can go into the token: a request that
+  // cannot say which session it belongs to cannot be pointed at either.
+  const session = await prisma.userSession.create({
     data: {
       userId: user.id,
       refreshTokenHash: hashRefreshToken(refreshToken),
       ip: request.ip,
       userAgent: request.get("user-agent") || null,
+      clientKind: getClientKind(request) || null,
       lastSeenAt: new Date(),
       expiresAt: getRefreshTokenExpiresAt(),
     },
   });
+
+  const accessToken = createAccessToken(user, session.id);
 
   await prisma.user.update({
     where: { id: user.id },
@@ -328,7 +357,7 @@ app.post("/api/auth/refresh", refreshLimiter, asyncHandler(async (request, respo
 
   response.json({
     user: serializeUser(session.user),
-    accessToken: createAccessToken(session.user),
+    accessToken: createAccessToken(session.user, session.id),
     refreshToken: nextRefreshToken,
   });
 }));
@@ -388,6 +417,44 @@ app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, r
     data: { passwordHash: await hashPassword(payload.nextPassword) },
   });
 
+  response.json({ ok: true });
+}));
+
+/**
+ * The devices signed in to this account.
+ *
+ * A refresh token is a thirty-day credential, so being able to see where they
+ * are and end one is the difference between noticing a stray sign-in and being
+ * able to do anything about it. `current` is how a client knows not to offer to
+ * sign itself out by surprise.
+ */
+app.get("/api/me/sessions", requireAuth(), asyncHandler(async (request, response) => {
+  const sessions = await prisma.userSession.findMany({
+    where: { userId: request.auth.user.id, expiresAt: { gt: new Date() } },
+    orderBy: { lastSeenAt: "desc" },
+  });
+
+  response.json({
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      clientKind: session.clientKind,
+      // The raw user agent is a fingerprint of the device; a viewer only needs
+      // to recognise which of their own devices this is.
+      deviceName: describeDevice(session),
+      lastSeenAt: session.lastSeenAt,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      current: session.id === request.auth.sessionId,
+    })),
+  });
+}));
+
+app.delete("/api/me/sessions/:id", requireAuth(), asyncHandler(async (request, response) => {
+  // Scoped to this user, so an id belonging to somebody else simply matches
+  // nothing rather than being an error worth reporting.
+  await prisma.userSession.deleteMany({
+    where: { id: request.params.id, userId: request.auth.user.id },
+  });
   response.json({ ok: true });
 }));
 

@@ -24,6 +24,9 @@ object ApiConfig {
 
     /** Only accounts with this role can reach any content route. */
     const val REQUIRED_ROLE = "USER"
+
+    /** Reported in the User-Agent, which is what the device list shows. */
+    const val CLIENT_VERSION = "0.1.0"
 }
 
 /** Which build is talking, sent as [ApiConfig.CLIENT_HEADER]. */

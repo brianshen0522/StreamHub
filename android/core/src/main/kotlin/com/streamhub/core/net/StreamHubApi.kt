@@ -4,6 +4,7 @@ import com.streamhub.core.ApiConfig
 import com.streamhub.core.ClientKind
 import com.streamhub.core.model.AdCuts
 import com.streamhub.core.model.ContinueItem
+import com.streamhub.core.model.DeviceSession
 import com.streamhub.core.model.ContinueResponse
 import com.streamhub.core.model.EpisodesResponse
 import com.streamhub.core.model.ErrorEnvelope
@@ -22,6 +23,7 @@ import com.streamhub.core.model.ProvidersResponse
 import com.streamhub.core.model.RawStream
 import com.streamhub.core.model.RefreshRequest
 import com.streamhub.core.model.SearchResponse
+import com.streamhub.core.model.SessionsResponse
 import com.streamhub.core.model.ServerHealth
 import com.streamhub.core.model.Session
 import com.streamhub.core.model.Source
@@ -78,6 +80,10 @@ class StreamHubApi(
             chain.proceed(
                 chain.request().newBuilder()
                     .header(ApiConfig.CLIENT_HEADER, clientKind.header)
+                    // Sign-in creates the session row, and the user agent it
+                    // records is what the device list shows. Without this here
+                    // every device is recorded as "okhttp".
+                    .header("User-Agent", userAgentFor(clientKind))
                     .build()
             )
         }
@@ -151,6 +157,16 @@ class StreamHubApi(
     }
 
     suspend fun me(): User = get(path("auth", "me")) { body -> decodeField(body, "user") }
+
+    /** Every device currently signed in to this account, most recent first. */
+    suspend fun sessions(): List<DeviceSession> =
+        get(path("me", "sessions")) { json.decodeFromString<SessionsResponse>(it).sessions }
+
+    /** Ends one. Passing the current device's id signs this device out. */
+    suspend fun revokeSession(id: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(path("me", "sessions", id)).delete().build()
+        authed.newCall(request).execute().use { it.expectSuccess() }
+    }
 
     /** Keeps the account visible in the admin console's online list. Poll every 30-60s. */
     suspend fun heartbeat() = withContext(Dispatchers.IO) {

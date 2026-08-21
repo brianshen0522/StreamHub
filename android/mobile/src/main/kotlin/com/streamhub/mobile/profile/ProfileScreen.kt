@@ -25,6 +25,7 @@ fun ProfileScreen(
     modifier: Modifier = Modifier,
     /** Rendered inline so the diagnostics sit where someone looks when stuck. */
     statusSection: @Composable () -> Unit = {},
+    devicesSection: @Composable () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -59,6 +60,10 @@ fun ProfileScreen(
         HorizontalDivider()
 
         statusSection()
+
+        HorizontalDivider()
+
+        devicesSection()
 
         HorizontalDivider()
 

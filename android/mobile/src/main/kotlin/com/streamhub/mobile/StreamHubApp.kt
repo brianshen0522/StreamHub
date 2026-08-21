@@ -40,6 +40,8 @@ import com.streamhub.mobile.continuewatching.ContinueScreen
 import com.streamhub.mobile.continuewatching.ContinueViewModel
 import com.streamhub.mobile.detail.DetailScreen
 import com.streamhub.mobile.detail.DetailViewModel
+import com.streamhub.mobile.devices.DevicesSection
+import com.streamhub.mobile.devices.DevicesViewModel
 import com.streamhub.mobile.library.FavoritesScreen
 import com.streamhub.mobile.library.FavoritesViewModel
 import com.streamhub.mobile.library.HistoryScreen
@@ -275,6 +277,12 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     modifier = tabPadding,
                     statusSection = {
                         StatusSection(viewModel = viewModel { StatusViewModel(container) })
+                    },
+                    devicesSection = {
+                        DevicesSection(
+                            viewModel = viewModel { DevicesViewModel(container) },
+                            onSignedOutHere = onSignedOut,
+                        )
                     },
                     onSignOut = {
                         scope.launch {

@@ -31,6 +31,28 @@ data class Session(
     val refreshToken: String,
 )
 
+/**
+ * A device signed in to this account. A refresh token lasts thirty days, so
+ * being able to see these and end one is what makes a stray sign-in actionable.
+ */
+@Serializable
+data class DeviceSession(
+    val id: String,
+    val deviceName: String,
+    /** "android", "tv", "ios", or null for the web app. */
+    val clientKind: String? = null,
+    val lastSeenAt: String? = null,
+    val createdAt: String? = null,
+    val expiresAt: String? = null,
+    /** The device asking. Ending it would sign the asker out. */
+    val current: Boolean = false,
+) {
+    val isTelevision: Boolean get() = clientKind == "tv"
+}
+
+@Serializable
+internal data class SessionsResponse(val sessions: List<DeviceSession> = emptyList())
+
 @Serializable
 internal data class LoginRequest(val login: String, val password: String)
 

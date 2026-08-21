@@ -16,10 +16,17 @@ export function verifyPassword(password, passwordHash) {
   return argon2.verify(passwordHash, password);
 }
 
-export function createAccessToken(user) {
+/**
+ * @param sessionId the session this token belongs to. Without it the server
+ *   cannot tell which device a request or socket came from, which is what
+ *   "this device" in a session list and "send this to that television" both
+ *   need. Optional so an older token still verifies until it expires.
+ */
+export function createAccessToken(user, sessionId = null) {
   return jwt.sign(
     {
       sub: user.id,
+      sid: sessionId,
       role: user.role,
       username: user.username,
       email: user.email,
