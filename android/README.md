@@ -84,6 +84,44 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
 
 Toolchain: AGP 9.3.1, Kotlin 2.4.10, Gradle 9.7.1, compileSdk 37, minSdk 26.
+
+## Testing on an emulator
+
+The SDK here ships no system images and no `cmdline-tools`, so the first run
+needs both. Everything below assumes `JAVA_HOME` is set as above and
+`ANDROID_HOME=$HOME/Library/Android/sdk`.
+
+```bash
+# once — command-line tools and an arm64 image (Apple Silicon runs it natively)
+sdkmanager --install "cmdline-tools;latest" \
+           "system-images;android-36;google_apis;arm64-v8a"
+avdmanager create avd -n streamhub-phone \
+           -k "system-images;android-36;google_apis;arm64-v8a" -d pixel_7
+
+# boot headless — screencap still works, and nothing steals focus
+emulator -avd streamhub-phone -no-window -no-audio -no-boot-anim \
+         -gpu swiftshader_indirect &
+
+adb wait-for-device
+./gradlew :mobile:installDebug
+adb shell am start -n com.streamhub.mobile/.MainActivity
+adb exec-out screencap -p > shot.png
+```
+
+Useful while working on a screen:
+
+```bash
+adb shell input tap <x> <y>
+adb shell input text "search terms"
+adb shell input keyevent DPAD_DOWN     # the TV app's whole interaction model
+adb shell uiautomator dump /sdcard/ui.xml   # bounds, labels, tap-target sizes
+adb shell settings put system user_rotation 1   # 0 portrait, 1 landscape
+adb emu kill                            # stop the emulator
+```
+
+A headless emulator catches layout errors, clipped content, broken insets and
+dead focus paths. It does not tell you anything trustworthy about real-device
+performance, actual TV overscan, or how a physical remote behaves.
 Note that **AGP 9 has built-in Kotlin support** — applying the
 `org.jetbrains.kotlin.android` plugin on top of it fails the build rather than
 being merely redundant. The Compose compiler plugin is still applied separately.
