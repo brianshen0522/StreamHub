@@ -110,6 +110,28 @@ function sanitizeNullable(value) {
   return trimmed ? trimmed : null;
 }
 
+/**
+ * Drops the fields that arrived empty, so an update leaves the stored value
+ * alone instead of erasing it.
+ *
+ * Progress is written every few seconds by whatever is playing, and what that
+ * client knows about a title depends on how the person got to it: opening a
+ * link that carries no poster still reports position perfectly well. Writing
+ * the absence through meant one such session blanked artwork the account
+ * already had — the continue shelf shows the newest row per title, so the card
+ * went grey while an older row still held the picture.
+ *
+ * Only for the descriptive fields. Position, duration and completion are the
+ * point of the write and are always meant.
+ */
+function keepStoredWhenMissing(values) {
+  const kept = {};
+  for (const [field, value] of Object.entries(values)) {
+    if (value !== null && value !== undefined) kept[field] = value;
+  }
+  return kept;
+}
+
 function sanitizeKeyString(value) {
   if (typeof value !== "string") return "";
   return value.trim();
@@ -708,9 +730,13 @@ app.post("/api/me/favorites", requireAuth(), forbidAdminPlayback(), asyncHandler
     update: {
       mediaType: payload.mediaType,
       title: payload.title,
-      posterUrl: sanitizeNullable(payload.posterUrl),
-      detailUrl: sanitizeNullable(payload.detailUrl),
-      seasonLabel: sanitizeNullable(payload.seasonLabel),
+      // Same rule as progress: favouriting from a link that carries no poster
+      // must not take the artwork away from a favourite that had one.
+      ...keepStoredWhenMissing({
+        posterUrl: sanitizeNullable(payload.posterUrl),
+        detailUrl: sanitizeNullable(payload.detailUrl),
+        seasonLabel: sanitizeNullable(payload.seasonLabel),
+      }),
     },
     create: {
       userId: request.auth.user.id,
@@ -911,15 +937,20 @@ app.put("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(a
     update: {
       mediaType: payload.mediaType,
       title: payload.title,
-      posterUrl: sanitizeNullable(payload.posterUrl),
-      detailUrl: sanitizeNullable(payload.detailUrl),
-      seasonLabel: sanitizeNullable(payload.seasonLabel),
       sourceLabel: sanitizeNullable(payload.sourceLabel),
       durationSeconds,
       positionSeconds,
       progressPercent,
       isCompleted,
       lastWatchedAt: new Date(),
+      // Not cleared by a ping that simply did not carry them — see
+      // keepStoredWhenMissing. sourceLabel is above because it genuinely
+      // changes when somebody switches source, and null means "none".
+      ...keepStoredWhenMissing({
+        posterUrl: sanitizeNullable(payload.posterUrl),
+        detailUrl: sanitizeNullable(payload.detailUrl),
+        seasonLabel: sanitizeNullable(payload.seasonLabel),
+      }),
     },
     create: {
       userId: request.auth.user.id,
