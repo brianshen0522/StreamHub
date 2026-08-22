@@ -27,6 +27,8 @@ struct PlaybackRequest: Hashable, Identifiable, Sendable {
     var resumeAtSeconds: Int = 0
     /// What follows this episode, so the player can offer it. Nil at the end.
     var nextEpisodeLabel: String?
+    /// And what precedes it, for the remote's backwards skip. Nil at the front.
+    var prevEpisodeLabel: String?
 
     var id: String { directUrl + (episodeLabel ?? "") }
 }

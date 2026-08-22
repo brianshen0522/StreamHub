@@ -28,6 +28,8 @@ data class PlaybackRequest(
     val resumeAtSeconds: Int,
     /** What follows this episode, so the player can offer it. Null at the end. */
     val nextEpisodeLabel: String? = null,
+    /** And what precedes it, for the remote's backwards skip. Null at the front. */
+    val prevEpisodeLabel: String? = null,
 )
 
 /**

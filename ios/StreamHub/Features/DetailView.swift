@@ -197,7 +197,11 @@ final class DetailModel {
             directUrl: source.directUrl,
             durationSeconds: source.durationSeconds,
             resumeAtSeconds: ResumeRules.resumePositionSeconds(existing),
-            nextEpisodeLabel: next
+            nextEpisodeLabel: next,
+            prevEpisodeLabel: ResumeRules.previousEpisode(
+                episodes: episodes,
+                currentEpisode: selectedEpisode
+            )
         )
     }
 

@@ -273,14 +273,34 @@ function posterProxyUrl(url) {
   return withCurrentOrigin(`/api/poster?target=${encodeURIComponent(url)}&accessToken=${encodeURIComponent(getAccessToken())}`);
 }
 
+/**
+ * A poster that has no image draws one: the title's own initial on a gradient
+ * derived from the title, so every fallback tile is stable for its title and
+ * different from its neighbours'. Printing "No Image" made the gap the most
+ * prominent text on the card.
+ */
+function PosterPlaceholder({ alt, className }) {
+  const text = String(alt || "").trim();
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  const hue = hash % 360;
+  return (
+    <div
+      className={`${className || ""} poster-placeholder`}
+      aria-label={alt}
+      style={{
+        background: `linear-gradient(160deg, hsl(${hue} 42% 26%), hsl(${(hue + 45) % 360} 48% 13%))`,
+      }}
+    >
+      <span>{text ? [...text][0].toUpperCase() : "▶"}</span>
+    </div>
+  );
+}
+
 function PosterImage({ src, alt, className, fallbackClassName }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) {
-    return (
-      <div className={fallbackClassName ?? className} aria-label={alt}>
-        No Image
-      </div>
-    );
+    return <PosterPlaceholder alt={alt} className={fallbackClassName ?? className} />;
   }
   return (
     <img
@@ -320,6 +340,27 @@ function App() {
   const castTargetId = cast.target?.sessionId || null;
   const castStateRef = useRef({});
 
+  // Choosing where to play happens over the video, so the video waits for the
+  // answer. Paused on the picker opening; resumed only when the picker closes
+  // with nothing chosen — picking a television keeps it paused, because from
+  // that moment the episode belongs to the television. Only a pause this
+  // effect made is undone, so a picker opened over an already-paused video
+  // does not start it by being dismissed.
+  const pausedForPickerRef = useRef(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (cast.pickerOpen) {
+      if (!video.paused) {
+        pausedForPickerRef.current = true;
+        video.pause();
+      }
+    } else if (pausedForPickerRef.current) {
+      pausedForPickerRef.current = false;
+      if (!cast.target) void video.play().catch(() => {});
+    }
+  }, [cast.pickerOpen, cast.target]);
+
   // Stop means stop. Both Stop and "Play here" leave this tab with no
   // television, and the player effect starts playing the moment there is none —
   // which is right for "Play here" and precisely wrong for Stop. Forgetting the
@@ -344,7 +385,7 @@ function App() {
    * back to playing here.
    */
   function sendToTelevision(source) {
-    const { play, payload, resume, nextEpisodeLabel } = castStateRef.current;
+    const { play, payload, resume, nextEpisodeLabel, prevEpisodeLabel } = castStateRef.current;
     if (!play || !payload || !source) return false;
     return play({
       ...payload,
@@ -356,6 +397,7 @@ function App() {
         ? 0
         : Math.max(0, (resume?.positionSeconds || 0) - 30),
       nextEpisodeLabel,
+      prevEpisodeLabel,
     });
   }
 
@@ -950,6 +992,7 @@ function App() {
     payload: currentPlaybackPayload,
     resume: resumeProgress,
     nextEpisodeLabel: episodeNeighbours?.next?.label || null,
+    prevEpisodeLabel: episodeNeighbours?.prev?.label || null,
   };
 
   // ── watch-panel rows ────────────────────────────────────────

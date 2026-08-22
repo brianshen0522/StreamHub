@@ -183,6 +183,8 @@ fun PlayerScreen(
                     durationMs = player.duration.coerceAtLeast(0),
                     paused = !player.isPlaying,
                     buffering = player.playbackState == Player.STATE_BUFFERING,
+                    hasNext = request.nextEpisodeLabel != null,
+                    hasPrevious = request.prevEpisodeLabel != null,
                 )
             )
             delay(1_000)
@@ -202,6 +204,9 @@ fun PlayerScreen(
                 is CastCommand.Seek -> player.seekTo(command.positionMs)
                 is CastCommand.Stop -> onBack()
                 is CastCommand.Next -> request.nextEpisodeLabel?.let(onNextEpisode)
+                // The same navigation as Next: onNextEpisode is really "play
+                // the episode with this label" and does not care which way.
+                is CastCommand.Previous -> request.prevEpisodeLabel?.let(onNextEpisode)
                 is CastCommand.Play -> Unit // handled by the app root, which navigates
             }
         }

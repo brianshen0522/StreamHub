@@ -138,6 +138,10 @@ function sanitizePlaybackState(raw) {
     durationMs: millis(raw.durationMs) ?? 0,
     paused: Boolean(raw.paused),
     buffering: Boolean(raw.buffering),
+    // Season edges, known only to the device that holds the episode list. The
+    // remotes disable their skip buttons off these.
+    hasNext: Boolean(raw.hasNext),
+    hasPrevious: Boolean(raw.hasPrevious),
   };
 }
 
@@ -151,6 +155,7 @@ function sanitizeCommand(raw) {
     case "resume":
     case "stop":
     case "next":
+    case "previous":
       return { action };
     case "seek": {
       const positionMs = Number(raw.positionMs);
@@ -179,6 +184,7 @@ function sanitizeCommand(raw) {
           // television loses its own next-episode control the moment a phone
           // starts something on it.
           nextEpisodeLabel: text(playback.nextEpisodeLabel, 120),
+          prevEpisodeLabel: text(playback.prevEpisodeLabel, 120),
           positionMs: Math.max(0, Math.round(Number(playback.positionMs) || 0)),
         },
       };

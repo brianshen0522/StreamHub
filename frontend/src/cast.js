@@ -46,6 +46,14 @@ let lastKnownTarget = null;
 let stopCount = 0;
 
 /**
+ * Whether the device picker is on screen. Module state rather than the
+ * button's own, because the watch page has to react to it: choosing where to
+ * play happens *over* a playing video, and the video keeping going underneath
+ * makes the choice feel like it did not take.
+ */
+let pickerOpen = false;
+
+/**
  * The chosen television, remembered across a page load.
  *
  * Held in memory alone this was lost by anything that reloads the document — a
@@ -172,6 +180,7 @@ export function useCast() {
           episodeLabel: request.episodeLabel,
           episodeUrl: request.seasonUrl,
           nextEpisodeLabel: request.nextEpisodeLabel,
+          prevEpisodeLabel: request.prevEpisodeLabel,
           // The receiver picks up where this account left off, so handing a
           // title over lands where it would have here.
           positionMs: Math.max(0, Math.round((request.resumeAtSeconds || 0) * 1000)),
@@ -207,9 +216,13 @@ export function useCast() {
     stop,
     /** Rises by one each time Stop is pressed. See `stopCount`. */
     stopped: stopCount,
+    pickerOpen,
+    openPicker: useCallback(() => { pickerOpen = true; publish(); }, []),
+    closePicker: useCallback(() => { pickerOpen = false; publish(); }, []),
     pause: useCallback(() => command({ action: "pause" }), [command]),
     resume: useCallback(() => command({ action: "resume" }), [command]),
     next: useCallback(() => command({ action: "next" }), [command]),
+    previous: useCallback(() => command({ action: "previous" }), [command]),
     seek: useCallback((positionMs) => command({ action: "seek", positionMs: Math.round(positionMs) }), [command]),
   };
 }

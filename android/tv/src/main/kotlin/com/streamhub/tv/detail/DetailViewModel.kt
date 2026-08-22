@@ -233,6 +233,7 @@ class DetailViewModel(
             durationSeconds = source.durationSeconds,
             resumeAtSeconds = ResumeRules.resumePositionSeconds(existing),
             nextEpisodeLabel = (ResumeRules.upNext(current.episodes, episode) as? UpNext.Episode)?.label,
+            prevEpisodeLabel = ResumeRules.previousEpisode(current.episodes, episode),
         )
     }
 

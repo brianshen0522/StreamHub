@@ -67,7 +67,6 @@ function CastGlyph({ on }) {
  */
 export function CastButton({ t }) {
   const cast = useCast();
-  const [picking, setPicking] = useState(false);
 
   if (!cast.televisions.length && !cast.target) return null;
 
@@ -76,13 +75,13 @@ export function CastButton({ t }) {
       <button
         type="button"
         className={`cast-btn${cast.target ? " cast-btn-on" : ""}`}
-        onClick={() => setPicking(true)}
+        onClick={cast.openPicker}
         title={t?.castTo || "Play on a television"}
         aria-label={t?.castTo || "Play on a television"}
       >
         <CastGlyph on={Boolean(cast.target)} />
       </button>
-      {picking ? <CastPicker cast={cast} t={t} onClose={() => setPicking(false)} /> : null}
+      {cast.pickerOpen ? <CastPicker cast={cast} t={t} onClose={cast.closePicker} /> : null}
     </>
   );
 }
@@ -277,6 +276,18 @@ function CastRemote({ cast, t, onClose }) {
         </div>
 
         <div className="cast-remote-transport">
+          {/* The television is the one holding the episode list, so whether a
+              skip exists comes from its report — at a season's first episode
+              there is no previous, at its last no next, and the button says so
+              by being disabled rather than by failing silently. */}
+          <button
+            type="button"
+            onClick={() => cast.previous()}
+            disabled={!state?.hasPrevious || cast.lost}
+            aria-label={t?.prevEpisode || "Previous episode"}
+          >
+            ⏮
+          </button>
           <button type="button" onClick={() => cast.seek(Math.max(0, live - 10) * 1000)} disabled={!state || cast.lost}>−10</button>
           <button
             type="button"
@@ -287,6 +298,14 @@ function CastRemote({ cast, t, onClose }) {
             {state?.paused ? "▶" : "❚❚"}
           </button>
           <button type="button" onClick={() => cast.seek((live + 10) * 1000)} disabled={!state || cast.lost}>+10</button>
+          <button
+            type="button"
+            onClick={() => cast.next()}
+            disabled={!state?.hasNext || cast.lost}
+            aria-label={t?.nextEpisode || "Next episode"}
+          >
+            ⏭
+          </button>
         </div>
 
         <div className="cast-remote-actions">

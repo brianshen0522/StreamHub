@@ -100,10 +100,22 @@ struct RemoteView: View {
                 .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 36) {
+            HStack(spacing: 28) {
                 // Every control here is an icon, so each carries its own label:
                 // an unlabelled icon button is silent under VoiceOver, which
                 // makes the remote unusable rather than merely awkward.
+                //
+                // The season's edges are the television's to know: at the first
+                // episode there is no previous, at the last no next, and the
+                // buttons say so by dimming rather than by doing nothing.
+                Button {
+                    cast.previous()
+                } label: {
+                    Image(systemName: "backward.end.fill").font(.system(size: 22))
+                }
+                .disabled(state?.hasPrevious != true)
+                .accessibilityLabel("Previous Episode")
+
                 Button {
                     cast.seek(toMs: Int(max(live - 10, 0) * 1000))
                 } label: {
@@ -131,6 +143,14 @@ struct RemoteView: View {
                     Image(systemName: "goforward.10").font(.system(size: 28))
                 }
                 .accessibilityLabel("Forward 10 Seconds")
+
+                Button {
+                    cast.next()
+                } label: {
+                    Image(systemName: "forward.end.fill").font(.system(size: 22))
+                }
+                .disabled(state?.hasNext != true)
+                .accessibilityLabel("Next Episode")
             }
             .foregroundStyle(.primary)
             .disabled(state == nil || cast.lost)
