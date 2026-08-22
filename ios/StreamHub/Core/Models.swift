@@ -200,6 +200,10 @@ struct CastPlaybackState: Codable, Hashable, Sendable {
     var durationMs: Int = 0
     var paused: Bool = false
     var buffering: Bool = false
+    /// Season edges, known only to the device holding the episode list; the
+    /// remote disables its skips off these.
+    var hasNext: Bool = false
+    var hasPrevious: Bool = false
 }
 
 struct CastReceiver: Codable, Hashable, Sendable, Identifiable {
@@ -222,6 +226,7 @@ struct CastPlayRequest: Codable, Sendable {
     var episodeLabel: String?
     var episodeUrl: String?
     var nextEpisodeLabel: String?
+    var prevEpisodeLabel: String?
     var positionMs: Int = 0
 }
 
@@ -233,6 +238,7 @@ enum CastCommand: Sendable {
     case resume
     case stop
     case next
+    case previous
     case seek(positionMs: Int)
 }
 

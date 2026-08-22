@@ -14,6 +14,15 @@ import { sendRealtime, subscribeRealtime } from "./realtime.js";
  * command between two sockets belonging to the same user, so there is no
  * pairing step, no device code, and nothing is discovered on the local network
  * — which is why this works from a phone on mobile data.
+ *
+ * The one rule everything above sits on: connecting and playing are different
+ * acts. Connecting — including the silent reattach after a reload or a closed
+ * app coming back — is picking up the remote: observe the television, control
+ * it, never feed it. Only a fresh gesture in the current page's lifetime sends
+ * playback: tapping a source, an episode, a neighbour, a title, choosing a set
+ * over a playing video, or the explicit play-on-television button. The
+ * television is the sole owner of playback state; every controller mirrors
+ * what it reports rather than what it hopes.
  */
 
 const listeners = new Set();
@@ -44,6 +53,14 @@ let lastKnownTarget = null;
  * first without anyone having to clear it.
  */
 let stopCount = 0;
+
+/**
+ * Whether the device picker is on screen. Module state rather than the
+ * button's own, because the watch page has to react to it: choosing where to
+ * play happens *over* a playing video, and the video keeping going underneath
+ * makes the choice feel like it did not take.
+ */
+let pickerOpen = false;
 
 /**
  * The chosen television, remembered across a page load.
@@ -172,6 +189,7 @@ export function useCast() {
           episodeLabel: request.episodeLabel,
           episodeUrl: request.seasonUrl,
           nextEpisodeLabel: request.nextEpisodeLabel,
+          prevEpisodeLabel: request.prevEpisodeLabel,
           // The receiver picks up where this account left off, so handing a
           // title over lands where it would have here.
           positionMs: Math.max(0, Math.round((request.resumeAtSeconds || 0) * 1000)),
@@ -207,9 +225,13 @@ export function useCast() {
     stop,
     /** Rises by one each time Stop is pressed. See `stopCount`. */
     stopped: stopCount,
+    pickerOpen,
+    openPicker: useCallback(() => { pickerOpen = true; publish(); }, []),
+    closePicker: useCallback(() => { pickerOpen = false; publish(); }, []),
     pause: useCallback(() => command({ action: "pause" }), [command]),
     resume: useCallback(() => command({ action: "resume" }), [command]),
     next: useCallback(() => command({ action: "next" }), [command]),
+    previous: useCallback(() => command({ action: "previous" }), [command]),
     seek: useCallback((positionMs) => command({ action: "seek", positionMs: Math.round(positionMs) }), [command]),
   };
 }

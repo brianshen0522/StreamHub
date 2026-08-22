@@ -225,6 +225,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     viewModel = viewModel { SearchViewModel(container) },
                     modifier = tabPadding,
                     posterUrl = posterUrl,
+                    castAction = castAction,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
                             provider = item.provider,
@@ -381,6 +382,8 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         onPause = container.cast::pause,
                         onResume = container.cast::resume,
                         onSeek = container.cast::seekTo,
+                        onPrevious = container.cast::previous,
+                        onNext = container.cast::next,
                         onStop = {
                             container.cast.stopAndDisconnect()
                             leaveRemote()

@@ -25,6 +25,7 @@ data class PlaybackRequest(
     val resumeAtSeconds: Int,
     /** What follows this episode, so the player can roll into it. Null at the end. */
     val nextEpisodeLabel: String? = null,
+    val prevEpisodeLabel: String? = null,
 )
 
 /**

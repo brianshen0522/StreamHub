@@ -122,6 +122,7 @@ class CastController(
                     episodeLabel = request.episodeLabel,
                     episodeUrl = request.seasonUrl,
                     nextEpisodeLabel = request.nextEpisodeLabel,
+                    prevEpisodeLabel = request.prevEpisodeLabel,
                     // The receiver resumes where this account left off, so
                     // handing a title to the television lands in the same place
                     // it would have on the phone.
@@ -134,6 +135,7 @@ class CastController(
     fun pause() = send(CastCommand.Pause)
     fun resume() = send(CastCommand.Resume)
     fun next() = send(CastCommand.Next)
+    fun previous() = send(CastCommand.Previous)
     fun seekTo(positionMs: Long) = send(CastCommand.Seek(positionMs))
 
     private fun send(command: CastCommand): Boolean {

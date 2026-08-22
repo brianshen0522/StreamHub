@@ -45,7 +45,10 @@ set; this is a pure bearer-token API, which is why no native client needs a
 compatibility layer.
 
 Access tokens are HS256 JWTs valid for 4 hours. Refresh tokens are opaque and
-valid for 30 days, and **refresh rotates**: `POST /api/auth/refresh` with
+valid for 90 days **of idleness** — every authenticated request slides the
+window forward, so a device in any kind of use never expires; only one left
+genuinely untouched for the whole period has to sign in again. **Refresh
+rotates**: `POST /api/auth/refresh` with
 `{ refreshToken }` returns a new pair and immediately invalidates the old refresh
 token. A client that fires two refreshes concurrently will kill its own session,
 so the refresh must be single-flight — one in-flight request that every waiting

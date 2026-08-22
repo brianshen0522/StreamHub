@@ -3,6 +3,8 @@ package com.streamhub.tv
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -100,6 +102,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             durationSeconds = null,
             resumeAtSeconds = (play.positionMs / 1000).toInt(),
             nextEpisodeLabel = play.nextEpisodeLabel,
+            prevEpisodeLabel = play.prevEpisodeLabel,
         )
         // Replace whatever is playing rather than stacking a second player.
         navController.popBackStack(ROUTE_PLAYER, inclusive = true)
@@ -149,10 +152,16 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 val detailState by detailViewModel.state.collectAsStateWithLifecycle()
                 var startWhenReady by rememberSaveable { mutableStateOf(false) }
 
-                // Coming back from the player having finished an episode.
+                // Coming back from the player having finished an episode —
+                // or arriving on a screen built for a cast-started skip. On a
+                // fresh screen the view model's own load ends by selecting the
+                // resume episode, which would silently override anything chosen
+                // before it finished; the pending choice waits the load out so
+                // it is the last word.
                 LaunchedEffect(Unit) {
                     container.handover.pendingEpisode?.let { episode ->
                         container.handover.pendingEpisode = null
+                        snapshotFlow { detailState.loading }.first { !it }
                         detailViewModel.selectEpisode(episode)
                         startWhenReady = true
                     }
@@ -194,7 +203,25 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     },
                     onNextEpisode = { episode ->
                         container.handover.pendingEpisode = episode
-                        navController.popBackStack()
+                        // Playback that a phone or browser cast here has no
+                        // detail screen beneath it — popping lands on Home and
+                        // the pending episode is never consumed, which read as
+                        // "Next closed the player". Build the detail from the
+                        // playing request instead, so the skip has somewhere
+                        // to resolve its sources.
+                        if (navController.previousBackStackEntry?.destination?.route == ROUTE_DETAIL) {
+                            navController.popBackStack()
+                        } else {
+                            container.handover.selection = MediaSelection(
+                                provider = request.providerKey,
+                                itemUrl = request.itemUrl,
+                                title = request.title,
+                                mediaType = request.mediaType,
+                                posterUrl = request.posterUrl,
+                            )
+                            navController.popBackStack(ROUTE_PLAYER, inclusive = true)
+                            navController.navigate(ROUTE_DETAIL)
+                        }
                     },
                     onBack = { navController.popBackStack() },
                 )

@@ -273,14 +273,43 @@ function posterProxyUrl(url) {
   return withCurrentOrigin(`/api/poster?target=${encodeURIComponent(url)}&accessToken=${encodeURIComponent(getAccessToken())}`);
 }
 
+/**
+ * A poster that has no image draws one: the title's own initial on a gradient
+ * derived from the title, so every fallback tile is stable for its title and
+ * different from its neighbours'. Printing "No Image" made the gap the most
+ * prominent text on the card.
+ */
+/**
+ * Whether this document has already mounted the watch page once. The first
+ * mount of a page load is a restore — a reload, a reopened tab, a Home Screen
+ * app coming back — and restores must never send playback anywhere. Every
+ * later mount can only be reached by navigating inside the app, which is a
+ * person clicking a title.
+ */
+let appNavigatedOnce = false;
+
+function PosterPlaceholder({ alt, className }) {
+  const text = String(alt || "").trim();
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  const hue = hash % 360;
+  return (
+    <div
+      className={`${className || ""} poster-placeholder`}
+      aria-label={alt}
+      style={{
+        background: `linear-gradient(160deg, hsl(${hue} 42% 26%), hsl(${(hue + 45) % 360} 48% 13%))`,
+      }}
+    >
+      <span>{text ? [...text][0].toUpperCase() : "▶"}</span>
+    </div>
+  );
+}
+
 function PosterImage({ src, alt, className, fallbackClassName }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) {
-    return (
-      <div className={fallbackClassName ?? className} aria-label={alt}>
-        No Image
-      </div>
-    );
+    return <PosterPlaceholder alt={alt} className={fallbackClassName ?? className} />;
   }
   return (
     <img
@@ -320,6 +349,78 @@ function App() {
   const castTargetId = cast.target?.sessionId || null;
   const castStateRef = useRef({});
 
+  /**
+   * Whether this page has been *asked* to play something on the television.
+   *
+   * "idle": connected at most as a remote — a restored page starts here, and
+   * stays here however many sources auto-select. "armed": a gesture asked for
+   * playback; the next committed source goes to the set. "sent": it went.
+   * Being connected never implies armed — that conflation was the bug where
+   * reopening the app hijacked whatever the television was playing.
+   */
+  const [castSendState, setCastSendState] = useState("idle");
+
+  // The one place a play command leaves this page. Armed only by gestures —
+  // tapping a source, an episode, a neighbour, a title, or the explicit
+  // play-on-television button — and consumed by the send, so however many
+  // times the page reloads or reattaches afterwards, the television is left
+  // to what it was doing.
+  useEffect(() => {
+    if (!castTargetId || !activeSource || castSendState !== "armed") return;
+    if (!sendToTelevision(activeSource)) return;
+    setCastSendState("sent");
+
+    // Handing the episode over stops this tab outright: hls.js is destroyed
+    // rather than paused because a paused instance keeps filling its buffer,
+    // and the element is emptied so nothing can resume it by accident.
+    const video = videoRef.current;
+    if (video) {
+      video.onerror = null;
+      video.pause();
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+      video.removeAttribute("src");
+      video.load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [castTargetId, activeSource, castSendState]);
+
+  // Losing or leaving the television clears the ask: whatever is chosen next
+  // should be judged on its own gesture, not inherit an old one.
+  useEffect(() => {
+    if (!castTargetId) setCastSendState("idle");
+  }, [castTargetId]);
+
+  // Choosing where to play happens over the video, so the video waits for the
+  // answer. Paused on the picker opening; resumed only when the picker closes
+  // with nothing chosen — picking a television keeps it paused, because from
+  // that moment the episode belongs to the television. Only a pause this
+  // effect made is undone, so a picker opened over an already-paused video
+  // does not start it by being dismissed.
+  const pausedForPickerRef = useRef(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (cast.pickerOpen) {
+      if (!video.paused) {
+        pausedForPickerRef.current = true;
+        video.pause();
+      }
+    } else if (pausedForPickerRef.current) {
+      pausedForPickerRef.current = false;
+      if (cast.target) {
+        // The picker opened over a *playing* video and closed on a chosen
+        // television: that is a hand-off, asked for as plainly as tapping a
+        // source. A restored page never gets here — its video was already
+        // paused when the picker opened, so nothing was interrupted and
+        // nothing is sent.
+        setCastSendState("armed");
+      } else {
+        void video.play().catch(() => {});
+      }
+    }
+  }, [cast.pickerOpen, cast.target]);
+
   // Stop means stop. Both Stop and "Play here" leave this tab with no
   // television, and the player effect starts playing the moment there is none —
   // which is right for "Play here" and precisely wrong for Stop. Forgetting the
@@ -344,7 +445,7 @@ function App() {
    * back to playing here.
    */
   function sendToTelevision(source) {
-    const { play, payload, resume, nextEpisodeLabel } = castStateRef.current;
+    const { play, payload, resume, nextEpisodeLabel, prevEpisodeLabel } = castStateRef.current;
     if (!play || !payload || !source) return false;
     return play({
       ...payload,
@@ -356,6 +457,7 @@ function App() {
         ? 0
         : Math.max(0, (resume?.positionSeconds || 0) - 30),
       nextEpisodeLabel,
+      prevEpisodeLabel,
     });
   }
 
@@ -441,32 +543,12 @@ function App() {
       return undefined;
     }
 
-    // Connected to a television, this is where playback goes there instead of
-    // starting here — two things playing at once, in two rooms, is exactly what
-    // being connected is meant to avoid.
-    //
-    // It happens on the source becoming active rather than in the handler for
-    // picking one, because most playback never goes through that handler: open
-    // a title and the source this account last used is chosen for it. Sending
-    // only on a tap left the common path suppressing the local player and
-    // telling the television nothing, so nothing played anywhere.
-    //
-    // A send that does not go out falls through to playing here, rather than
-    // leaving a title that opened onto silence.
-    if (castTargetId && sendToTelevision(activeSource)) {
-      // Choosing a television in the middle of watching hands the episode over,
-      // so this tab has to actually stop — otherwise the same episode runs in
-      // two rooms, which is the one thing being connected is meant to prevent.
-      // hls.js is destroyed rather than paused because a paused instance goes
-      // on filling its buffer from the network; the instance is normally kept
-      // alive across source changes for Picture-in-Picture, but a hand-off is
-      // not a source change and that window should close with the playback.
-      video.onerror = null;
-      video.pause();
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
-      video.removeAttribute("src");
-      video.load();
+    // Connected to a television, nothing loads here — playback either went to
+    // the set (the effect below) or nobody asked for any, and both cases mean
+    // this element stays dark. The sending itself lives in its own effect,
+    // keyed on whether a gesture armed it: a restored page auto-selecting a
+    // source is not a request to play anything anywhere.
+    if (castTargetId) {
       return undefined;
     }
 
@@ -950,6 +1032,7 @@ function App() {
     payload: currentPlaybackPayload,
     resume: resumeProgress,
     nextEpisodeLabel: episodeNeighbours?.next?.label || null,
+    prevEpisodeLabel: episodeNeighbours?.prev?.label || null,
   };
 
   // ── watch-panel rows ────────────────────────────────────────
@@ -1007,6 +1090,7 @@ function App() {
   const showRail = itemDetail?.mediaType === "tv" && (episodeRows.length > 0 || seasonOptions.length > 0);
 
   function handleSelectEpisodeLabel(label) {
+    setCastSendState("armed");
     if (!itemDetail) return;
     loadEpisodeSources(
       itemDetail.provider,
@@ -1019,6 +1103,7 @@ function App() {
 
   async function goToNeighbour(target) {
     if (!target || !itemDetail) return;
+    setCastSendState("armed");
     if (target.episode) {
       await loadEpisodeSources(
         itemDetail.provider,
@@ -1074,6 +1159,7 @@ function App() {
     }
 
     setNextEpPrompt(null);
+    setCastSendState("armed");
     if (prompt.episode) {
       await loadEpisodeSources(
         itemDetail.provider,
@@ -1112,11 +1198,14 @@ function App() {
     if (!raw) return;
     const state = decodeViewState(raw);
     if (!state?.url || !state?.provider) return;
+    const fromUser = appNavigatedOnce;
+    appNavigatedOnce = true;
     handleSelectItem(
       { url: state.url, provider: state.provider, title: state.title, mediaType: state.mediaType, posterUrl: state.posterUrl },
       state.seasonUrl,
       state.episode,
       state.exact,
+      fromUser,
     );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1404,8 +1493,11 @@ function App() {
     }
   }
 
-  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null, exact = false) {
+  async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null, exact = false, fromUser = true) {
     sourcesAbortRef.current?.abort();
+    // A person opening a title is asking to play it — wherever playback goes.
+    // A restore is not a person.
+    setCastSendState(fromUser ? "armed" : "idle");
     setSelectedItem(item);
     setItemDetail(null);
     setEpisodes([]);
@@ -1537,6 +1629,7 @@ function App() {
 
   async function handleSelectSeason(season) {
     if (!itemDetail) return;
+    setCastSendState("armed");
     setSelectedSeason(season);
     setEpisodes([]);
     setSelectedEpisode("");
@@ -1561,6 +1654,7 @@ function App() {
 
   async function handleSelectSource(source) {
     setAutoSelectedFromPreference(false);
+    setCastSendState("armed");
     await saveSourcePreference(source);
     // Where playback goes — here or on the television — is decided by the
     // player effect, which sees automatic picks as well as this one.
@@ -1750,9 +1844,31 @@ function App() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            // The Enter that confirms an IME candidate is not a request to
+            // search: the field holds half romanization, half candidate at
+            // that moment, and Safari happily submits the form on it. 229 is
+            // the legacy keyCode every composing keystroke reports.
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.nativeEvent.isComposing || e.keyCode === 229)) {
+                e.preventDefault();
+              }
+            }}
             placeholder={t.searchPlaceholder}
             aria-label={t.searchPlaceholder}
           />
+          {query ? (
+            <button
+              type="button"
+              className="usr-input-clear"
+              onClick={(e) => {
+                setQuery("");
+                e.currentTarget.closest(".usr-searchbox")?.querySelector("input")?.focus();
+              }}
+              aria-label={t.clearInput}
+            >
+              ×
+            </button>
+          ) : null}
         </div>
         <button type="submit" className="usr-btn usr-btn-primary" disabled={searching}>
           {searching ? t.loadingResults : t.searchButton}
@@ -1830,7 +1946,15 @@ function App() {
                         <p>{sourcesLoading ? t.loadingSources : t.noSources}</p>
                       </>
                     ) : null}
-                    overlay={nextEpPrompt ? (
+                    overlay={!nextEpPrompt && cast.target && activeSource && castSendState === "idle" ? (
+                      <button
+                        type="button"
+                        className="vp-cast-cta"
+                        onClick={() => setCastSendState("armed")}
+                      >
+                        {t.castPlayThisHere.replace("{device}", cast.target.deviceName)}
+                      </button>
+                    ) : nextEpPrompt ? (
                       <div className="autoplay-prompt">
                         <div className="prompt-header">
                           <span className="prompt-title">{t.upNext}: {nextEpPrompt.episode || nextEpPrompt.season?.label}</span>

@@ -88,6 +88,7 @@ final class CastController {
             episodeLabel: request.episodeLabel,
             episodeUrl: request.seasonUrl,
             nextEpisodeLabel: request.nextEpisodeLabel,
+            prevEpisodeLabel: request.prevEpisodeLabel,
             // The receiver resumes where this account left off, so handing a
             // title to the television lands where it would have on the phone.
             positionMs: request.resumeAtSeconds * 1000
@@ -98,6 +99,7 @@ final class CastController {
     func pause() { if let targetId { send(.pause, to: targetId) } }
     func resume() { if let targetId { send(.resume, to: targetId) } }
     func next() { if let targetId { send(.next, to: targetId) } }
+    func previous() { if let targetId { send(.previous, to: targetId) } }
     func seek(toMs positionMs: Int) { if let targetId { send(.seek(positionMs: positionMs), to: targetId) } }
 
     private func send(_ command: CastCommand, to sessionId: String) {

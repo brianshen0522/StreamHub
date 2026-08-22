@@ -28,6 +28,13 @@ data class CastPlaybackState(
     val durationMs: Long = 0,
     val paused: Boolean = false,
     val buffering: Boolean = false,
+    /**
+     * Whether the receiver could move one episode either way. The remotes read
+     * these to decide whether to offer the skip at all — a controller cannot
+     * know where a season's edges are, only the device playing it can.
+     */
+    val hasNext: Boolean = false,
+    val hasPrevious: Boolean = false,
 ) {
     /** Nothing loaded. The device is reachable but showing its own UI. */
     val idle: Boolean get() = title == null && durationMs == 0L
@@ -57,6 +64,8 @@ data class CastPlayRequest(
     val episodeUrl: String? = null,
     /** What follows this episode, so the receiver keeps its own next control. */
     val nextEpisodeLabel: String? = null,
+    /** And what precedes it, for the same reason in the other direction. */
+    val prevEpisodeLabel: String? = null,
     val positionMs: Long = 0,
 )
 
@@ -95,4 +104,8 @@ sealed class CastCommand {
     @Serializable
     @SerialName("next")
     data object Next : CastCommand()
+
+    @Serializable
+    @SerialName("previous")
+    data object Previous : CastCommand()
 }

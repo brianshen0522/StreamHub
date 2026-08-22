@@ -87,6 +87,7 @@ actor RealtimeClient {
         case .resume: return ["action": "resume"]
         case .stop: return ["action": "stop"]
         case .next: return ["action": "next"]
+        case .previous: return ["action": "previous"]
         case .seek(let positionMs): return ["action": "seek", "positionMs": positionMs]
         case .play(let request):
             guard let data = try? JSONEncoder().encode(request),

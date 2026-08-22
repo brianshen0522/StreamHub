@@ -271,4 +271,17 @@ class ResumeRulesTest {
         val other = map(progress("EP1", seasonUrl = "http://x/season-2", completed = true))
         assertEquals(SeasonStatus.UNWATCHED, ResumeRules.seasonStatus(season, other))
     }
+
+    @Test
+    fun `previousEpisode steps back within the season`() {
+        assertEquals("EP1", ResumeRules.previousEpisode(episodes, "EP2"))
+        assertEquals("EP2", ResumeRules.previousEpisode(episodes, "EP3"))
+    }
+
+    @Test
+    fun `previousEpisode is null at the front edge and for unknown episodes`() {
+        assertNull(ResumeRules.previousEpisode(episodes, "EP1"))
+        assertNull(ResumeRules.previousEpisode(episodes, "EP9"))
+        assertNull(ResumeRules.previousEpisode(episodes, null))
+    }
 }

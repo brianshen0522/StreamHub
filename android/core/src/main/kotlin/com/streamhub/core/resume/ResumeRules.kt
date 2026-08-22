@@ -154,6 +154,17 @@ object ResumeRules {
         return UpNext.Season(seasons[seasonIndex + 1])
     }
 
+    /**
+     * The episode before this one, or null at the season's front edge. The
+     * mirror of [upNext]'s episode case; it does not cross season boundaries,
+     * because stepping backwards into a previous season's last episode is
+     * rarely what a person reaching for "previous" wants.
+     */
+    fun previousEpisode(episodes: List<String>, currentEpisode: String?): String? {
+        val index = episodes.indexOf(currentEpisode)
+        return if (index > 0) episodes[index - 1] else null
+    }
+
     /** How a season reads in a list: untouched, part-watched, or finished. */
     fun seasonStatus(seasonUrl: String?, progress: Map<String, WatchProgress>): SeasonStatus {
         val entries = progress.values.filter { it.seasonUrl.orEmpty() == seasonUrl.orEmpty() }

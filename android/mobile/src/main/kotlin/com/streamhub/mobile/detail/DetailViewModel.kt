@@ -222,6 +222,7 @@ class DetailViewModel(
             // Only within this season. Rolling over to the next one needs a
             // different season's episode list, which the player does not have.
             nextEpisodeLabel = (ResumeRules.upNext(current.episodes, episode) as? UpNext.Episode)?.label,
+            prevEpisodeLabel = ResumeRules.previousEpisode(current.episodes, episode),
         )
     }
 

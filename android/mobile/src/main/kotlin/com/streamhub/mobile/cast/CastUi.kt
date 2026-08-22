@@ -34,6 +34,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.streamhub.core.model.CastReceiver
@@ -113,7 +115,10 @@ fun CastButton(
     tint: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     if (receivers.isEmpty() && !connected) return
-    IconButton(onClick = onClick, modifier = modifier) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier.semantics { contentDescription = "Play on a television" },
+    ) {
         CastIcon(
             connected = connected,
             tint = if (connected) MaterialTheme.colorScheme.primary else tint,

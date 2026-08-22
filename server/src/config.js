@@ -15,7 +15,11 @@ export const STREAM_PROXY_TIMEOUT_MS = parseDurationMs(process.env.STREAM_PROXY_
 // reconnect part way through. Session length is still governed by the refresh
 // token; this only bounds how long a leaked access token stays usable.
 export const ACCESS_TOKEN_TTL_SECONDS = parsePositiveInt(process.env.ACCESS_TOKEN_TTL_SECONDS, 60 * 60 * 4);
-export const REFRESH_TOKEN_TTL_DAYS = parsePositiveInt(process.env.REFRESH_TOKEN_TTL_DAYS, 30);
+// The idle limit, not the session's length: every authenticated request slides
+// the window forward again (see requireAuth), so a device in any kind of use
+// never reaches it. What it bounds is how long a device can sit untouched — a
+// television unplugged for a season — before signing in again is required.
+export const REFRESH_TOKEN_TTL_DAYS = parsePositiveInt(process.env.REFRESH_TOKEN_TTL_DAYS, 90);
 export const HEARTBEAT_ONLINE_WINDOW_SECONDS = parsePositiveInt(process.env.HEARTBEAT_ONLINE_WINDOW_SECONDS, 120);
 // Progress rows scanned when building the continue shelf. Rows group by title,
 // so this bounds episodes across all shows, not the number of shows.

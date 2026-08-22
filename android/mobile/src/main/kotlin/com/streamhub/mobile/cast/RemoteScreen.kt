@@ -57,6 +57,8 @@ fun RemoteScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onSeek: (Long) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
     onStop: () -> Unit,
     onPlayHere: () -> Unit,
     onBack: () -> Unit,
@@ -202,6 +204,12 @@ fun RemoteScreen(
             horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // The season's edges are the television's to know: at the first
+            // episode there is no previous and at the last no next, and the
+            // buttons say so by being disabled rather than doing nothing.
+            SkipButton("⏮", enabled = !lost && state?.hasPrevious == true) {
+                onPrevious()
+            }
             SkipButton("−10", enabled = !lost && state != null) {
                 onSeek((livePosition - 10_000).coerceAtLeast(0))
             }
@@ -221,6 +229,9 @@ fun RemoteScreen(
             }
             SkipButton("+10", enabled = !lost && state != null) {
                 onSeek(livePosition + 10_000)
+            }
+            SkipButton("⏭", enabled = !lost && state?.hasNext == true) {
+                onNext()
             }
         }
 

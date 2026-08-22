@@ -141,13 +141,26 @@ export default function LinkTvPage({ setTopbar, t }) {
               className="usr-form"
               onSubmit={(event) => { event.preventDefault(); lookUp(code); }}
             >
-              <label className="usr-field">
+              <label className="usr-field" style={{ position: "relative" }}>
                 <span className="usr-label">{t.linkCodeLabel}</span>
                 <input
                   ref={inputRef}
                   className="usr-input usr-code-input"
                   value={code}
-                  onChange={(event) => setCode(groupForDisplay(event.target.value))}
+                  // Untouched while an input method is composing: rewriting the
+                  // value mid-composition destroys the buffer, which is the
+                  // same fault both phone apps had in their own dress. The
+                  // transform runs when composition ends instead.
+                  onCompositionEnd={(event) => setCode(groupForDisplay(event.target.value))}
+                  onChange={(event) => {
+                    if (event.nativeEvent.isComposing) setCode(event.target.value);
+                    else setCode(groupForDisplay(event.target.value));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) {
+                      event.preventDefault();
+                    }
+                  }}
                   placeholder={t.linkCodePlaceholder}
                   // The code is not a word, so every helper the browser offers
                   // for words gets in the way.
@@ -158,6 +171,16 @@ export default function LinkTvPage({ setTopbar, t }) {
                   inputMode="text"
                   maxLength={9}
                 />
+                {code ? (
+                  <button
+                    type="button"
+                    className="usr-input-clear usr-code-clear"
+                    onClick={() => { setCode(""); inputRef.current?.focus(); }}
+                    aria-label={t.clearInput}
+                  >
+                    ×
+                  </button>
+                ) : null}
               </label>
               <div className="usr-form-actions">
                 <button

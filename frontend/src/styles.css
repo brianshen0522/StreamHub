@@ -111,14 +111,7 @@ a { color: inherit; }
   flex-shrink: 0;
 }
 .watch-poster { object-fit: cover; box-shadow: 0 10px 26px rgba(0,0,0,0.5); }
-.watch-poster-fallback {
-  background: var(--s2);
-  display: grid;
-  place-items: center;
-  color: var(--t3);
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-}
+.watch-poster-fallback { display: grid; place-items: center; }
 
 .watch-title-text { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
 .watch-title-text h2 {
@@ -785,14 +778,23 @@ a { color: inherit; }
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+/* A missing poster draws the title's initial on its own gradient (set inline,
+   derived from the title) instead of announcing the gap in words. */
+.poster-placeholder {
   display: grid;
   place-items: center;
-  background: var(--s2);
-  color: var(--t3);
-  font-size: 0.7rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  overflow: hidden;
 }
+.poster-placeholder span {
+  font-size: clamp(20px, 38cqw, 44px);
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  user-select: none;
+}
+.watch-poster-fallback.poster-placeholder span { font-size: 26px; }
 
 .result-card-chips {
   position: absolute;

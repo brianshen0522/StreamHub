@@ -134,6 +134,17 @@ enum ResumeRules {
         return .season(seasons[seasons.index(after: seasonIndex)])
     }
 
+    /// The episode before this one, or nil at the season's front edge. The
+    /// mirror of `upNext`'s episode case; it does not cross season boundaries,
+    /// because stepping backwards into a previous season's last episode is
+    /// rarely what a person reaching for "previous" wants.
+    static func previousEpisode(episodes: [String], currentEpisode: String?) -> String? {
+        guard let current = currentEpisode,
+              let index = episodes.firstIndex(of: current),
+              index > episodes.startIndex else { return nil }
+        return episodes[episodes.index(before: index)]
+    }
+
     private static func epochMillis(_ timestamp: String?) -> Double {
         guard let timestamp else { return -.greatestFiniteMagnitude }
         let formatter = ISO8601DateFormatter()
