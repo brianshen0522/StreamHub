@@ -184,12 +184,21 @@ function runDuration(run) {
  *   /api/stream once playback has fallen back to the proxy, and comparing
  *   directories on wrapped URLs would put every segment in the same directory.
  *   It affects classification only; emitted URIs are always the originals.
- * @returns {{text: string, cuts: Array<{at: number, removed: number}>, reason: string|null,
- *            removedSeconds: number, contentDirectory: string|null}}
- *   `cuts[].at` is the position in the *cleaned* timeline where a break was removed.
+ * @returns {{text: string, cuts: Array<{at: number, segment: number, removed: number}>,
+ *            reason: string|null, removedSeconds: number, keptSeconds: number,
+ *            contentDirectory: string|null}}
+ *   `cuts[].at` is the position in the *cleaned* timeline where a break was
+ *   removed, as a sum of `#EXTINF` values, and `cuts[].segment` is the index of
+ *   the kept segment that follows it. Anything drawing a mark on a player's
+ *   timeline wants the index: a player that has crossed a discontinuity times
+ *   the rest from the media's own timestamps rather than from `#EXTINF`, so the
+ *   two can disagree — and it only finds that out as it reaches the region,
+ *   which is while somebody is watching.
  */
 export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) {
-  const unchanged = (reason) => ({ text, cuts: [], reason, removedSeconds: 0, contentDirectory: null });
+  const unchanged = (reason) => ({
+    text, cuts: [], reason, removedSeconds: 0, keptSeconds: 0, contentDirectory: null,
+  });
 
   if (typeof text !== "string" || !text.includes("#EXTINF")) {
     return unchanged("not-a-media-playlist");
@@ -212,6 +221,11 @@ export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) 
   let lastKey = null;
   let lastMap = null;
   let keptDuration = 0;
+  // How many segments have been kept so far. A cut records this alongside its
+  // time because the time is a sum of #EXTINF values, and a player that has met
+  // a discontinuity stops timing by those and starts timing by the media's own
+  // timestamps. The segment index survives that; the second count does not.
+  let keptSegments = 0;
   let emittedRun = false;
   let discontinuityPending = false;
   let pendingRemoved = 0;
@@ -227,7 +241,11 @@ export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) 
       out.push("#EXT-X-DISCONTINUITY");
     }
     if (pendingRemoved > 0) {
-      cuts.push({ at: keptDuration, removed: Number(pendingRemoved.toFixed(3)) });
+      cuts.push({
+        at: keptDuration,
+        segment: keptSegments,
+        removed: Number(pendingRemoved.toFixed(3)),
+      });
       pendingRemoved = 0;
     }
     discontinuityPending = false;
@@ -243,13 +261,18 @@ export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) 
       }
       out.push(...segment.tags, segment.uri);
       keptDuration += segment.duration;
+      keptSegments += 1;
     }
     emittedRun = true;
   }
 
   // A break sitting at the very end has no following content run.
   if (pendingRemoved > 0) {
-    cuts.push({ at: keptDuration, removed: Number(pendingRemoved.toFixed(3)) });
+    cuts.push({
+      at: keptDuration,
+      segment: keptSegments,
+      removed: Number(pendingRemoved.toFixed(3)),
+    });
   }
 
   out.push(...trailer);
@@ -259,6 +282,7 @@ export function stripAds(text, playlistUrl, { resolveUri = (uri) => uri } = {}) 
     cuts,
     reason: null,
     removedSeconds: Number(verdict.adSeconds.toFixed(3)),
+    keptSeconds: Number(keptDuration.toFixed(3)),
     contentDirectory: verdict.contentDirectory,
   };
 }

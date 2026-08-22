@@ -501,6 +501,24 @@ function App() {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         void video.play().catch(() => {});
       });
+      // Where a break was is known twice over: as a sum of #EXTINF values, and
+      // as the index of the segment that follows it. Once hls.js has the level
+      // it can be asked where that segment actually starts, and its answer is
+      // the timeline the seek bar is drawn against — the sum is not, from the
+      // first discontinuity onwards, because after one of those the player
+      // times the rest from the media's own timestamps. Re-anchoring here is
+      // what stops a mark sitting a little further off the longer an episode
+      // runs.
+      hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+        const fragments = data?.details?.fragments;
+        if (!fragments?.length) return;
+        setAdCuts((cuts) => cuts.map((cut) => {
+          const fragment = fragments[cut.segment];
+          return fragment && Number.isFinite(fragment.start)
+            ? { ...cut, at: fragment.start }
+            : cut;
+        }));
+      });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) onFatalError?.(hls);
       });
