@@ -67,8 +67,8 @@ android {
         applicationId = "com.streamhub.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         buildConfigField("String", "GIT_SHA", "\"${gitSha()}\"")
         buildConfigField("String", "SERVER_URL", "\"${serverUrl()}\"")
@@ -89,12 +89,16 @@ android {
     }
 
     compileOptions {
+        // Android 7 has no java.time. Desugaring provides it rather than the
+        // code working around its absence — see minSdk below.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(project(":core"))
 
     implementation(libs.androidx.core.ktx)

@@ -3,7 +3,19 @@
   Debug builds only. Local development points the app at a server on the
   development machine, which is plain http over 10.0.2.2 from an emulator.
   The release build uses the main source set's copy, which refuses cleartext.
+
+  The bundled roots are repeated here rather than inherited: this file replaces
+  the main one wholesale, and without them a debug build on Android 7 reaches
+  the local server over http and then fails on the first video segment, which
+  comes from a provider's CDN over HTTPS. That is exactly the shape the fault
+  took when it was found.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>

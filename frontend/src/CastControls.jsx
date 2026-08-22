@@ -141,13 +141,19 @@ export function CastBar({ t }) {
   // The bar is fixed over the page, so the page needs to know to leave room
   // for it — but only while it is there.
   useEffect(() => {
-    const on = Boolean(cast.target);
+    const on = Boolean(cast.target) || Boolean(cast.lostDevice);
     document.body.classList.toggle("has-cast-bar", on);
     return () => document.body.classList.remove("has-cast-bar");
-  }, [cast.target]);
+  }, [cast.target, cast.lostDevice]);
 
-  if (!cast.target) return null;
-  const state = cast.target.state;
+  // A television that has gone quiet still gets a bar. Returning null on a
+  // missing target made every "disconnected" branch below unreachable — `lost`
+  // is only ever true when `target` is null — so a set switched off took the
+  // bar away with it and said nothing, and the next Play came out of this
+  // device instead. The bar stays, greyed, until it comes back or is dismissed.
+  const device = cast.target ?? cast.lostDevice;
+  if (!device) return null;
+  const state = cast.target?.state;
 
   return (
     <>
@@ -155,11 +161,15 @@ export function CastBar({ t }) {
         <button type="button" className="cast-bar-main" onClick={() => setOpen(true)}>
           <CastGlyph on={!cast.lost} />
           <span className="cast-bar-text">
-            <b>{state?.title || cast.target.deviceName}</b>
+            <b>{state?.title || device.deviceName}</b>
             <small>
               {cast.lost
-                ? `${cast.target.deviceName} ${t?.disconnected || "disconnected"}`
-                : (state?.title ? `${t?.onDevice || "On"} ${cast.target.deviceName}` : (t?.readyToPlay || "Ready to play"))}
+                // The name is already the line above whenever nothing is
+                // playing, and "name / name disconnected" reads like a stutter.
+                ? (state?.title
+                  ? `${device.deviceName} ${t?.disconnectedSuffix || "disconnected"}`
+                  : (t?.disconnected || "Disconnected"))
+                : (state?.title ? `${t?.onDevice || "On"} ${device.deviceName}` : (t?.readyToPlay || "Ready to play"))}
             </small>
           </span>
         </button>
@@ -228,7 +238,10 @@ function CastRemote({ cast, t, onClose }) {
         <div className="cast-remote-head">
           <div>
             <small>{cast.lost ? (t?.disconnected || "Disconnected") : (t?.playingOn || "Playing on")}</small>
-            <b>{cast.target.deviceName}</b>
+            {/* The remembered one when the set is away: this sheet is reachable
+                from a disconnected bar, and reading the live target there is
+                reading a null. */}
+            <b>{(cast.target ?? cast.lostDevice)?.deviceName}</b>
           </div>
           <button type="button" className="cast-remote-close" onClick={onClose} aria-label="Close">×</button>
         </div>

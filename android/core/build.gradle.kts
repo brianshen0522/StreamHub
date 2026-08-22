@@ -10,16 +10,20 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 24
     }
 
     compileOptions {
+        // Android 7 has no java.time. Desugaring provides it rather than the
+        // code working around its absence — see minSdk below.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
 

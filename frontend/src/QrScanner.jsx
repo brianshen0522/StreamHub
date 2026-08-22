@@ -78,10 +78,19 @@ export default function QrScanner({ onCode, onError, t }) {
       }
 
       timer = window.setInterval(async () => {
-        if (doneRef.current || !videoRef.current) return;
+        if (cancelled || doneRef.current || !videoRef.current) return;
         const raw = detector
           ? await readWithDetector(detector, videoRef.current)
           : await readWithFallback();
+        // Checked again on the way out of the decode, not only on the way in.
+        // Clearing the interval cannot stop a call that is already awaiting one
+        // of those, so without this a frame captured before the scanner was
+        // closed can still report a code afterwards — and reporting one signs a
+        // television in and moves the page to its confirmation, which is a
+        // startling thing to have happen after pressing cancel. The window is
+        // widest on the fallback path, where the first frame also waits for
+        // jsQR to be fetched, and that is the path every iPhone takes.
+        if (cancelled) return;
         // Anything that is not one of our codes is ignored rather than
         // reported: a camera pointed at a room finds wifi codes and packaging,
         // and stopping on each of them would make this unusable.

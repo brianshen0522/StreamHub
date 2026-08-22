@@ -22,6 +22,17 @@ let targetId = null;
 let unsubscribe = null;
 
 /**
+ * The chosen television as it was last seen on the receiver list.
+ *
+ * Kept because a set that drops off the list leaves nothing to name it with,
+ * and "disconnected" with no device beside it is not worth showing. The id is
+ * deliberately *not* forgotten at the same time: a television keeps its session
+ * id across a restart — the id is the sign-in, not the socket — so holding on to
+ * it is what lets the tab pick the set up again by itself when it comes back.
+ */
+let lastKnownTarget = null;
+
+/**
  * How many times "Stop" has been pressed this page.
  *
  * Both "Stop" and "Play here" end with no television, so nothing downstream can
@@ -84,6 +95,9 @@ function ensureSubscribed() {
         rememberTarget(null);
       }
     }
+
+    const live = targetId ? receivers.find((receiver) => receiver.sessionId === targetId) : null;
+    if (live) lastKnownTarget = live;
     publish();
   });
 }
@@ -124,6 +138,7 @@ export function useCast() {
 
   const connect = useCallback((sessionId) => {
     targetId = sessionId;
+    lastKnownTarget = receivers.find((receiver) => receiver.sessionId === sessionId) ?? null;
     rememberTarget(sessionId);
     publish();
   }, []);
@@ -131,6 +146,7 @@ export function useCast() {
   /** Stops driving it but leaves it playing — walking away is not a stop. */
   const disconnect = useCallback(() => {
     targetId = null;
+    lastKnownTarget = null;
     // Forgotten deliberately: choosing to play here again must not be undone by
     // the next reload reattaching to the television.
     rememberTarget(null);
@@ -167,6 +183,7 @@ export function useCast() {
   const stop = useCallback(() => {
     command({ action: "stop" });
     targetId = null;
+    lastKnownTarget = null;
     rememberTarget(null);
     stopCount += 1;
     publish();
@@ -176,6 +193,14 @@ export function useCast() {
     televisions,
     target,
     lost,
+    /**
+     * What to call the television while it is away.
+     *
+     * `target` is only ever the live receiver, because everything that sends a
+     * command keys off it and must not aim at a set that is not listening. The
+     * bar still has to name the thing that vanished, and only this remembers it.
+     */
+    lostDevice: lost ? lastKnownTarget : null,
     connect,
     disconnect,
     play,
