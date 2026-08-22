@@ -32,7 +32,12 @@ final class HomeScreenAppUITests: XCTestCase {
     }
 
     func testInstallToHomeScreenAndUseIt() throws {
-        safari.activate()
+        // launch() rather than activate(): this test navigates itself, so a
+        // clean Safari is worth more than whatever page an earlier run left
+        // behind — including the landscape, zoomed or web-app states that make
+        // the toolbar unfindable.
+        safari.terminate()
+        safari.launch()
         XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 20))
         dismissOnboarding()
 
@@ -44,8 +49,10 @@ final class HomeScreenAppUITests: XCTestCase {
 
         // MARK: Add to Home Screen
 
-        let addedAlready = springboardHasStreamHub()
-        if !addedAlready {
+        // Always added fresh rather than reused: a web app iOS has kept around
+        // is restored with the page *and* the storage it had, so reusing one
+        // tests a snapshot of an older build.
+        if true {
             XCTAssertTrue(openShareSheet(), "could not open Safari's share menu")
             sleep(2)
             capture("h-02-share-sheet")
