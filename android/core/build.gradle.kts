@@ -27,6 +27,11 @@ dependencies {
     api(libs.kotlinx.serialization.json)
     implementation(libs.androidx.security.crypto)
 
+    // Both halves: the reader for QrDecoder here, and the writer the television
+    // draws its code with. One artifact, and it means the decoder can be tested
+    // against a code the same library encoded.
+    api(libs.zxing.core)
+
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)

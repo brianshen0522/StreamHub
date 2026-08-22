@@ -36,7 +36,10 @@
   font-size: 14px;
   color: var(--adm-fg);
   background: var(--adm-bg);
-  min-height: 100vh;
+  /* Dynamic rather than fixed viewport height throughout the shell: on a phone
+     `100vh` is measured with the browser's bars retracted, so a console sized
+     against it is taller than the screen for as long as they are showing. */
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -55,17 +58,21 @@
 .adm-shell {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .adm-side {
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 18px 14px 14px;
+  /* A tablet keeps this sidebar layout and still has a status bar and a home
+     indicator, so the insets are paid at this width too and not only on a
+     phone. They are zero on a desktop. */
+  padding: calc(18px + var(--safe-top)) 14px calc(14px + var(--safe-bottom))
+           calc(14px + var(--safe-left));
   background: #0d0d0f;
   border-right: 1px solid var(--adm-line);
 }
@@ -192,8 +199,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 28px;
-  height: 56px;
+  /* Padding carries the inset and the height grows to match, so the bar's own
+     content box stays 56px and the strip behind the clock is the bar's
+     background rather than whatever happens to scroll under it. */
+  padding: var(--safe-top) calc(28px + var(--safe-right)) 0 28px;
+  height: calc(56px + var(--safe-top));
   background: rgba(10, 10, 11, 0.82);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--adm-line);
@@ -218,7 +228,7 @@
 }
 
 .adm-body {
-  padding: 24px 28px 56px;
+  padding: 24px calc(28px + var(--safe-right)) calc(56px + var(--safe-bottom)) 28px;
   display: grid;
   gap: 18px;
   align-content: start;
@@ -886,14 +896,20 @@
   z-index: 100;
   display: grid;
   place-items: center;
-  padding: 20px;
+  /* The insets are zero on a desktop, so this is the same 20px gutter there
+     and a dialog that clears the clock and the home indicator on a phone. */
+  padding: calc(20px + var(--safe-top)) calc(20px + var(--safe-right))
+           calc(20px + var(--safe-bottom)) calc(20px + var(--safe-left));
   pointer-events: none;
 }
 
 .adm-modal {
   pointer-events: auto;
   width: min(480px, 100%);
-  max-height: calc(100vh - 40px);
+  /* Dynamic viewport units: on a phone `100vh` is the height the page would
+     have with the browser's bars retracted, so a dialog measured against it is
+     taller than the screen while they are showing. */
+  max-height: calc(100dvh - 40px - var(--safe-top) - var(--safe-bottom));
   overflow-y: auto;
   background: var(--adm-panel);
   border: 1px solid var(--adm-line-hi);
@@ -1229,7 +1245,8 @@
     height: auto;
     flex-direction: row;
     gap: 0;
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    padding: 6px calc(4px + var(--safe-right)) calc(6px + var(--safe-bottom))
+             calc(4px + var(--safe-left));
     border-right: 0;
     border-top: 1px solid var(--adm-line);
     background: rgba(13, 13, 15, 0.96);
@@ -1257,19 +1274,29 @@
   .adm-nav-item:hover { background: none; }
   .adm-nav-item.is-active { background: none; color: var(--adm-accent-hi); }
 
-  /* Title and actions collided; let them stack. */
+  /* Title and actions collided; let them stack.
+
+     The top inset is paid here and nowhere else: this bar is the first thing
+     on the page on a phone, so without it the console's title sits under the
+     clock in a Home Screen web app — the same way the user portal's search
+     field did. It is `static` rather than sticky at this width, so the inset
+     belongs to the bar's own padding rather than to a scroll offset. */
   .adm-topbar {
     position: static;
     height: auto;
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 10px;
-    padding: 12px 16px;
+    padding: calc(12px + var(--safe-top)) calc(16px + var(--safe-right))
+             12px calc(16px + var(--safe-left));
   }
   .adm-topbar-actions { width: 100%; }
   .adm-topbar-actions .adm-btn { flex: 1; }
 
-  .adm-body { padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+  .adm-body {
+    padding: 16px calc(16px + var(--safe-right)) calc(78px + var(--safe-bottom))
+             calc(16px + var(--safe-left));
+  }
 
   .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .adm-stat { padding: 12px 13px; }
@@ -1326,8 +1353,19 @@
   .adm-audit-time { grid-column: 2; text-align: left; }
 
   /* Full-screen on a phone; keep the last control clear of the home indicator. */
+  /* Full-screen on a phone, so it owns the whole screen's insets: its heading
+     and close button start at the very top and would otherwise sit under the
+     clock, and the last control would sit under the home indicator. */
   .adm-drawer { width: 100vw; }
-  .adm-drawer-body { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .adm-drawer-head {
+    padding: calc(18px + var(--safe-top)) calc(18px + var(--safe-right))
+             14px calc(18px + var(--safe-left));
+  }
+  .adm-drawer-body {
+    padding-right: calc(18px + var(--safe-right));
+    padding-left: calc(18px + var(--safe-left));
+    padding-bottom: calc(18px + var(--safe-bottom));
+  }
   .adm-mini-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .adm-form-row { grid-template-columns: minmax(0, 1fr); }
   .adm-danger-zone { flex-direction: column; align-items: stretch; }

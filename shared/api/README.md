@@ -96,7 +96,15 @@ that matters here:
   room. It is what goes on screen; it is what the person types.
 
 `verificationUrlComplete` is the same page with the code already in it, and is
-what the QR should encode so scanning is one action. Send
+what the QR should encode so scanning is one action.
+
+**A scanned QR is untrusted input.** Every client reads only the `code`
+parameter out of it and never opens the URL — a QR is something a stranger can
+print and leave on a wall, and following one would hand a signed-in session to
+whoever printed it. Anything that is not one of these codes is ignored rather
+than reported, because a camera pointed at a room finds wifi codes and
+packaging. The rule is `UserCode.fromScan` in android/core and
+ios/StreamHub/Core, and `codeFromScan` in frontend/src/QrScanner.jsx. Send
 `X-StreamHub-Client` and a user agent naming the hardware on the *start* call:
 the session is stamped with the address and agent of whoever started the flow,
 not of whoever approved it, so the device list names the television rather than

@@ -16,7 +16,8 @@ coil = "3.5.0"
 # Frozen upstream — no new icons are published, but the set is complete and the
 # artifact is not in the Compose BOM, so it is pinned rather than inherited.
 materialIcons = "1.7.8"
-# Only the encoder is wanted, and `core` is exactly that — the scanning half
+camerax = "1.6.1"
+# Only the encoder is wanted on the television, and `core` is exactly that — the scanning half
 # lives in a separate artifact that would drag in a camera permission.
 zxing = "3.5.3"
 junit = "4.13.2"
@@ -47,6 +48,11 @@ coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref 
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
 
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }

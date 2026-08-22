@@ -291,4 +291,26 @@ enum UserCode {
         let split = clean.index(clean.startIndex, offsetBy: 4)
         return "\(clean[..<split])-\(clean[split...])"
     }
+
+    /// The code out of whatever a camera read, or nil if it was not one of ours.
+    ///
+    /// The television encodes a link, so the usual case is a URL — but only its
+    /// `code` parameter is taken and **the URL itself is never opened**. A QR is
+    /// something a stranger can print and leave on a wall; treating one as a
+    /// place to navigate would be handing a signed-in session to whoever printed
+    /// it. Anything unrecognised returns nil rather than an error, because a
+    /// camera pointed at a room finds wifi codes and packaging, and stopping on
+    /// each of them would make scanning unusable.
+    static func fromScan(_ text: String?) -> String? {
+        guard let text, !text.isEmpty else { return nil }
+
+        if let components = URLComponents(string: text),
+           let value = components.queryItems?.first(where: { $0.name == "code" })?.value {
+            let candidate = normalise(value)
+            if candidate.count == length { return candidate }
+        }
+
+        let bare = normalise(text)
+        return bare.count == length ? bare : nil
+    }
 }

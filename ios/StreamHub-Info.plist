@@ -18,6 +18,11 @@
 	<!-- Only local addresses, and only over the loopback and local network. A
 	     development server runs on the Mac over plain http; the real deployment
 	     is https and needs no exception, so this is not a hole in it. -->
+	<!-- Shown when Scan is pressed on the pairing screen, and nowhere else. The
+	     wording says what it is for, because "StreamHub would like camera
+	     access" with no reason is what people refuse. -->
+	<key>NSCameraUsageDescription</key>
+	<string>To scan the pairing code shown on your television.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

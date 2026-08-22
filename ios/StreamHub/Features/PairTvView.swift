@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Signing a television in by typing the code it is showing.
+/// Signing a television in from the phone.
 ///
-/// The phone's camera already handles the QR — pointing it at the television
-/// opens the approval page in Safari — so this is the other half: the way in
-/// when the camera will not cooperate, or when the set is in another room and
-/// somebody read the code out.
+/// Two ways in, because they suit different moments rather than being a first
+/// choice and a fallback: point the camera at the set, or type the eight
+/// characters when the camera will not cooperate, when the set is in another
+/// room, or when somebody read the code out over the phone.
 ///
 /// Three steps rather than one button, and the middle one is the point. A
 /// device flow cannot stop somebody being talked into approving a code that is
@@ -19,6 +19,7 @@ struct PairTvView: View {
     @State private var pending: PendingDevice?
     @State private var outcome: Outcome?
     @State private var busy = false
+    @State private var scanning = false
     @State private var error: String?
     @FocusState private var focused: Bool
 
@@ -44,11 +45,29 @@ struct PairTvView: View {
         }
         .navigationTitle("Connect a TV")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focused = true }
+        // No automatic focus: it would open the keyboard over a screen whose
+        // first offer is to point the camera at the television instead.
     }
 
     private var entry: some View {
         Section {
+            if scanning {
+                QrScannerView { found in
+                    scanning = false
+                    code = UserCode.forDisplay(found)
+                    lookUp()
+                }
+                .listRowInsets(EdgeInsets())
+                Button("Type it instead") { scanning = false }
+            } else {
+                Button {
+                    error = nil
+                    scanning = true
+                } label: {
+                    Label("Scan the code", systemImage: "qrcode.viewfinder")
+                }
+            }
+
             TextField("ABCD-EFGH", text: $code)
                 // Only ever *removes*: uppercases, drops anything that is not a
                 // code character, and stops at eight. The separator is never

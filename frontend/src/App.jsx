@@ -317,6 +317,48 @@ function App() {
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [activeSource, setActiveSource] = useState(null);
   const cast = useCast();
+  const castTargetId = cast.target?.sessionId || null;
+  const castStateRef = useRef({});
+
+  // Stop means stop. Both Stop and "Play here" leave this tab with no
+  // television, and the player effect starts playing the moment there is none —
+  // which is right for "Play here" and precisely wrong for Stop. Forgetting the
+  // source is what tells the two apart.
+  //
+  // Adjusted during render rather than in an effect on purpose: an effect would
+  // run in the same commit as the player's, which would already have started
+  // loading a video that the next commit then tore down — audible as a stab of
+  // sound from the laptop on the way to silence.
+  const [lastCastStop, setLastCastStop] = useState(cast.stopped);
+  if (cast.stopped !== lastCastStop) {
+    setLastCastStop(cast.stopped);
+    setActiveSource(null);
+  }
+
+  /**
+   * Hand the source that just became active to the connected television.
+   *
+   * Everything it sends comes out of a ref, because its caller is the player
+   * effect and that effect must run on the source changing and on nothing else.
+   * Returns whether the command actually went out, so a closed socket can fall
+   * back to playing here.
+   */
+  function sendToTelevision(source) {
+    const { play, payload, resume, nextEpisodeLabel } = castStateRef.current;
+    if (!play || !payload || !source) return false;
+    return play({
+      ...payload,
+      sourceLabel: source.sourceLabel,
+      directUrl: source.directUrl || source.url,
+      // The same thirty-second rewind the local player applies, so handing a
+      // title to a television lands where it would have landed here.
+      resumeAtSeconds: resume?.isCompleted
+        ? 0
+        : Math.max(0, (resume?.positionSeconds || 0) - 30),
+      nextEpisodeLabel,
+    });
+  }
+
   const [playbackMode, setPlaybackMode] = useState("");
   const [autoSelectedFromPreference, setAutoSelectedFromPreference] = useState(false);
   const [itemProgressMap, setItemProgressMap] = useState({});
@@ -399,11 +441,32 @@ function App() {
       return undefined;
     }
 
-    // Connected to a television, nothing loads here. Opening a title
-    // auto-selects the source this account last used, and letting that start a
-    // video in this tab would contradict the whole point of being connected —
-    // two things playing at once, in two rooms.
-    if (cast.target) {
+    // Connected to a television, this is where playback goes there instead of
+    // starting here — two things playing at once, in two rooms, is exactly what
+    // being connected is meant to avoid.
+    //
+    // It happens on the source becoming active rather than in the handler for
+    // picking one, because most playback never goes through that handler: open
+    // a title and the source this account last used is chosen for it. Sending
+    // only on a tap left the common path suppressing the local player and
+    // telling the television nothing, so nothing played anywhere.
+    //
+    // A send that does not go out falls through to playing here, rather than
+    // leaving a title that opened onto silence.
+    if (castTargetId && sendToTelevision(activeSource)) {
+      // Choosing a television in the middle of watching hands the episode over,
+      // so this tab has to actually stop — otherwise the same episode runs in
+      // two rooms, which is the one thing being connected is meant to prevent.
+      // hls.js is destroyed rather than paused because a paused instance goes
+      // on filling its buffer from the network; the instance is normally kept
+      // alive across source changes for Picture-in-Picture, but a hand-off is
+      // not a source change and that window should close with the playback.
+      video.onerror = null;
+      video.pause();
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+      video.removeAttribute("src");
+      video.load();
       return undefined;
     }
 
@@ -502,7 +565,10 @@ function App() {
 
     setPlayerError(t.statusError);
     return undefined;
-  }, [activeSource, cast.target]);
+    // The session id, not the device object: that object is rebuilt from the
+    // receiver list every time the server republishes it, and an effect that
+    // now sends a play command must not re-fire on a list that has not changed.
+  }, [activeSource, castTargetId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -804,6 +870,16 @@ function App() {
     }
     return { prev, next: null };
   }, [itemDetail, episodes, selectedEpisode, selectedSeason]);
+
+  // What the television needs to be told, kept where the player effect can read
+  // it without depending on it. Naming these as dependencies would restart the
+  // set every time a progress ping came back with a new record.
+  castStateRef.current = {
+    play: cast.play,
+    payload: currentPlaybackPayload,
+    resume: resumeProgress,
+    nextEpisodeLabel: episodeNeighbours?.next?.label || null,
+  };
 
   // ── watch-panel rows ────────────────────────────────────────
   // WatchPanels stays presentational, so the progress bookkeeping and the two
@@ -1415,28 +1491,8 @@ function App() {
   async function handleSelectSource(source) {
     setAutoSelectedFromPreference(false);
     await saveSourcePreference(source);
-
-    // Where playback goes. Being connected to a television is app-wide state,
-    // so the decision belongs here rather than in a second button: once one is
-    // chosen, picking a source sends it there instead of starting a player in
-    // this tab.
-    if (cast.target && currentPlaybackPayload) {
-      const sent = cast.play({
-        ...currentPlaybackPayload,
-        sourceLabel: source.sourceLabel,
-        directUrl: source.directUrl || source.url,
-        // The same thirty-second rewind the local player applies, so handing a
-        // title to a television lands where it would have landed here.
-        resumeAtSeconds: resumeProgress?.isCompleted
-          ? 0
-          : Math.max(0, (resumeProgress?.positionSeconds || 0) - 30),
-        nextEpisodeLabel: episodeNeighbours?.next?.label || null,
-      });
-      if (sent) return;
-      // Nothing went out — fall through and play here rather than leaving a
-      // tap that did nothing at all.
-    }
-
+    // Where playback goes — here or on the television — is decided by the
+    // player effect, which sees automatic picks as well as this one.
     setActiveSource(source);
   }
 

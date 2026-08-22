@@ -21,6 +21,47 @@ let receivers = [];
 let targetId = null;
 let unsubscribe = null;
 
+/**
+ * How many times "Stop" has been pressed this page.
+ *
+ * Both "Stop" and "Play here" end with no television, so nothing downstream can
+ * tell them apart by looking at the target — and they mean opposite things.
+ * "Play here" is a request to carry on in this tab; "Stop" is a request for
+ * nothing to be playing anywhere, and a watch page that started its own player
+ * the moment the television let go would be the one thing it did not ask for.
+ * A counter rather than a flag, so a second Stop is distinguishable from the
+ * first without anyone having to clear it.
+ */
+let stopCount = 0;
+
+/**
+ * The chosen television, remembered across a page load.
+ *
+ * Held in memory alone this was lost by anything that reloads the document — a
+ * refresh, a shared link, reopening the tab — and the failure was silent: the
+ * next Play came out of the laptop instead of the television, which on a sofa
+ * is a surprise rather than a fallback.
+ */
+const TARGET_KEY = "streamhub.castTarget";
+
+function rememberTarget(sessionId) {
+  try {
+    if (sessionId) localStorage.setItem(TARGET_KEY, sessionId);
+    else localStorage.removeItem(TARGET_KEY);
+  } catch {
+    // Private browsing and a full disk both land here; forgetting the choice is
+    // the old behaviour, which is survivable.
+  }
+}
+
+function rememberedTarget() {
+  try {
+    return localStorage.getItem(TARGET_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function publish() {
   for (const listener of listeners) listener();
 }
@@ -30,6 +71,19 @@ function ensureSubscribed() {
   unsubscribe = subscribeRealtime((event) => {
     if (event?.type !== "receivers") return;
     receivers = Array.isArray(event.receivers) ? event.receivers : [];
+
+    // Restored only against a television that is actually on the list. A
+    // session id belongs to one socket, so a set that has been switched off and
+    // on again has a new one — reattaching to the old id would leave this tab
+    // showing a remote for something that cannot hear it.
+    if (!targetId) {
+      const remembered = rememberedTarget();
+      if (remembered && receivers.some((receiver) => receiver.sessionId === remembered)) {
+        targetId = remembered;
+      } else if (remembered && receivers.length) {
+        rememberTarget(null);
+      }
+    }
     publish();
   });
 }
@@ -70,12 +124,16 @@ export function useCast() {
 
   const connect = useCallback((sessionId) => {
     targetId = sessionId;
+    rememberTarget(sessionId);
     publish();
   }, []);
 
   /** Stops driving it but leaves it playing — walking away is not a stop. */
   const disconnect = useCallback(() => {
     targetId = null;
+    // Forgotten deliberately: choosing to play here again must not be undone by
+    // the next reload reattaching to the television.
+    rememberTarget(null);
     publish();
   }, []);
 
@@ -109,6 +167,8 @@ export function useCast() {
   const stop = useCallback(() => {
     command({ action: "stop" });
     targetId = null;
+    rememberTarget(null);
+    stopCount += 1;
     publish();
   }, [command]);
 
@@ -120,6 +180,8 @@ export function useCast() {
     disconnect,
     play,
     stop,
+    /** Rises by one each time Stop is pressed. See `stopCount`. */
+    stopped: stopCount,
     pause: useCallback(() => command({ action: "pause" }), [command]),
     resume: useCallback(() => command({ action: "resume" }), [command]),
     next: useCallback(() => command({ action: "next" }), [command]),

@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -108,6 +110,13 @@ fun HomeScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val firstAction = remember { FocusRequester() }
 
+    // Signing out is one centre press from the row a remote lands on, and on a
+    // television undoing it is not a matter of typing a password again — it
+    // means pairing the set from another device. So it asks first, and the
+    // answer it offers is "keep me signed in".
+    var confirmingSignOut by remember { mutableStateOf(false) }
+    val cancelSignOut = remember { FocusRequester() }
+
     // Something must be focused when the screen appears, or the first press of
     // any direction key goes nowhere and the remote feels broken.
     LaunchedEffect(Unit) { runCatching { firstAction.requestFocus() } }
@@ -141,7 +150,25 @@ fun HomeScreen(
                     onClick = onSearch,
                     modifier = Modifier.focusRequester(firstAction),
                 )
-                TvButton(label = "Sign out", onClick = onSignOut)
+
+                if (confirmingSignOut) {
+                    Text(
+                        "Sign out of this television?",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // Focus lands on staying signed in, so a second reflexive
+                    // press of the centre key cancels rather than confirms.
+                    TvButton(
+                        label = "Stay signed in",
+                        onClick = { confirmingSignOut = false },
+                        modifier = Modifier.focusRequester(cancelSignOut),
+                    )
+                    TvButton(label = "Sign out", onClick = onSignOut)
+                    LaunchedEffect(Unit) { runCatching { cancelSignOut.requestFocus() } }
+                } else {
+                    TvButton(label = "Sign out", onClick = { confirmingSignOut = true })
+                }
             }
         }
 
