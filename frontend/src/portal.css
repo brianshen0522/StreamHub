@@ -1265,3 +1265,25 @@ body.has-cast-bar .usr-body-flush {
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
+
+/* The clear cross inside a text field. Big enough for a finger, quiet enough
+   not to read as part of the value. */
+.usr-input-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--usr-fg-3);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.usr-input-clear:hover { background: var(--usr-panel-2); color: var(--usr-fg); }
+.usr-code-clear { right: 10px; top: auto; bottom: 7px; transform: none; }
+.usr-searchbox input { padding-right: 32px; }

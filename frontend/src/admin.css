@@ -1371,3 +1371,21 @@
   .adm-danger-zone { flex-direction: column; align-items: stretch; }
   .adm-toolbar .adm-select { width: 100%; min-width: 0; }
 }
+
+.adm-input-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--adm-fg-3);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.adm-input-clear:hover { background: var(--adm-line); color: var(--adm-fg); }
+.adm-search .adm-input { padding-right: 30px; }

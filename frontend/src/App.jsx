@@ -1793,9 +1793,31 @@ function App() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            // The Enter that confirms an IME candidate is not a request to
+            // search: the field holds half romanization, half candidate at
+            // that moment, and Safari happily submits the form on it. 229 is
+            // the legacy keyCode every composing keystroke reports.
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.nativeEvent.isComposing || e.keyCode === 229)) {
+                e.preventDefault();
+              }
+            }}
             placeholder={t.searchPlaceholder}
             aria-label={t.searchPlaceholder}
           />
+          {query ? (
+            <button
+              type="button"
+              className="usr-input-clear"
+              onClick={(e) => {
+                setQuery("");
+                e.currentTarget.closest(".usr-searchbox")?.querySelector("input")?.focus();
+              }}
+              aria-label={t.clearInput}
+            >
+              ×
+            </button>
+          ) : null}
         </div>
         <button type="submit" className="usr-btn usr-btn-primary" disabled={searching}>
           {searching ? t.loadingResults : t.searchButton}

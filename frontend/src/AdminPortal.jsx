@@ -173,6 +173,11 @@ function SearchInput({ value, onChange, placeholder }) {
     <div className="adm-search">
       <IconSearch />
       <input className="adm-input" name="search" type="search" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      {value ? (
+        <button type="button" className="adm-input-clear" onClick={() => onChange("")} aria-label="Clear">
+          ×
+        </button>
+      ) : null}
     </div>
   );
 }
