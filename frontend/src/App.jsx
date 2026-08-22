@@ -10,6 +10,7 @@ import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
+import ImeSafeInput from "./ImeSafeInput.jsx";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -1839,11 +1840,11 @@ function App() {
             <circle cx="11" cy="11" r="6.5" />
             <path d="m20 20-3.6-3.6" />
           </svg>
-          <input
+          <ImeSafeInput
             name="q"
             type="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onValueChange={setQuery}
             // The Enter that confirms an IME candidate is not a request to
             // search: the field holds half romanization, half candidate at
             // that moment, and Safari happily submits the form on it. 229 is

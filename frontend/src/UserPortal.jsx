@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { CastBar } from "./CastControls.jsx";
+import ImeSafeInput from "./ImeSafeInput.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
 import { subscribeRealtime } from "./realtime.js";
@@ -688,7 +689,7 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
             <form className="usr-form" onSubmit={saveProfile}>
               <label className="usr-field">
                 <span className="usr-label">{t.profDisplayName}</span>
-                <input className="usr-input" name="displayName" value={form.displayName} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} />
+                <ImeSafeInput className="usr-input" name="displayName" value={form.displayName} onValueChange={(value) => setForm((current) => ({ ...current, displayName: value }))} />
               </label>
               <label className="usr-field">
                 <span className="usr-label">{t.profUsername}</span>
