@@ -110,7 +110,6 @@ export default function VideoPlayer({
   onCreatePreview,
   onDownload,
   download,
-  downloadStreamsToDisk,
   t,
 }) {
   const frameRef = useRef(null);
@@ -935,7 +934,11 @@ export default function VideoPlayer({
               onClick={onDownload}
               title={download?.active
                 ? t.dlCancel
-                : downloadStreamsToDisk ? t.dlDownload : t.dlDownloadMemory}
+                : download?.finished
+                  ? t.dlSaveAgain
+                  : download?.partial
+                    ? t.dlResume.replace("{p}", download.partial)
+                    : t.dlDownload}
               aria-label={download?.active ? t.dlCancel : t.dlDownload}
             >
               {download?.active ? <IconStop /> : <IconDownload />}
