@@ -8,6 +8,8 @@ import com.streamhub.core.net.RealtimeEvent
 import com.streamhub.core.net.SessionStore
 import com.streamhub.core.net.StreamHubApi
 import com.streamhub.mobile.cast.CastController
+import com.streamhub.mobile.downloads.DownloadService
+import com.streamhub.mobile.downloads.DownloadsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,5 +68,18 @@ class AppContainer(context: Context) {
      */
     val cast: CastController by lazy {
         CastController(realtime, realtimeEvents, scope)
+    }
+
+    /**
+     * Downloads survive the process, so their owner is the container rather
+     * than any screen. The service runs exactly while something is moving —
+     * that callback is the only coupling between the two.
+     */
+    val downloads: DownloadsRepository by lazy {
+        DownloadsRepository(
+            context = appContext,
+            api = api,
+            onActiveChanged = { count -> DownloadService.update(appContext, count) },
+        )
     }
 }

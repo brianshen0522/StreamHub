@@ -52,10 +52,14 @@ export function createAdFilterLoader(Hls, onResult) {
           try {
             if (typeof response.data === "string") {
               const result = stripAds(response.data, response.url || ctx?.url || "");
-              if (result.cuts.length) {
-                response.data = result.text;
-                onResult?.(result);
-              }
+              if (result.cuts.length) response.data = result.text;
+              // Reported whether or not anything was found, so a playlist with
+              // no breaks in it clears the marks left by the one before rather
+              // than leaving them on a timeline they no longer describe. Master
+              // playlists and audio renditions are excluded by the `#EXTINF`
+              // test inside stripAds, which returns "not-a-media-playlist" —
+              // otherwise loading either of those would wipe the video's marks.
+              if (result.reason !== "not-a-media-playlist") onResult?.(result);
             }
           } catch {
             // Never let filtering break playback — fall through with the original.

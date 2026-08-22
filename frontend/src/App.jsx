@@ -9,7 +9,7 @@ import VideoPlayer from "./VideoPlayer.jsx";
 import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
-import { canStreamToDisk, downloadStream } from "./download.js";
+import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -501,6 +501,24 @@ function App() {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         void video.play().catch(() => {});
       });
+      // Where a break was is known twice over: as a sum of #EXTINF values, and
+      // as the index of the segment that follows it. Once hls.js has the level
+      // it can be asked where that segment actually starts, and its answer is
+      // the timeline the seek bar is drawn against — the sum is not, from the
+      // first discontinuity onwards, because after one of those the player
+      // times the rest from the media's own timestamps. Re-anchoring here is
+      // what stops a mark sitting a little further off the longer an episode
+      // runs.
+      hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+        const fragments = data?.details?.fragments;
+        if (!fragments?.length) return;
+        setAdCuts((cuts) => cuts.map((cut) => {
+          const fragment = fragments[cut.segment];
+          return fragment && Number.isFinite(fragment.start)
+            ? { ...cut, at: fragment.start }
+            : cut;
+        }));
+      });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) onFatalError?.(hls);
       });
@@ -758,8 +776,23 @@ function App() {
     };
   }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt]);
 
+  /** The same identity rule as the phone app: one download per episode-and-source. */
+  const downloadIdentityFor = useCallback(async () => {
+    if (!selectedItem || !activeSource) return null;
+    return downloadIdentity({
+      providerKey: selectedItem.provider,
+      itemUrl: selectedItem.url,
+      seasonUrl: selectedSeason?.url || itemDetail?.seasonUrl || null,
+      episodeLabel: selectedEpisode || null,
+      sourceLabel: activeSource.sourceLabel || null,
+    });
+  }, [selectedItem, activeSource, selectedSeason, itemDetail, selectedEpisode]);
+
   const handleDownload = useCallback(async () => {
     if (download?.active) {
+      // Stopping keeps every segment already fetched; the button turns into
+      // "resume from N%". Losing 80% to a mis-tap is the old behaviour, and
+      // it is the one thing this feature exists to not do.
       downloadAbortRef.current?.abort();
       return;
     }
@@ -768,9 +801,20 @@ function App() {
     const url = activeSource.directUrl || activeSource.url || activeSource.proxyUrl;
     if (!url) return;
 
+    const id = await downloadIdentityFor();
+    if (!id) return;
+
+    // A finished download whose automatic save was swallowed: this click is a
+    // real gesture, so save it now.
+    if (download?.finished) {
+      const saved = await saveFinishedDownload(id);
+      if (saved) setDownload({ active: false, percent: 100, label: t.dlDone });
+      return;
+    }
+
     const controller = new AbortController();
     downloadAbortRef.current = controller;
-    setDownload({ active: true, percent: 0, label: t.dlPreparing });
+    setDownload({ active: true, percent: download?.partial ?? 0, label: t.dlPreparing });
 
     const name = [
       itemDetail?.title || selectedItem?.title,
@@ -778,8 +822,10 @@ function App() {
       activeSource.sourceLabel,
     ].filter(Boolean).join(" ");
 
+    let lastPercent = download?.partial ?? 0;
     try {
       const result = await downloadStream({
+        id,
         url,
         fileName: name,
         signal: controller.signal,
@@ -788,7 +834,12 @@ function App() {
             setDownload({ active: true, percent: 0, label: t.dlPreparing });
             return;
           }
+          if (phase === "assembling") {
+            setDownload({ active: true, percent: 100, label: t.dlAssembling });
+            return;
+          }
           const percent = total ? Math.round((done / total) * 100) : 0;
+          lastPercent = percent;
           setDownload({
             active: phase !== "done",
             percent,
@@ -804,19 +855,39 @@ function App() {
           : t.dlDone,
       });
     } catch (error) {
-      // A cancelled save-picker or an aborted transfer is not a failure.
-      const cancelled = error?.name === "AbortError" || error?.name === "NotAllowedError";
-      setDownload(cancelled ? null : { active: false, percent: 0, error: error.message });
+      if (error?.name === "AbortError") {
+        // Not a failure and not gone: the partial sits in storage, and saying
+        // so beside the resume percentage is the promise that it does.
+        setDownload({ active: false, percent: lastPercent, partial: lastPercent,
+          label: t.dlPaused.replace("{p}", lastPercent) });
+      } else {
+        setDownload({ active: false, percent: 0, partial: lastPercent, error: error.message });
+      }
     } finally {
       downloadAbortRef.current = null;
     }
-  }, [download, activeSource, itemDetail, selectedItem, selectedEpisode, t]);
+  }, [download, activeSource, itemDetail, selectedItem, selectedEpisode, downloadIdentityFor, t]);
 
-  // Clear any finished/failed notice when the episode or source changes.
+  // Switching source or episode stops the transfer but keeps its storage, then
+  // asks what is already on disk for the new one — so coming back to a
+  // half-downloaded source greets you with "resume from N%", including after a
+  // full page reload.
   useEffect(() => {
     downloadAbortRef.current?.abort();
     setDownload(null);
-  }, [activeSource]);
+    let stale = false;
+    (async () => {
+      const id = await downloadIdentityFor();
+      if (!id || stale) return;
+      const partial = await partialDownload(id);
+      if (stale || !partial) return;
+      setDownload(partial.finished
+        ? { active: false, percent: 100, finished: true, label: t.dlSaveAgain }
+        : { active: false, percent: partial.percent, partial: partial.percent,
+            label: t.dlPaused.replace("{p}", partial.percent) });
+    })();
+    return () => { stale = true; };
+  }, [activeSource, downloadIdentityFor, t]);
 
   // Builds the scrub-preview stream. Kept here because App owns hls.js and the
   // ad filter — the preview must use the *same* filter or its timeline would be
@@ -1746,7 +1817,6 @@ function App() {
                     onCreatePreview={createPreview}
                     onDownload={handleDownload}
                     download={download}
-                    downloadStreamsToDisk={canStreamToDisk()}
                     t={t}
                     title={itemDetail?.title || selectedItem.title}
                     subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}

@@ -50,6 +50,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -129,7 +130,14 @@ fun PlayerScreen(
         // a master playlist causes — and a token that lapses mid-playback is
         // renewed by the same single-flight refresher rather than ending the
         // stream.
-        val dataSourceFactory = OkHttpDataSource.Factory(api.authenticatedClient)
+        // OkHttp for the network, but wrapped: OkHttp refuses file:// URIs
+        // outright, and a downloaded episode is exactly that. The default
+        // factory routes each scheme to the right reader and hands http(s) to
+        // the OkHttp one.
+        val dataSourceFactory = DefaultDataSource.Factory(
+            context,
+            OkHttpDataSource.Factory(api.authenticatedClient),
+        )
 
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -143,11 +151,18 @@ fun PlayerScreen(
                 // rather than .m3u8, so without the hint it picks the progressive
                 // source, fails to sniff the playlist with file extractors and
                 // dies with UnrecognizedInputFormatException.
+                // A downloaded episode is a plain file on this phone: no
+                // manifest to fetch, no HLS to hint, nothing behind auth.
+                val isLocal = request.directUrl.startsWith("file:")
                 setMediaItem(
-                    MediaItem.Builder()
-                        .setUri(api.manifestUrl(request.directUrl))
-                        .setMimeType(MimeTypes.APPLICATION_M3U8)
-                        .build()
+                    if (isLocal) {
+                        MediaItem.fromUri(request.directUrl)
+                    } else {
+                        MediaItem.Builder()
+                            .setUri(api.manifestUrl(request.directUrl))
+                            .setMimeType(MimeTypes.APPLICATION_M3U8)
+                            .build()
+                    }
                 )
                 if (request.resumeAtSeconds > 0) seekTo(request.resumeAtSeconds * 1000L)
                 prepare()
@@ -158,7 +173,11 @@ fun PlayerScreen(
     // Where the ads were, so the scrub bar can mark them. The picture jumps at
     // each splice, and an unexplained jump reads as a broken stream.
     LaunchedEffect(request.directUrl) {
-        adCuts = runCatching { api.adCuts(request.directUrl).cuts }.getOrDefault(emptyList())
+        // A local file already had its ads cut when it was downloaded, and
+        // asking the server about a file:// path would just 400.
+        if (!request.directUrl.startsWith("file:")) {
+            adCuts = runCatching { api.adCuts(request.directUrl).cuts }.getOrDefault(emptyList())
+        }
     }
 
     LaunchedEffect(player) {

@@ -3,7 +3,25 @@
   A release build talks to one server over HTTPS, so plain HTTP is refused
   outright. The debug source set overrides this file to allow cleartext, because
   local work points the app at a server on the development machine.
+
+  The two bundled roots are what make Android 7 usable at all. Its trust store
+  was fixed in 2016 and has neither ISRG root, and every host this app touches —
+  the server itself and all four provider CDNs — is certified by Let's Encrypt.
+  Without these the app installs on Android 7 and then cannot sign in or fetch a
+  single video segment: TLS fails with "Trust anchor for certification path not
+  found", which surfaces as a player that simply never starts.
+
+  X1 and X2 both, because the chains differ: the CDNs come up through Root YR to
+  ISRG Root X1 and the server through Root YE to ISRG Root X2. The system store
+  is listed as well, so newer Androids keep using their own, current anchors and
+  nothing here narrows what they already trust.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>
