@@ -69,8 +69,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = 24
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.4.1"
 
         buildConfigField("String", "GIT_SHA", "\"${gitSha()}\"")
         buildConfigField("String", "SERVER_URL", "\"${serverUrl()}\"")
@@ -101,6 +101,7 @@ android {
 
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    implementation(libs.conscrypt.android)
     implementation(project(":core"))
 
     implementation(libs.androidx.core.ktx)

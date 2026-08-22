@@ -1,6 +1,7 @@
 [versions]
 agp = "9.3.1"
 desugarJdkLibs = "2.1.5"
+conscrypt = "2.5.2"
 kotlin = "2.4.10"
 coreKtx = "1.19.0"
 lifecycle = "2.11.0"
@@ -60,6 +61,7 @@ okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver",
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+conscrypt-android = { module = "org.conscrypt:conscrypt-android", version.ref = "conscrypt" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
