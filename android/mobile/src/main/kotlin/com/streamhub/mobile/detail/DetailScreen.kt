@@ -19,6 +19,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,7 @@ fun DetailScreen(
     posterUrl: (String) -> String?,
     onBack: () -> Unit,
     onPlay: (Source) -> Unit,
+    onDownload: (Source) -> Unit,
     /** The cast button, supplied by the host so this screen stays unaware of it. */
     castAction: @Composable () -> Unit = {},
 ) {
@@ -140,6 +142,17 @@ fun DetailScreen(
                 items(state.sources, key = { it.sourceLabel + it.directUrl }) { source ->
                     ListItem(
                         headlineContent = { Text(source.sourceLabel) },
+                        // Tapping the row plays; the trailing arrow saves. Both
+                        // fetch the same cleaned playlist, so what is saved is
+                        // exactly what would have played - ads already cut.
+                        trailingContent = {
+                            IconButton(onClick = { onDownload(source) }) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Download " + source.sourceLabel,
+                                )
+                            }
+                        },
                         supportingContent = {
                             Text(
                                 text = source.describe(),

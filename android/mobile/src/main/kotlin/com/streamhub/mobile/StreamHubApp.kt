@@ -27,6 +27,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -75,6 +77,7 @@ private enum class Destination(val route: String, val label: String, val icon: I
 private const val ROUTE_DETAIL = "detail"
 private const val ROUTE_PLAYER = "player"
 private const val ROUTE_REMOTE = "remote"
+private const val ROUTE_DOWNLOADS = "downloads"
 
 @Composable
 fun StreamHubApp(container: AppContainer) {
@@ -139,6 +142,10 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
         )
     }
 
+    // One rail for passing notices up from any screen; starting a download is
+    // the first thing that talks through it.
+    val snackbar = remember { SnackbarHostState() }
+
     /**
      * Where Play goes. Casting is app-wide state, so the decision belongs here
      * rather than in each screen: once a television is chosen, every Play in
@@ -162,6 +169,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
     val showTabs = Destination.entries.any { it.route == route }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             if (!showTabs) return@Scaffold
             Column {
@@ -284,6 +292,16 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         posterUrl = posterUrl,
                         onBack = { navController.popBackStack() },
                         onPlay = { source -> startPlayback(detailViewModel.playbackFor(source)) },
+                        onDownload = { source ->
+                            val request = detailViewModel.playbackFor(source)
+                            scope.launch {
+                                val outcome = runCatching { container.downloads.start(request) }
+                                snackbar.showSnackbar(
+                                    if (outcome.isSuccess) "Downloading — see Settings › Downloads"
+                                    else "Could not start the download.",
+                                )
+                            }
+                        },
                         castAction = castAction,
                     )
                 }
@@ -312,6 +330,37 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                         onBack = { navController.popBackStack() },
                     )
                 }
+            }
+            composable(ROUTE_DOWNLOADS) {
+                com.streamhub.mobile.downloads.DownloadsScreen(
+                    repository = container.downloads,
+                    onBack = { navController.popBackStack() },
+                    onPlay = { record ->
+                        // Straight to the local player, not through startPlayback:
+                        // that would offer the file to a connected television,
+                        // and a path on this phone means nothing to a television.
+                        container.handover.playback = (
+                            PlaybackRequest(
+                                providerKey = record.providerKey,
+                                mediaType = record.mediaType,
+                                title = record.title,
+                                posterUrl = record.posterUrl,
+                                itemUrl = record.itemUrl,
+                                seasonUrl = record.seasonUrl,
+                                seasonLabel = record.seasonLabel,
+                                episodeLabel = record.episodeLabel,
+                                sourceLabel = record.sourceLabel,
+                                // The local file. The player spots the scheme and
+                                // plays it directly instead of asking the server
+                                // for a manifest it does not need.
+                                directUrl = android.net.Uri.fromFile(container.downloads.mediaFile(record.id)).toString(),
+                                durationSeconds = record.totalDurationSeconds.toInt(),
+                                resumeAtSeconds = 0,
+                            )
+                        )
+                        navController.navigate(ROUTE_PLAYER)
+                    },
+                )
             }
             composable(ROUTE_REMOTE) {
                 val active = castTarget
@@ -395,6 +444,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 // in the list below without anyone having to ask.
                 val devicesViewModel = viewModel { DevicesViewModel(container) }
                 ProfileScreen(
+                    onOpenDownloads = { navController.navigate(ROUTE_DOWNLOADS) },
                     user = session.user,
                     serverUrl = container.serverUrl,
                     buildId = BuildConfig.GIT_SHA,
