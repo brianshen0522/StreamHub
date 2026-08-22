@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useCast } from "./cast.js";
 
 /**
@@ -20,7 +21,12 @@ import { useCast } from "./cast.js";
  */
 function Scrim({ onClose, children }) {
   const pressedHere = useRef(false);
-  return (
+  // Rendered into <body>, not in place. The cast button lives inside the
+  // topbar, and the topbar's backdrop-filter makes it the containing block for
+  // any fixed-position descendant — so "inset: 0" meant the topbar's box, and
+  // the sheet drew pinned to the top of the screen, clipped, with its scrim
+  // dimming a 56px strip. A portal is immune to what any ancestor declares.
+  return createPortal(
     <div
       className="cast-scrim"
       role="dialog"
@@ -32,7 +38,8 @@ function Scrim({ onClose, children }) {
       }}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -225,6 +225,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     viewModel = viewModel { SearchViewModel(container) },
                     modifier = tabPadding,
                     posterUrl = posterUrl,
+                    castAction = castAction,
                     onOpen = { item ->
                         container.handover.selection = MediaSelection(
                             provider = item.provider,

@@ -52,27 +52,37 @@ fun SearchScreen(
     posterUrl: (String) -> String?,
     onOpen: (SearchItem) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * The cast button, beside the search bar — the same spot the web keeps it.
+     * This tab is where the app opens, so a television that another client is
+     * already driving has to be visible and joinable from here, not only from
+     * inside a title's detail page.
+     */
+    castAction: @Composable () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(modifier = modifier.fillMaxSize()) {
-        SearchBar(
-            inputField = {
-                SearchBarDefaults.InputField(
-                    query = state.query,
-                    onQueryChange = viewModel::onQueryChange,
-                    onSearch = { viewModel.search() },
-                    expanded = false,
-                    onExpandedChange = {},
-                    placeholder = { Text("Search films and series") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                )
-            },
-            expanded = false,
-            onExpandedChange = {},
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            content = {},
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SearchBar(
+                inputField = {
+                    SearchBarDefaults.InputField(
+                        query = state.query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSearch = { viewModel.search() },
+                        expanded = false,
+                        onExpandedChange = {},
+                        placeholder = { Text("Search films and series") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    )
+                },
+                expanded = false,
+                onExpandedChange = {},
+                modifier = Modifier.weight(1f).padding(start = 12.dp, end = 4.dp),
+                content = {},
+            )
+            castAction()
+        }
 
         SourceFilter(
             state = state,
