@@ -100,16 +100,17 @@ function ensureSubscribed() {
     if (event?.type !== "receivers") return;
     receivers = Array.isArray(event.receivers) ? event.receivers : [];
 
-    // Restored only against a television that is actually on the list. A
-    // session id belongs to one socket, so a set that has been switched off and
-    // on again has a new one — reattaching to the old id would leave this tab
-    // showing a remote for something that cannot hear it.
+    // Restored only against a receiver that is actually on the list — and the
+    // memory survives the receiver being momentarily absent. A browser
+    // receiver disappears on every page navigation and whenever it is idle,
+    // so "not in this frame" cannot mean "gone for good"; wiping here used to
+    // make a controller that reloaded at the wrong instant forget its device
+    // permanently. The memory is cleared where the person acts instead:
+    // disconnect, stop, and choosing to play here all forget the target.
     if (!targetId) {
       const remembered = rememberedTarget();
       if (remembered && receivers.some((receiver) => receiver.sessionId === remembered)) {
         targetId = remembered;
-      } else if (remembered && receivers.length) {
-        rememberTarget(null);
       }
     }
 

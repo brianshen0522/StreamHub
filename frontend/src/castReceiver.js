@@ -94,6 +94,11 @@ export function useBrowserReceiver({ active, getState, onCommand }) {
   }, [active]);
 
   useEffect(() => {
+    // A closing tab cannot rely on React cleanup, and an unreleased lease
+    // makes the session's next tab wait out the TTL before it may announce.
+    // pagehide fires on close and on navigation away — both are moments this
+    // tab stops being able to hold the role.
+    window.addEventListener("pagehide", releaseLease);
     const unsubscribe = subscribeRealtime((event) => {
       if (event?.type !== "command" || !event.command) return;
       // Addressed to this session; only the leaseholder answers, or every tab
@@ -106,6 +111,7 @@ export function useBrowserReceiver({ active, getState, onCommand }) {
       commandRef.current(event.command);
     });
     return () => {
+      window.removeEventListener("pagehide", releaseLease);
       unsubscribe();
       releaseLease();
     };

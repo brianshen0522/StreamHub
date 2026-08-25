@@ -1108,6 +1108,12 @@ function App() {
           // a web page is allowed to go.
           const playback = command.playback || {};
           if (!playback.itemUrl || !playback.provider) break;
+          // A page holding some other device's remote is still a valid target:
+          // being told to play *here* means putting that remote down first —
+          // walking away, not stopping what the other device is showing.
+          // Without this, the player effect defers to the held target and the
+          // command lands as a detail page with nothing playing.
+          if (castTargetId) cast.disconnect();
           void handlers.handleSelectItem(
             {
               url: playback.itemUrl,
