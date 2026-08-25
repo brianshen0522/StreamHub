@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { sendRealtime, subscribeRealtime } from "./realtime.js";
+import { getRealtimeSessionId, sendRealtime, subscribeRealtime } from "./realtime.js";
 
 /**
  * Driving a television from this browser.
@@ -148,6 +148,19 @@ export function useCast() {
     [receivers, receivers.length],
   );
 
+  /**
+   * Everything this client may drive: televisions, and now any browser that
+   * has taken the receiver role — the server never cared which kind of device
+   * announces itself, the television was merely the first. The one exclusion
+   * is this session's own announcement, because a remote for oneself is a
+   * hall of mirrors.
+   */
+  const controllable = useMemo(
+    () => receivers.filter((receiver) => receiver.sessionId !== getRealtimeSessionId()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [receivers, receivers.length],
+  );
+
   // Derived rather than stored: a television that drops off the socket must not
   // leave this tab showing controls for something that is no longer listening.
   const target = receivers.find((receiver) => receiver.sessionId === targetId) ?? null;
@@ -209,6 +222,7 @@ export function useCast() {
 
   return {
     televisions,
+    controllable,
     target,
     lost,
     /**

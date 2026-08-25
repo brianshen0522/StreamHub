@@ -68,7 +68,7 @@ function CastGlyph({ on }) {
 export function CastButton({ t }) {
   const cast = useCast();
 
-  if (!cast.televisions.length && !cast.target) return null;
+  if (!cast.controllable.length && !cast.target) return null;
 
   return (
     <>
@@ -76,8 +76,8 @@ export function CastButton({ t }) {
         type="button"
         className={`cast-btn${cast.target ? " cast-btn-on" : ""}`}
         onClick={cast.openPicker}
-        title={t?.castTo || "Play on a television"}
-        aria-label={t?.castTo || "Play on a television"}
+        title={t?.castTo || "Play on another device"}
+        aria-label={t?.castTo || "Play on another device"}
       >
         <CastGlyph on={Boolean(cast.target)} />
       </button>
@@ -110,7 +110,7 @@ function CastPicker({ cast, t, onClose }) {
           </span>
         </button>
 
-        {cast.televisions.map((receiver) => (
+        {cast.controllable.map((receiver) => (
           <button
             key={receiver.sessionId}
             type="button"

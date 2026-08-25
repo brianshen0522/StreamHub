@@ -9,7 +9,7 @@ struct CastButton: View {
     @State private var picking = false
 
     var body: some View {
-        if !cast.televisions.isEmpty || cast.target != nil {
+        if !cast.controllable.isEmpty || cast.target != nil {
             Button { picking = true } label: {
                 Image(systemName: cast.target == nil
                       ? "airplayvideo"
@@ -48,7 +48,7 @@ struct CastPicker: View {
                         dismiss()
                     }
 
-                    ForEach(cast.televisions) { receiver in
+                    ForEach(cast.controllable) { receiver in
                         row(
                             name: receiver.deviceName,
                             detail: receiver.state?.title.map { "Playing \($0)" } ?? "Ready",

@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import ImeSafeInput from "./ImeSafeInput.jsx";
 import { useSearchParams } from "react-router-dom";
 import { apiJson } from "./api.js";
 import { fmt } from "./i18n.js";
@@ -143,19 +144,15 @@ export default function LinkTvPage({ setTopbar, t }) {
             >
               <label className="usr-field" style={{ position: "relative" }}>
                 <span className="usr-label">{t.linkCodeLabel}</span>
-                <input
-                  ref={inputRef}
+                <ImeSafeInput
+                  inputRef={inputRef}
                   className="usr-input usr-code-input"
                   value={code}
-                  // Untouched while an input method is composing: rewriting the
-                  // value mid-composition destroys the buffer, which is the
-                  // same fault both phone apps had in their own dress. The
-                  // transform runs when composition ends instead.
-                  onCompositionEnd={(event) => setCode(groupForDisplay(event.target.value))}
-                  onChange={(event) => {
-                    if (event.nativeEvent.isComposing) setCode(event.target.value);
-                    else setCode(groupForDisplay(event.target.value));
-                  }}
+                  // ImeSafeInput leaves the element alone while a composition
+                  // is open, so the transform only ever sees settled text —
+                  // rewriting mid-composition destroys the buffer, the same
+                  // fault both phone apps once had in their own dress.
+                  onValueChange={(value) => setCode(groupForDisplay(value))}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) {
                       event.preventDefault();

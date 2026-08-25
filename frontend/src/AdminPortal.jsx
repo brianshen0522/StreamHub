@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ImeSafeInput from "./ImeSafeInput.jsx";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { apiFetch, apiJson, setStoredSession } from "./api.js";
 import "./admin.css";
@@ -172,7 +173,7 @@ function SearchInput({ value, onChange, placeholder }) {
   return (
     <div className="adm-search">
       <IconSearch />
-      <input className="adm-input" name="search" type="search" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      <ImeSafeInput className="adm-input" name="search" type="search" value={value} onValueChange={onChange} placeholder={placeholder} />
       {value ? (
         <button type="button" className="adm-input-clear" onClick={() => onChange("")} aria-label="Clear">
           ×
@@ -724,7 +725,7 @@ function UserDrawer({ detail, onClose, onChanged, toast, setError }) {
           {tab === "profile" ? (
             <form className="adm-form" onSubmit={saveProfile}>
               <Field label="Display name">
-                <input className="adm-input" name="displayName" value={form.displayName} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} />
+                <ImeSafeInput className="adm-input" name="displayName" value={form.displayName} onValueChange={(value) => setForm((current) => ({ ...current, displayName: value }))} />
               </Field>
               <div className="adm-form-row">
                 <Field label="Username">
@@ -1095,7 +1096,7 @@ function UsersPage({ setTopbar, toast }) {
       >
         <form className="adm-form" onSubmit={handleCreate}>
           <Field label="Display name">
-            <input className="adm-input" name="newDisplayName" value={createForm.displayName} onChange={(event) => setCreateForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="Alice Chen" />
+            <ImeSafeInput className="adm-input" name="newDisplayName" value={createForm.displayName} onValueChange={(value) => setCreateForm((current) => ({ ...current, displayName: value }))} placeholder="Alice Chen" />
           </Field>
           <div className="adm-form-row">
             <Field label="Username">
