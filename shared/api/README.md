@@ -234,7 +234,18 @@ by *session id*:
   receivers, or it will offer itself as a target.
 - Browser tabs of one login share one session id, so the web client elects a
   single tab per session (a lease in `localStorage`) to announce and to obey
-  commands; without that, one command would land on every tab at once.
+  commands; without that, one command would land on every tab at once. A tab
+  that is actually playing may take the lease from an idle one, never from
+  another playing one. The server additionally collapses the receivers list
+  to one row per session — the socket with the freshest announcement speaks
+  for it — so a tab that held the role earlier cannot linger as a stale
+  duplicate.
+
+The web app announces from the portal shell for as long as it is open — a
+null state while idle, the way a television on its home screen does — so an
+idle browser is listed and can be handed a title even before anything plays.
+A `play` arriving while the watch page is not mounted is stashed and honoured
+after navigating there.
 
 State frames are throttled server-side (dropped under 250 ms apart), so a
 receiver announcing "idle" right after its last heartbeat must delay that frame

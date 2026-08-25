@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { CastBar } from "./CastControls.jsx";
+import { stashPlayRequest, useReceiverPresence } from "./castReceiver.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
@@ -791,7 +792,20 @@ const RAIL_STORAGE_KEY = "streamhub.sidebar";
 
 export default function UserPortal({ session, setSession, onLogout }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [chrome, setChrome] = useState(null);
+
+  // While the web app is open it announces itself as a cast receiver, the way
+  // a television on its home screen does — so an idle browser appears in
+  // every picker and can be handed a title. A play that arrives while the
+  // watch page is not mounted is stashed and honoured after navigating there;
+  // when the watch page *is* mounted, it handles commands itself.
+  useReceiverPresence({
+    onPlay: (playback) => {
+      stashPlayRequest(playback);
+      navigate("/");
+    },
+  });
   // Collapsed by default, like YouTube's mini guide: the rail keeps the icons
   // reachable without spending 224px of every page on navigation.
   const [railCollapsed, setRailCollapsed] = useState(() => {
