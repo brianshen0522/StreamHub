@@ -99,7 +99,7 @@ unversioned paths; clients pin to `/api/v1`. Route groups:
 | `src/providers/*.js` | One scraper per provider + the registry |
 | `src/provider-access.js` | Global and per-user provider gating |
 | `src/monitoring.js` | Provider health poller (every 30 s, runs a real search) |
-| `src/realtime.js` | WebSocket fan-out at `/api/realtime`, and the phone-to-television command channel |
+| `src/realtime.js` | WebSocket fan-out at `/api/realtime`, and the device-to-device cast channel (any client that announces playback becomes a controllable receiver — televisions and browsers alike) |
 | `src/backup.js` | Whole-instance export and import, behind `/api/admin/backup` |
 | `src/device-auth.js` | Codes and expiry for signing a television in from a phone |
 | `src/cache.js` | Five LRU caches |

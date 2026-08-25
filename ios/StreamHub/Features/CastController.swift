@@ -54,8 +54,12 @@ final class CastController {
         }
     }
 
-    var televisions: [CastReceiver] {
-        receivers.filter(\.isTelevision)
+    /// Every device this phone may drive. Televisions were merely the first
+    /// kind — a browser that has taken the receiver role announces the same
+    /// way and answers the same commands. This phone never announces, so its
+    /// own session is never in the list.
+    var controllable: [CastReceiver] {
+        receivers
     }
 
     func connect(to receiver: CastReceiver) {

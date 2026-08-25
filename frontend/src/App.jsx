@@ -11,6 +11,7 @@ import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
+import { useBrowserReceiver } from "./castReceiver.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -1035,6 +1036,101 @@ function App() {
     nextEpisodeLabel: episodeNeighbours?.next?.label || null,
     prevEpisodeLabel: episodeNeighbours?.prev?.label || null,
   };
+
+  // ── the receiver role: this tab can be driven like a television ──────────
+  const receiverHandlersRef = useRef({});
+  receiverHandlersRef.current = {
+    goToNeighbour,
+    handleSelectItem,
+    neighbours: episodeNeighbours,
+    sourceLabel: activeSource?.sourceLabel || null,
+  };
+
+  useBrowserReceiver({
+    active: Boolean(activeSource) && !castTargetId,
+    getState: () => {
+      const video = videoRef.current;
+      const payload = castStateRef.current.payload;
+      const handlers = receiverHandlersRef.current;
+      if (!video || !payload) return null;
+      return {
+        provider: payload.providerKey,
+        itemUrl: payload.itemUrl,
+        title: payload.title,
+        subtitle: handlers.sourceLabel,
+        posterUrl: payload.posterUrl,
+        episodeLabel: payload.episodeLabel,
+        positionMs: Math.round((video.currentTime || 0) * 1000),
+        durationMs: Math.round((Number.isFinite(video.duration) ? video.duration : 0) * 1000),
+        paused: video.paused,
+        buffering: video.readyState < 3 && !video.paused,
+        hasNext: Boolean(handlers.neighbours?.next),
+        hasPrevious: Boolean(handlers.neighbours?.prev),
+      };
+    },
+    onCommand: (command) => {
+      const video = videoRef.current;
+      const handlers = receiverHandlersRef.current;
+      switch (command.action) {
+        case "pause":
+          video?.pause();
+          break;
+        case "resume":
+          void video?.play().catch(() => {});
+          break;
+        case "seek":
+          if (video) video.currentTime = Math.max(0, (command.positionMs || 0) / 1000);
+          break;
+        case "next":
+          if (handlers.neighbours?.next) void handlers.goToNeighbour(handlers.neighbours.next);
+          break;
+        case "previous":
+          if (handlers.neighbours?.prev) void handlers.goToNeighbour(handlers.neighbours.prev);
+          break;
+        case "stop": {
+          if (video) {
+            video.onerror = null;
+            video.pause();
+            hlsRef.current?.destroy();
+            hlsRef.current = null;
+            video.removeAttribute("src");
+            video.load();
+          }
+          setActiveSource(null);
+          break;
+        }
+        case "play": {
+          // Another device handed a title to this browser, the way a phone
+          // hands one to a television. Applied in-app rather than by reloading,
+          // so the socket — and with it this receiver role — stays up. If the
+          // browser's autoplay policy refuses the un-gestured start, the page
+          // is left on the episode with its play button up, which is as far as
+          // a web page is allowed to go.
+          const playback = command.playback || {};
+          if (!playback.itemUrl || !playback.provider) break;
+          void handlers.handleSelectItem(
+            {
+              url: playback.itemUrl,
+              provider: playback.provider,
+              title: playback.title || "",
+              mediaType: "unknown",
+              posterUrl: playback.posterUrl || "",
+            },
+            playback.episodeUrl || null,
+            playback.episodeLabel || null,
+            true,
+            // Not a gesture of this page's user: must not arm a cast send,
+            // or a browser that happens to hold a television's remote would
+            // forward the title onward instead of playing it.
+            false,
+          );
+          break;
+        }
+        default:
+          break;
+      }
+    },
+  });
 
   // ── watch-panel rows ────────────────────────────────────────
   // WatchPanels stays presentational, so the progress bookkeeping and the two

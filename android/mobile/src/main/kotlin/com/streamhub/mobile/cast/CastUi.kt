@@ -117,7 +117,7 @@ fun CastButton(
     if (receivers.isEmpty() && !connected) return
     IconButton(
         onClick = onClick,
-        modifier = modifier.semantics { contentDescription = "Play on a television" },
+        modifier = modifier.semantics { contentDescription = "Play on another device" },
     ) {
         CastIcon(
             connected = connected,

@@ -216,10 +216,29 @@ must arrive within 5 seconds:
 { "type": "auth", "token": "<accessToken>" }
 ```
 
-The server answers `{ "type": "ready", "expiresAt": <ms epoch> }` and then ignores
-everything the client sends. Events are `favorites` (`added` / `removed`) and
+The server answers `{ "type": "ready", "expiresAt": <ms epoch>, "sessionId": …,
+"receivers": [...] }`. Events are `favorites` (`added` / `removed`) and
 `progress` (`updated` / `removed`); a `progress.updated` frame carries
 `history: boolean` telling the client whether history also needs refetching.
+
+The same socket carries casting. Any client that sends
+`{ "type": "playback", "state": {...} | null }` becomes a **receiver** — it
+appears in every other same-account client's `receivers` list and can be sent
+`{ "type": "command", "to": "<sessionId>", "command": {...} }` frames
+(`pause` / `resume` / `seek` / `stop` / `next` / `previous` / `play`). The
+television was merely the first client to take the role; the web app now takes
+it too whenever it is playing locally. Two things follow from the routing being
+by *session id*:
+
+- A controller must exclude its **own** session id (from `ready`) when it lists
+  receivers, or it will offer itself as a target.
+- Browser tabs of one login share one session id, so the web client elects a
+  single tab per session (a lease in `localStorage`) to announce and to obey
+  commands; without that, one command would land on every tab at once.
+
+State frames are throttled server-side (dropped under 250 ms apart), so a
+receiver announcing "idle" right after its last heartbeat must delay that frame
+or it is silently lost and pickers keep showing the finished title.
 
 Close codes matter: `4001` auth timeout, `4003` unauthorized, and **`4002` access
 token expired** — the server closes the socket precisely when the JWT expires.
