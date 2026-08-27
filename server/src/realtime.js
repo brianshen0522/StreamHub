@@ -84,16 +84,25 @@ function receiversFor(userId) {
   const sockets = clients.get(String(userId));
   if (!sockets?.size) return [];
 
-  const receivers = [];
+  // One row per session, not per socket. Browser tabs of one sign-in share a
+  // session id and elect a single announcer among themselves, but a tab that
+  // held the role earlier still has isReceiver set on its own socket — left
+  // as-is the session would appear twice, once stale. The freshest
+  // announcement speaks for the session.
+  const bySession = new Map();
   for (const socket of sockets) {
     if (!socket.isReceiver) continue;
-    receivers.push({
-      sessionId: socket.sessionId,
-      deviceName: socket.deviceName,
-      clientKind: socket.clientKind,
-      state: socket.playbackState ?? null,
-    });
+    const key = String(socket.sessionId);
+    const current = bySession.get(key);
+    if (current && current.lastStateAt >= socket.lastStateAt) continue;
+    bySession.set(key, socket);
   }
+  const receivers = [...bySession.values()].map((socket) => ({
+    sessionId: socket.sessionId,
+    deviceName: socket.deviceName,
+    clientKind: socket.clientKind,
+    state: socket.playbackState ?? null,
+  }));
   // Stable order, so the cast sheet does not reshuffle itself on every tick.
   receivers.sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
   return receivers;

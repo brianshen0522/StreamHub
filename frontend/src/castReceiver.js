@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { getRealtimeSessionId, sendRealtime, subscribeRealtime } from "./realtime.js";
+import { sendRealtime, subscribeRealtime } from "./realtime.js";
 
 /**
  * The browser as a receiver: this tab can be driven the way a television is.
@@ -8,18 +8,41 @@ import { getRealtimeSessionId, sendRealtime, subscribeRealtime } from "./realtim
  * that publishes playback state becomes a receiver, and commands route to it
  * by session id. The television was just the first client to take the role.
  *
+ * The role has two layers, mirroring how the television is built:
+ *
+ * - Presence lives in the portal shell (`useReceiverPresence`) and announces
+ *   for as long as the web app is open — a null state while idle, exactly the
+ *   way a television on its home screen announces. This is what makes an open
+ *   browser appear in every picker before anything is playing, and what lets
+ *   an idle tab accept a title: a `play` arriving while the watch page is not
+ *   mounted is stashed and the shell navigates there to honour it.
+ *
+ * - Playback lives in the watch page (`useBrowserReceiver`), which registers
+ *   a state getter and a command handler with this module while it is
+ *   mounted. Presence reads through them; it never needs to know how the
+ *   player works.
+ *
  * One wrinkle is unique to the web and handled here: every tab of the same
  * browser shares one login session, so two tabs would announce under the same
  * id — indistinguishable in every picker, and a command would land on both.
  * A short lease in localStorage elects exactly one tab per session to hold
  * the role; the others stay silent and deaf. The lease is refreshed while
- * held and expires on its own, so a closed tab hands the role over without
- * anyone doing anything.
+ * held, released on pagehide, and expires on its own as a fallback. A tab
+ * that is actually playing may take the lease from one that sits idle —
+ * whoever has the picture speaks for the session — but never from another
+ * playing tab, so two playing tabs cannot flap over it.
  */
 
 const LEASE_KEY = "streamhub.receiverLease";
 const LEASE_TTL_MS = 12_000;
 const tabId = Math.random().toString(36).slice(2);
+
+/** Set by the watch page while it has local playback to report. */
+let stateGetter = null;
+/** Set by the watch page while it is mounted and can act on commands. */
+let commandHandler = null;
+/** A play request waiting for the watch page to mount and consume it. */
+let pendingPlay = null;
 
 function readLease() {
   try {
@@ -33,11 +56,14 @@ function readLease() {
   }
 }
 
-function holdsLease() {
+function holdsLease(playing) {
   const lease = readLease();
-  if (lease && lease.tab !== tabId) return false;
+  if (lease && lease.tab !== tabId) {
+    // Playing beats idle; nothing beats playing.
+    if (!(playing && !lease.playing)) return false;
+  }
   try {
-    localStorage.setItem(LEASE_KEY, JSON.stringify({ tab: tabId, at: Date.now() }));
+    localStorage.setItem(LEASE_KEY, JSON.stringify({ tab: tabId, at: Date.now(), playing }));
   } catch {
     // Storage refused — claim nothing rather than fight over it.
     return false;
@@ -53,65 +79,88 @@ function releaseLease() {
 }
 
 /**
- * Runs the receiver role for the watch page.
+ * The presence layer, mounted once by the portal shell.
  *
  * @param {object}   options
- * @param {boolean}  options.active     whether this page has local playback to offer
- * @param {Function} options.getState   () => CastPlaybackState-shaped object, or null when idle
- * @param {Function} options.onCommand  (command) => void — pause/resume/seek/stop/next/previous/play
+ * @param {Function} options.onPlay  (playback) => void — called when a play
+ *   command arrives while the watch page is not mounted; expected to stash
+ *   the request (`stashPlayRequest`) and navigate to the watch page.
  */
-export function useBrowserReceiver({ active, getState, onCommand }) {
-  const stateRef = useRef(getState);
-  stateRef.current = getState;
-  const commandRef = useRef(onCommand);
-  commandRef.current = onCommand;
-  const announced = useRef(false);
+export function useReceiverPresence({ onPlay }) {
+  const playRef = useRef(onPlay);
+  playRef.current = onPlay;
 
   useEffect(() => {
-    if (!active) {
-      // Fell idle after having announced: say so once, so the pickers show
-      // "Ready" instead of a playback that ended minutes ago. Deferred past
-      // the server's 250ms state throttle — the last heartbeat may have gone
-      // out moments ago, and a throttled frame is silently dropped, which
-      // would leave the stale title on every picker.
-      if (announced.current && holdsLease()) {
-        const settle = window.setTimeout(() => {
-          if (holdsLease()) sendRealtime({ type: "playback", state: null });
-        }, 400);
-        return () => window.clearTimeout(settle);
-      }
-      return undefined;
-    }
-
     const beat = window.setInterval(() => {
-      if (!holdsLease()) return;
-      const state = stateRef.current();
+      const state = stateGetter ? stateGetter() : null;
+      if (!holdsLease(Boolean(state))) return;
       sendRealtime({ type: "playback", state });
-      announced.current = true;
     }, 1_000);
 
-    return () => window.clearInterval(beat);
-  }, [active]);
-
-  useEffect(() => {
     const unsubscribe = subscribeRealtime((event) => {
       if (event?.type !== "command" || !event.command) return;
       // Addressed to this session; only the leaseholder answers, or every tab
       // of this browser would obey at once.
-      if (!holdsLease()) return;
-      // A tab that never took the playing role still answers `play`: sending a
-      // title to "Chrome" must work while Chrome is idle, exactly as it does
-      // for a television sitting on its home screen.
-      if (!announced.current && event.command.action !== "play") return;
-      commandRef.current(event.command);
+      const state = stateGetter ? stateGetter() : null;
+      if (!holdsLease(Boolean(state))) return;
+      if (commandHandler) {
+        commandHandler(event.command);
+        return;
+      }
+      // No watch page mounted: an idle tab still honours a hand-over, the way
+      // a television on its home screen does. Everything else needs a player
+      // to act on and is meaningless here.
+      if (event.command.action === "play" && event.command.playback) {
+        playRef.current(event.command.playback);
+      }
     });
+
+    // A closing tab cannot rely on React cleanup, and an unreleased lease
+    // makes the session's next tab wait out the TTL before it may announce.
+    window.addEventListener("pagehide", releaseLease);
     return () => {
+      window.clearInterval(beat);
+      window.removeEventListener("pagehide", releaseLease);
       unsubscribe();
       releaseLease();
     };
   }, []);
 }
 
-export function ownReceiverSessionId() {
-  return getRealtimeSessionId();
+/**
+ * The playback layer, mounted by the watch page.
+ *
+ * @param {object}   options
+ * @param {boolean}  options.active     whether this page has local playback to offer
+ * @param {Function} options.getState   () => CastPlaybackState-shaped object
+ * @param {Function} options.onCommand  (command) => void — pause/resume/seek/stop/next/previous/play
+ */
+export function useBrowserReceiver({ active, getState, onCommand }) {
+  const getRef = useRef(getState);
+  getRef.current = getState;
+  const cmdRef = useRef(onCommand);
+  cmdRef.current = onCommand;
+
+  useEffect(() => {
+    commandHandler = (command) => cmdRef.current(command);
+    return () => { commandHandler = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    stateGetter = () => getRef.current();
+    return () => { stateGetter = null; };
+  }, [active]);
+}
+
+/** Hold a play request across the navigation into the watch page. */
+export function stashPlayRequest(playback) {
+  pendingPlay = playback;
+}
+
+/** The watch page collects what the shell accepted on its behalf. */
+export function consumePlayRequest() {
+  const request = pendingPlay;
+  pendingPlay = null;
+  return request;
 }

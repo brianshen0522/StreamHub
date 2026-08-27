@@ -11,7 +11,7 @@ import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
-import { useBrowserReceiver } from "./castReceiver.js";
+import { consumePlayRequest, useBrowserReceiver } from "./castReceiver.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -1046,6 +1046,47 @@ function App() {
     sourceLabel: activeSource?.sourceLabel || null,
   };
 
+  // Another device handed a title to this browser, the way a phone hands one
+  // to a television. Applied in-app rather than by reloading, so the socket —
+  // and with it this receiver role — stays up. If the browser's autoplay
+  // policy refuses the un-gestured start, the page is left on the episode
+  // with its play button up, which is as far as a web page is allowed to go.
+  const applyPlayRequest = (playback) => {
+    if (!playback?.itemUrl || !playback?.provider) return;
+    // A page holding some other device's remote is still a valid target:
+    // being told to play *here* means putting that remote down first —
+    // walking away, not stopping what the other device is showing. Without
+    // this, the player effect defers to the held target and the command
+    // lands as a detail page with nothing playing.
+    if (castTargetId) cast.disconnect();
+    void receiverHandlersRef.current.handleSelectItem(
+      {
+        url: playback.itemUrl,
+        provider: playback.provider,
+        title: playback.title || "",
+        mediaType: "unknown",
+        posterUrl: playback.posterUrl || "",
+      },
+      playback.episodeUrl || null,
+      playback.episodeLabel || null,
+      true,
+      // Not a gesture of this page's user: must not arm a cast send, or a
+      // browser that happens to hold a television's remote would forward the
+      // title onward instead of playing it.
+      false,
+    );
+  };
+  const applyPlayRef = useRef(applyPlayRequest);
+  applyPlayRef.current = applyPlayRequest;
+
+  // A play that arrived while this page was not mounted: the portal shell
+  // accepted it, stashed it, and navigated here. Honour it now.
+  useEffect(() => {
+    const pending = consumePlayRequest();
+    if (pending) applyPlayRef.current(pending);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useBrowserReceiver({
     active: Boolean(activeSource) && !castTargetId,
     getState: () => {
@@ -1099,33 +1140,9 @@ function App() {
           setActiveSource(null);
           break;
         }
-        case "play": {
-          // Another device handed a title to this browser, the way a phone
-          // hands one to a television. Applied in-app rather than by reloading,
-          // so the socket — and with it this receiver role — stays up. If the
-          // browser's autoplay policy refuses the un-gestured start, the page
-          // is left on the episode with its play button up, which is as far as
-          // a web page is allowed to go.
-          const playback = command.playback || {};
-          if (!playback.itemUrl || !playback.provider) break;
-          void handlers.handleSelectItem(
-            {
-              url: playback.itemUrl,
-              provider: playback.provider,
-              title: playback.title || "",
-              mediaType: "unknown",
-              posterUrl: playback.posterUrl || "",
-            },
-            playback.episodeUrl || null,
-            playback.episodeLabel || null,
-            true,
-            // Not a gesture of this page's user: must not arm a cast send,
-            // or a browser that happens to hold a television's remote would
-            // forward the title onward instead of playing it.
-            false,
-          );
+        case "play":
+          applyPlayRef.current(command.playback || {});
           break;
-        }
         default:
           break;
       }
