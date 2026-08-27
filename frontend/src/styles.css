@@ -997,6 +997,67 @@ a { color: inherit; }
   color: #ff8888;
 }
 
+/* Pairing sign-in for a television's browser: read from a couch, so
+   everything is a size up and the QR is the centrepiece. */
+.auth-panel-tv {
+  align-items: center;
+  text-align: center;
+}
+
+.auth-tv {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-tv-lead {
+  max-width: 42ch;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.auth-tv-qr canvas {
+  width: min(320px, 38vh) !important;
+  height: min(320px, 38vh) !important;
+  border-radius: 16px;
+  background: #fff;
+  padding: 10px;
+  box-sizing: content-box;
+}
+
+.auth-tv-code {
+  font-size: clamp(28px, 5vh, 44px);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+}
+
+.auth-tv-hint {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.auth-tv-again,
+.auth-alt {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.auth-alt {
+  margin-top: 18px;
+  align-self: center;
+}
+
+.auth-tv-again:focus-visible,
+.auth-alt:focus-visible {
+  outline: 2px solid #e50914;
+  outline-offset: 2px;
+}
+
 .session-banner {
   position: fixed;
   /* Cleared of the status bar: this is the one message that appears when the
