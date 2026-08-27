@@ -11,6 +11,21 @@ import {
 
 const AdminPortal = lazy(() => import("./AdminPortal.jsx"));
 const UserPortal = lazy(() => import("./UserPortal.jsx"));
+const TvSignIn = lazy(() => import("./TvSignIn.jsx"));
+
+/**
+ * Whether this browser is running on a television, which changes how signing
+ * in should work: a QR and a short code beat typing a password on a remote.
+ * Android tablets also report a UA without "Mobile", so Android alone is not
+ * enough — an explicit television marker has to be present. Apple TV has no
+ * real browser today, but if one ever asks, it is welcome.
+ */
+function isTvBrowser(userAgent = navigator.userAgent) {
+  const ua = String(userAgent || "");
+  if (/appletv|tvos/i.test(ua)) return true;
+  if (!/android/i.test(ua) || /mobile/i.test(ua)) return false;
+  return /android[^)]*\btv\b|googletv|bravia|aft[a-z]|shield\s*tv|mi\s*tv|smart-?tv/i.test(ua);
+}
 
 /**
  * Keeps the API's own vocabulary off the sign-in screen.
@@ -28,11 +43,16 @@ function readableAuthError(message) {
   return message;
 }
 
-function LoginPage({ onLogin, title, subtitle }) {
+function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // A television's browser gets the pairing flow first — typing a password
+  // with a remote is the thing the device flow exists to avoid — but the
+  // password form stays one press away.
+  const tv = allowTv && isTvBrowser();
+  const [usePassword, setUsePassword] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -57,6 +77,23 @@ function LoginPage({ onLogin, title, subtitle }) {
     }
   }
 
+  if (tv && !usePassword) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-panel auth-panel-tv">
+          <div className="auth-mark">StreamHub</div>
+          <h1>Sign in from your phone</h1>
+          <Suspense fallback={<div className="auth-tv-code">········</div>}>
+            <TvSignIn onSession={onSession} />
+          </Suspense>
+          <button type="button" className="auth-alt" onClick={() => setUsePassword(true)}>
+            Use a password instead
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="auth-shell">
       <div className="auth-panel">
@@ -69,6 +106,11 @@ function LoginPage({ onLogin, title, subtitle }) {
           <button type="submit" disabled={submitting}>{submitting ? "Signing in..." : "Sign In"}</button>
         </form>
         {error ? <div className="auth-error">{error}</div> : null}
+        {tv ? (
+          <button type="button" className="auth-alt" onClick={() => setUsePassword(false)}>
+            Sign in with a QR code instead
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -141,6 +183,12 @@ function RootRouter() {
       method: "POST",
       body: JSON.stringify({ login, password }),
     });
+    adoptSession(payload);
+  }
+
+  // A session that arrived whole — the pairing flow's approval — lands the
+  // same way a password sign-in does.
+  function adoptSession(payload) {
     setAuthNotice("");
     setStoredSession(payload);
     navigate(landingFor(payload.user.role));
@@ -162,7 +210,7 @@ function RootRouter() {
 
   return (
     <Routes>
-      <Route path="/login" element={session?.user ? <Navigate to={landingFor(session.user.role)} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="User Sign In" subtitle="Search, watch, resume, and manage your profile." /></div>} />
+      <Route path="/login" element={session?.user ? <Navigate to={landingFor(session.user.role)} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} onSession={adoptSession} allowTv title="User Sign In" subtitle="Search, watch, resume, and manage your profile." /></div>} />
       <Route path="/admin/login" element={session?.user ? <Navigate to={session.user.role === "ADMIN" ? "/admin" : "/"} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="Admin Sign In" subtitle="Monitor providers, users, sessions, and system activity." /></div>} />
       <Route path="/admin/*" element={<ProtectedRoute session={session} role="ADMIN"><Suspense fallback={loadingFallback}><AdminPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />
       <Route path="/*" element={<ProtectedRoute session={session} role="USER"><Suspense fallback={loadingFallback}><UserPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />
