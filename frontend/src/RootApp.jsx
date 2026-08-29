@@ -16,15 +16,20 @@ const TvSignIn = lazy(() => import("./TvSignIn.jsx"));
 /**
  * Whether this browser is running on a television, which changes how signing
  * in should work: a QR and a short code beat typing a password on a remote.
- * Android tablets also report a UA without "Mobile", so Android alone is not
- * enough — an explicit television marker has to be present. Apple TV has no
- * real browser today, but if one ever asks, it is welcome.
+ *
+ * A television marker wins outright — measured on a real Android TV, WebView
+ * browsers there report "Mobile" in their UA, so Mobile must not veto an
+ * explicit marker; the model string (BRAVIA, AFT, atv, Chromecast, MiBOX…)
+ * is often the only television in the sentence. Detection stays best-effort
+ * either way, which is why the sign-in page also keeps a QR link every
+ * device can reach. Apple TV has no real browser today, but if one ever
+ * asks, it is welcome.
  */
 function isTvBrowser(userAgent = navigator.userAgent) {
   const ua = String(userAgent || "");
   if (/appletv|tvos/i.test(ua)) return true;
-  if (!/android/i.test(ua) || /mobile/i.test(ua)) return false;
-  return /android[^)]*\btv\b|googletv|bravia|aft[a-z]|shield\s*tv|mi\s*tv|smart-?tv/i.test(ua);
+  if (!/android/i.test(ua)) return false;
+  return /android[^)]*\btv\b|googletv|bravia|aft[a-z]|shield|mi\s*tv|mibox|smart-?tv|chromecast|\batv\b|_atv|atv\d/i.test(ua);
 }
 
 /**
@@ -50,9 +55,10 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
   const [submitting, setSubmitting] = useState(false);
   // A television's browser gets the pairing flow first — typing a password
   // with a remote is the thing the device flow exists to avoid — but the
-  // password form stays one press away.
+  // password form stays one press away. Every other device starts on the
+  // form and can reach the pairing flow through the link under it.
   const tv = allowTv && isTvBrowser();
-  const [usePassword, setUsePassword] = useState(false);
+  const [usePassword, setUsePassword] = useState(!tv);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -77,7 +83,7 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
     }
   }
 
-  if (tv && !usePassword) {
+  if (allowTv && !usePassword) {
     return (
       <div className="auth-shell">
         <div className="auth-panel auth-panel-tv">
@@ -106,7 +112,10 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
           <button type="submit" disabled={submitting}>{submitting ? "Signing in..." : "Sign In"}</button>
         </form>
         {error ? <div className="auth-error">{error}</div> : null}
-        {tv ? (
+        {allowTv ? (
+          // Offered on every device, not only detected televisions: detection
+          // is best-effort over user agents, and a television it misses still
+          // needs one press to reach the flow made for it.
           <button type="button" className="auth-alt" onClick={() => setUsePassword(false)}>
             Sign in with a QR code instead
           </button>
