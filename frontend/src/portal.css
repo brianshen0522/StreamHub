@@ -1287,3 +1287,12 @@ body.has-cast-bar .usr-body-flush {
 .usr-input-clear:hover { background: var(--usr-panel-2); color: var(--usr-fg); }
 .usr-code-clear { right: 10px; top: auto; bottom: 7px; transform: none; }
 .usr-searchbox input { padding-right: 32px; }
+
+/* Signed-in devices on the profile page: one row per session, the sign-out
+   sitting with the device it removes. */
+.usr-devices { display: flex; flex-direction: column; gap: 10px; }
+.usr-device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.usr-device-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.usr-device-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.usr-device-current { font-style: normal; font-weight: 500; font-size: 11px; color: #e50914; border: 1px solid rgba(229, 9, 20, 0.5); border-radius: 999px; padding: 1px 8px; }
+.usr-device-meta { font-size: 12px; color: rgba(255, 255, 255, 0.55); }

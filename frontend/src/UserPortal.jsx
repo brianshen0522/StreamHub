@@ -644,6 +644,22 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
     apiJson("/api/me/providers").then((payload) => setProviders(payload.providers || [])).catch(() => {});
   }, []);
 
+  const [devices, setDevices] = useState([]);
+  const loadDevices = useCallback(() => {
+    apiJson("/api/me/sessions").then((payload) => setDevices(payload.sessions || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadDevices(); }, [loadDevices]);
+
+  async function signOutDevice(id) {
+    try {
+      await apiJson(`/api/me/sessions/${id}`, { method: "DELETE" });
+      toast(t.devSignedOut);
+      loadDevices();
+    } catch (revokeError) {
+      toast(revokeError.message, "error");
+    }
+  }
+
   async function saveProfile(event) {
     event.preventDefault();
     setSavingProfile(true);
@@ -744,6 +760,38 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
                 <IconTv />
                 {t.linkOpen}
               </Link>
+            </div>
+          </section>
+
+          <section className="usr-panel">
+            <header className="usr-panel-head">
+              <div className="usr-panel-title">{t.devTitle}</div>
+              <div className="usr-panel-desc">{t.devDesc}</div>
+            </header>
+            <div className="usr-panel-body">
+              <div className="usr-devices">
+                {devices.map((device) => (
+                  <div key={device.id} className="usr-device-row">
+                    <div className="usr-device-info">
+                      <span className="usr-device-name">
+                        {device.deviceName}
+                        {device.current ? <em className="usr-device-current">{t.devThis}</em> : null}
+                      </span>
+                      <span className="usr-device-meta">{formatRelative(device.lastSeenAt, t) || "—"}</span>
+                    </div>
+                    {device.current ? null : (
+                      <button
+                        type="button"
+                        className="usr-btn usr-btn-ghost usr-btn-sm"
+                        onClick={() => signOutDevice(device.id)}
+                      >
+                        {t.devSignOut}
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {devices.length === 0 ? <div className="usr-device-meta">—</div> : null}
+              </div>
             </div>
           </section>
 
