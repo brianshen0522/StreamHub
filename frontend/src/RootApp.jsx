@@ -58,13 +58,26 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
     }
   }
 
-  // Both ways in, on one screen — the layout the native television app
-  // already uses. The form and the QR are peers: side by side where the
-  // screen is wide enough, stacked where it is not, and nobody has to find
-  // a toggle to reach the one they wanted.
+  // Both ways in, on one screen — with the screen deciding how loudly to
+  // offer the second one. Side by side on anything wide (a laptop, a
+  // television's browser), the form and the QR are peers. On a phone the QR
+  // is the wrong way round — a phone is the device that *scans*, not the one
+  // that gets scanned — so it folds down to one line, and the pairing (with
+  // its code, its polling, its expiry clock) does not even start until
+  // someone opens it.
+  const [wide, setWide] = useState(() => window.matchMedia("(min-width: 720px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 720px)");
+    const onChange = () => setWide(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  const [qrOpen, setQrOpen] = useState(false);
+  const showQr = allowTv && (wide || qrOpen);
+
   return (
     <div className="auth-shell">
-      <div className={`auth-panel${allowTv ? " auth-panel-split" : ""}`}>
+      <div className={`auth-panel${showQr ? " auth-panel-split" : ""}`}>
         <div className="auth-half">
           <div className="auth-mark">StreamHub</div>
           <h1>{title}</h1>
@@ -75,8 +88,13 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
             <button type="submit" disabled={submitting}>{submitting ? "Signing in..." : "Sign In"}</button>
           </form>
           {error ? <div className="auth-error">{error}</div> : null}
+          {allowTv && !wide ? (
+            <button type="button" className="auth-qr-toggle" onClick={() => setQrOpen((open) => !open)}>
+              {qrOpen ? "Hide the QR code" : "Or show a QR code — scan it from a signed-in device"}
+            </button>
+          ) : null}
         </div>
-        {allowTv ? (
+        {showQr ? (
           <div className="auth-half auth-half-qr">
             <h2 className="auth-qr-title">Sign in with your phone</h2>
             <Suspense fallback={<div className="auth-tv-code">········</div>}>

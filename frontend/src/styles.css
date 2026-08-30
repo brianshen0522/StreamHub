@@ -1038,6 +1038,22 @@ a { color: inherit; }
   font-weight: 600;
 }
 
+/* The folded-down QR offer on a phone: one quiet line under the form. */
+.auth-qr-toggle {
+  margin-top: 2px;
+  border: 0;
+  background: none;
+  padding: 6px 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  align-self: flex-start;
+  text-align: left;
+}
+.auth-qr-toggle:hover { color: rgba(255, 255, 255, 0.85); }
+
 .auth-tv {
   display: flex;
   flex-direction: column;
