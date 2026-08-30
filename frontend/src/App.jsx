@@ -965,7 +965,12 @@ function App() {
         setDownload({ active: false, percent: lastPercent, partial: lastPercent,
           label: t.dlPaused.replace("{p}", lastPercent) });
       } else {
-        setDownload({ active: false, percent: 0, partial: lastPercent, error: error.message });
+        // Never trust the shape of what was thrown: Safari's IndexedDB has
+        // rejected with a literal null, and reading .message off it here
+        // crashed the very handler that would have shown the failure —
+        // leaving the button stuck on "Preparing…" forever.
+        setDownload({ active: false, percent: 0, partial: lastPercent,
+          error: error?.message || String(error) || "Download failed" });
       }
     } finally {
       downloadAbortRef.current = null;

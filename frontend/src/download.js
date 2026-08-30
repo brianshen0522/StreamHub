@@ -42,12 +42,42 @@ function openDb() {
       }
     };
     request.onsuccess = () => {
-      prune(request.result).catch(() => {});
-      resolve(request.result);
+      const db = request.result;
+      // Safari closes idle IndexedDB connections on its own; holding on to a
+      // dead one made the next download's very first read blow up. Forgetting
+      // the cache here means the next caller simply opens a fresh connection.
+      db.onclose = () => { dbPromise = null; };
+      db.onversionchange = () => { try { db.close(); } catch { /* closing */ } dbPromise = null; };
+      prune(db).catch(() => {});
+      resolve(db);
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed"));
   });
   return dbPromise;
+}
+
+/**
+ * Runs one operation against the database, retrying once through a fresh
+ * connection. The close handler above covers Safari announcing the idle
+ * close; this covers it not bothering to — the first touch of a silently
+ * dead connection throws InvalidStateError (or fails with a null error,
+ * which is how "The operation cannot be completed" reached the screen), and
+ * the retry reopens and succeeds.
+ */
+async function idb(run) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const db = await openDb();
+    try {
+      return await run(db);
+    } catch (error) {
+      if (attempt === 0 && (error == null || error?.name === "InvalidStateError")) {
+        dbPromise = null;
+        continue;
+      }
+      throw error ?? new Error("IndexedDB request failed");
+    }
+  }
+  throw new Error("IndexedDB request failed");
 }
 
 /**
@@ -78,51 +108,65 @@ function tx(db, store, mode, run) {
     const transaction = db.transaction(store, mode);
     const result = run(transaction.objectStore(store));
     transaction.oncomplete = () => resolve(result?.result ?? result);
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
+    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
+    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
   });
 }
 
-async function readRecord(id) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
+function readRecord(id) {
+  return idb((db) => new Promise((resolve, reject) => {
     const request = db.transaction("records").objectStore("records").get(id);
     request.onsuccess = () => resolve(request.result ?? null);
     request.onerror = () => reject(request.error);
+  }));
+}
+
+function writeRecord(record) {
+  return idb((db) => tx(db, "records", "readwrite", (store) => store.put(record)));
+}
+
+/**
+ * Chunks are stored as raw bytes, never as Blobs: Safari's IndexedDB rejects
+ * Blob writes outright (with an error object so empty it surfaced on screen
+ * as "This operation cannot be completed"), and even where they do store,
+ * a download URL later stitched from IDB-backed blobs is what WebKit's
+ * "WebKitBlobResource error 1" is about. Buffers write everywhere.
+ */
+function putChunk(id, index, data) {
+  return idb((db) => tx(db, "chunks", "readwrite", (store) => store.put({ id, index, data })));
+}
+
+function readChunks(id, count) {
+  return idb(async (db) => {
+    const store = db.transaction("chunks").objectStore("chunks");
+    const parts = new Array(count);
+    await Promise.all(
+      Array.from({ length: count }, (_, index) => new Promise((resolve, reject) => {
+        const request = store.get([id, index]);
+        request.onsuccess = () => {
+          const stored = request.result;
+          // Wrapped into a Blob one chunk at a time, so the buffer can be
+          // collected as soon as the browser has copied it — the final file
+          // never has to sit in memory whole. `blob` is the pre-buffer
+          // format, read for compatibility with partials from older builds.
+          parts[index] = stored?.data ? new Blob([stored.data]) : stored?.blob ?? null;
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      })),
+    );
+    if (parts.some((part) => !part)) throw new Error("A downloaded segment is missing from storage.");
+    return parts;
   });
 }
 
-async function writeRecord(record) {
-  const db = await openDb();
-  return tx(db, "records", "readwrite", (store) => store.put(record));
-}
-
-async function putChunk(id, index, blob) {
-  const db = await openDb();
-  return tx(db, "chunks", "readwrite", (store) => store.put({ id, index, blob }));
-}
-
-async function readChunks(id, count) {
-  const db = await openDb();
-  const store = db.transaction("chunks").objectStore("chunks");
-  const parts = new Array(count);
-  await Promise.all(
-    Array.from({ length: count }, (_, index) => new Promise((resolve, reject) => {
-      const request = store.get([id, index]);
-      request.onsuccess = () => { parts[index] = request.result?.blob; resolve(); };
-      request.onerror = () => reject(request.error);
-    })),
-  );
-  if (parts.some((part) => !part)) throw new Error("A downloaded segment is missing from storage.");
-  return parts;
-}
-
-async function clearDownload(id, segmentCount) {
-  const db = await openDb();
-  await tx(db, "chunks", "readwrite", (store) => {
-    for (let index = 0; index < segmentCount; index += 1) store.delete([id, index]);
+function clearDownload(id, segmentCount) {
+  return idb(async (db) => {
+    await tx(db, "chunks", "readwrite", (store) => {
+      for (let index = 0; index < segmentCount; index += 1) store.delete([id, index]);
+    });
+    await tx(db, "records", "readwrite", (store) => store.delete(id));
   });
-  await tx(db, "records", "readwrite", (store) => store.delete(id));
 }
 
 // ── identity ────────────────────────────────────────────────────────────────
@@ -253,8 +297,14 @@ function saveBlob(blob, fileName) {
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.download = fileName;
+  // In the document, not floating: some WebKit builds ignore the click of a
+  // detached anchor. Revoked only after the browser has had ample time to
+  // materialise the file — a minute was not ample for a multi-hundred-MB
+  // save, and a revoked URL mid-save is a corrupted download.
+  document.body.appendChild(anchor);
   anchor.click();
-  setTimeout(() => URL.revokeObjectURL(href), 60_000);
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 600_000);
 }
 
 /** Assemble what is stored and hand it to the browser as a file. */
@@ -374,7 +424,7 @@ export async function downloadStream({ id, url, fileName, onProgress, signal }) 
       data = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv }, cryptoKey, data));
     }
 
-    await putChunk(id, index, new Blob([data]));
+    await putChunk(id, index, data);
     storedSizes.set(index, data.byteLength);
     storedCount += 1;
     reportedBytes += data.byteLength;
