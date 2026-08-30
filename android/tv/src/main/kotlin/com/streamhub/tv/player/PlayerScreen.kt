@@ -1,8 +1,16 @@
 package com.streamhub.tv.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -282,9 +290,19 @@ fun PlayerScreen(
     // Commands from a phone. Raising the controls on each one is deliberate:
     // someone watching should see that the picture changed because a person did
     // it, not wonder whether the app misbehaved.
+    var driverSeenAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(driverSeenAt) {
+        if (driverSeenAt == 0L) return@LaunchedEffect
+        // A controller that goes quiet is no longer visibly in charge; the
+        // badge fades rather than naming a phone someone put down an hour ago.
+        delay(12_000)
+        if (System.currentTimeMillis() - driverSeenAt >= 12_000) driver = null
+    }
+
     LaunchedEffect(player) {
         receiver.transport.collect { command ->
             driver = receiver.controlledBy.value
+            driverSeenAt = System.currentTimeMillis()
             show()
             when (command) {
                 is CastCommand.Pause -> player.pause()
@@ -386,6 +404,39 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
+        driver?.let { name ->
+            // The driven screen names its driver, with a pulse so it reads as
+            // live rather than as a stale caption.
+            val pulse by rememberInfiniteTransition(label = "driven")
+                .animateFloat(
+                    initialValue = 1f,
+                    targetValue = 0.4f,
+                    animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+                    label = "driven-dot",
+                )
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(24.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .alpha(pulse)
+                        .background(StreamHubColors.Accent, CircleShape)
+                )
+                Text(
+                    "Controlled from $name",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.92f),
+                )
+            }
+        }
+
         if ((buffering || recoveringLabel != null) && fatal == null) {
             Text(
                 recoveringLabel ?: "Loading…",
@@ -437,7 +488,6 @@ fun PlayerScreen(
                     request.episodeLabel?.let { "Episode $it" },
                     request.sourceLabel,
                 ).joinToString("  ·  "),
-                driver = driver,
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
@@ -545,7 +595,6 @@ private fun UpNextPrompt(
 private fun Controls(
     title: String,
     subtitle: String,
-    driver: String?,
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
@@ -580,16 +629,6 @@ private fun Controls(
                         maxLines = 1,
                     )
                 }
-            }
-            if (driver != null) {
-                // White, not the accent. Red on this overlay reads as
-                // something having gone wrong, and a phone taking control is
-                // information, not a fault.
-                Text(
-                    text = "Controlled from $driver",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.85f),
-                )
             }
         }
 

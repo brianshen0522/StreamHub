@@ -722,3 +722,47 @@
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
 }
 .vp-cast-cta:hover { background: #f40612; }
+
+/* The driven screen names its driver. Fixed over everything, pulsing while a
+   controller is actively in charge, gone twelve quiet seconds later. */
+.vp-driven {
+  position: fixed;
+  top: calc(72px + env(safe-area-inset-top, 0px));
+  right: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 600;
+  animation: vp-driven-in 220ms ease-out;
+  pointer-events: none;
+}
+
+.vp-driven-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e50914;
+  animation: vp-driven-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes vp-driven-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vp-driven-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.6); opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vp-driven { animation: none; }
+  .vp-driven-dot { animation: none; }
+}

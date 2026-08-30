@@ -104,14 +104,14 @@ export function useReceiverPresence({ onPlay }) {
       const state = stateGetter ? stateGetter() : null;
       if (!holdsLease(Boolean(state))) return;
       if (commandHandler) {
-        commandHandler(event.command);
+        commandHandler(event.command, event.fromName || null);
         return;
       }
       // No watch page mounted: an idle tab still honours a hand-over, the way
       // a television on its home screen does. Everything else needs a player
       // to act on and is meaningless here.
       if (event.command.action === "play" && event.command.playback) {
-        playRef.current(event.command.playback);
+        playRef.current(event.command.playback, event.fromName || null);
       }
     });
 
@@ -142,7 +142,7 @@ export function useBrowserReceiver({ active, getState, onCommand }) {
   cmdRef.current = onCommand;
 
   useEffect(() => {
-    commandHandler = (command) => cmdRef.current(command);
+    commandHandler = (command, fromName) => cmdRef.current(command, fromName);
     return () => { commandHandler = null; };
   }, []);
 
@@ -154,8 +154,8 @@ export function useBrowserReceiver({ active, getState, onCommand }) {
 }
 
 /** Hold a play request across the navigation into the watch page. */
-export function stashPlayRequest(playback) {
-  pendingPlay = playback;
+export function stashPlayRequest(playback, fromName = null) {
+  pendingPlay = { playback, fromName };
 }
 
 /** The watch page collects what the shell accepted on its behalf. */
