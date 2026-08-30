@@ -849,8 +849,8 @@ export default function UserPortal({ session, setSession, onLogout }) {
   // watch page is not mounted is stashed and honoured after navigating there;
   // when the watch page *is* mounted, it handles commands itself.
   useReceiverPresence({
-    onPlay: (playback) => {
-      stashPlayRequest(playback);
+    onPlay: (playback, fromName) => {
+      stashPlayRequest(playback, fromName);
       navigate("/");
     },
   });

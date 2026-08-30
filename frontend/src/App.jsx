@@ -1038,6 +1038,15 @@ function App() {
   };
 
   // ── the receiver role: this tab can be driven like a television ──────────
+  // Who is holding this tab's remote right now, for the on-screen badge. A
+  // controller that goes quiet for a while is no longer visibly in charge.
+  const [controlledBy, setControlledBy] = useState(null);
+  useEffect(() => {
+    if (!controlledBy) return undefined;
+    const timer = window.setTimeout(() => setControlledBy(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [controlledBy]);
+
   const receiverHandlersRef = useRef({});
   receiverHandlersRef.current = {
     goToNeighbour,
@@ -1083,7 +1092,10 @@ function App() {
   // accepted it, stashed it, and navigated here. Honour it now.
   useEffect(() => {
     const pending = consumePlayRequest();
-    if (pending) applyPlayRef.current(pending);
+    if (pending?.playback) {
+      applyPlayRef.current(pending.playback);
+      setControlledBy(pending.fromName || null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1109,7 +1121,10 @@ function App() {
         hasPrevious: Boolean(handlers.neighbours?.prev),
       };
     },
-    onCommand: (command) => {
+    onCommand: (command, fromName) => {
+      // Being driven should be visible on the driven screen: the badge names
+      // whoever is holding the remote, and fades once they go quiet.
+      setControlledBy(fromName || null);
       const video = videoRef.current;
       const handlers = receiverHandlersRef.current;
       switch (command.action) {
@@ -2018,6 +2033,17 @@ function App() {
   return (
     <div className="app-shell">
 
+      {controlledBy ? (
+        // The driven screen shows who is driving it. Fixed over everything so
+        // it reads from across a room, pulsing so it reads as live. This must
+        // live in the page's own tree, not the topbar chrome — the chrome is
+        // a snapshot re-injected only when its deps change, and a badge put
+        // there renders its mount-time value forever.
+        <div className="vp-driven" role="status">
+          <span className="vp-driven-dot" />
+          {(t.controlledFrom || "Controlled from {d}").replace("{d}", controlledBy)}
+        </div>
+      ) : null}
 
       {/* ── Main ─────────────────────────────────────────────── */}
       <main className="main-content">
