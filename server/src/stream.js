@@ -556,7 +556,23 @@ export async function handleCleanManifest(request, response) {
     response.setHeader("x-adfilter-removed-seconds", String(result.removedSeconds));
     if (result.reason) response.setHeader("x-adfilter-reason", result.reason);
   }
-  response.send(result.body);
+
+  // A master playlist's variants point back at this endpoint, and a media
+  // element fetches them without headers — so a caller that authenticated by
+  // query token gets that token echoed onto the variant URLs. Applied here,
+  // per request, never into the cache: the cleaned body is cached by target
+  // and shared across the account's users, and a token baked in there would
+  // hand one user's credential to the next. Segment URLs are untouched —
+  // they are the CDN's own and carry nothing of ours.
+  let body = result.body;
+  const queryToken = String(request.query.accessToken || "").trim();
+  if (queryToken && result.isMaster) {
+    body = body.replace(
+      /\/api\/manifest\?target=[^"\s,]+/g,
+      (uri) => `${uri}&accessToken=${encodeURIComponent(queryToken)}`,
+    );
+  }
+  response.send(body);
 }
 
 /**

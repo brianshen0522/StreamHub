@@ -672,7 +672,17 @@ function App() {
     }
 
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {
-      loadNative(directUrl, "direct");
+      // The one path with no hls.js and therefore no ad filter. Fed the raw
+      // playlist, an iPhone was the only client that actually played the
+      // spliced ad runs — and their segments live on hosts a phone's network
+      // often cannot reach, so direct playback died mid-ad while the proxy,
+      // whose fetches leave from the server, sailed. The cleaned manifest
+      // removes those runs server-side; the segment URLs stay the CDN's own,
+      // so the server serves a playlist, not the film.
+      const cleaned = withCurrentOrigin(
+        `/api/manifest?target=${encodeURIComponent(directUrl)}&accessToken=${encodeURIComponent(getAccessToken())}`,
+      );
+      loadNative(cleaned, "direct");
       video.onerror = () => {
         if (proxyUrl && video.src !== proxyUrl) {
           setPlayerError(tRef.current.playbackFallback);
