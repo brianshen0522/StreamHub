@@ -997,11 +997,45 @@ a { color: inherit; }
   color: #ff8888;
 }
 
-/* Pairing sign-in for a television's browser: read from a couch, so
-   everything is a size up and the QR is the centrepiece. */
-.auth-panel-tv {
+/* Both ways in on one screen: the form and the QR are peers, side by side
+   where the screen is wide enough, stacked where it is not. */
+.auth-panel-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 40px;
+  max-width: 880px;
+  width: min(880px, 92vw);
+}
+
+.auth-half {
+  flex: 1 1 320px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-half-qr {
   align-items: center;
   text-align: center;
+  justify-content: center;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  padding-left: 40px;
+}
+
+/* Stacked: the divider swaps edges with the wrap. */
+@media (max-width: 719px) {
+  .auth-half-qr {
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    padding-left: 0;
+    padding-top: 28px;
+  }
+}
+
+.auth-qr-title {
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .auth-tv {
@@ -1017,8 +1051,8 @@ a { color: inherit; }
 }
 
 .auth-tv-qr canvas {
-  width: min(320px, 38vh) !important;
-  height: min(320px, 38vh) !important;
+  width: min(240px, 34vh) !important;
+  height: min(240px, 34vh) !important;
   border-radius: 16px;
   background: #fff;
   padding: 10px;
@@ -1026,18 +1060,19 @@ a { color: inherit; }
 }
 
 .auth-tv-code {
-  font-size: clamp(28px, 5vh, 44px);
+  font-size: clamp(24px, 3.4vh, 34px);
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.14em;
   font-variant-numeric: tabular-nums;
+  /* One code, one line: a pairing code wrapped in half reads as two codes. */
+  white-space: nowrap;
 }
 
 .auth-tv-hint {
   color: rgba(255, 255, 255, 0.6);
 }
 
-.auth-tv-again,
-.auth-alt {
+.auth-tv-again {
   background: none;
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 999px;
@@ -1047,13 +1082,7 @@ a { color: inherit; }
   font-size: 15px;
 }
 
-.auth-alt {
-  margin-top: 18px;
-  align-self: center;
-}
-
-.auth-tv-again:focus-visible,
-.auth-alt:focus-visible {
+.auth-tv-again:focus-visible {
   outline: 2px solid #e50914;
   outline-offset: 2px;
 }
