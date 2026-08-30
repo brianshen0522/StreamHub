@@ -121,10 +121,6 @@ export default function LinkTvPage({ setTopbar, t }) {
 
       {step === STEP_CODE ? (
         <section className="usr-panel">
-          <header className="usr-panel-head">
-            <div className="usr-panel-title">{t.linkTitle}</div>
-            <div className="usr-panel-desc">{t.linkSub}</div>
-          </header>
           <div className="usr-panel-body">
             {scanning ? (
               <div className="usr-form">
@@ -142,6 +138,14 @@ export default function LinkTvPage({ setTopbar, t }) {
               className="usr-form"
               onSubmit={(event) => { event.preventDefault(); lookUp(code); }}
             >
+              <button
+                type="button"
+                className="usr-btn usr-btn-primary usr-link-scan"
+                onClick={() => { setError(""); setScanning(true); }}
+              >
+                {t.scanOpen}
+              </button>
+              <div className="usr-link-or">{t.linkOr}</div>
               <label className="usr-field" style={{ position: "relative" }}>
                 <span className="usr-label">{t.linkCodeLabel}</span>
                 <ImeSafeInput
@@ -179,20 +183,13 @@ export default function LinkTvPage({ setTopbar, t }) {
                   </button>
                 ) : null}
               </label>
-              <div className="usr-form-actions">
+              <div className="usr-form-actions usr-link-actions">
                 <button
                   type="submit"
                   className="usr-btn usr-btn-primary"
                   disabled={busy || normalise(code).length !== 8}
                 >
                   {busy ? t.linkChecking : t.linkContinue}
-                </button>
-                <button
-                  type="button"
-                  className="usr-btn usr-btn-ghost"
-                  onClick={() => { setError(""); setScanning(true); }}
-                >
-                  {t.scanOpen}
                 </button>
               </div>
             </form>

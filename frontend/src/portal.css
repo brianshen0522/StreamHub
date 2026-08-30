@@ -347,6 +347,9 @@
   font-weight: 600;
   color: var(--usr-fg-3);
   padding: 2px 8px;
+  /* Breathing room from the title it counts — glued on, "Continue 3" read
+     as one word. */
+  margin-left: 8px;
   border-radius: 999px;
   background: var(--usr-panel-2);
   border: 1px solid var(--usr-line);
@@ -1296,3 +1299,34 @@ body.has-cast-bar .usr-body-flush {
 .usr-device-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .usr-device-current { font-style: normal; font-weight: 500; font-size: 11px; color: #e50914; border: 1px solid rgba(229, 9, 20, 0.5); border-radius: 999px; padding: 1px 8px; }
 .usr-device-meta { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
+
+
+/* Connect a device: scanning is the way the page itself recommends, so the
+   scan button leads at full width and typing follows under a quiet divider. */
+.usr-link-scan { width: 100%; justify-content: center; height: 48px; font-size: 16px; }
+.usr-link-or {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--usr-fg-3); font-size: 13px;
+}
+.usr-link-or::before, .usr-link-or::after {
+  content: ""; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.12);
+}
+.usr-link-actions .usr-btn { width: 100%; justify-content: center; height: 46px; }
+
+/* The pairing code is shouted in monospace caps — but the placeholder is a
+   hint, not a code, and inherited the shouting. */
+.usr-code-input::placeholder {
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: inherit;
+  font-weight: 400;
+  font-size: 15px;
+}
+
+/* On a phone, action rows stack full-width with the primary on top — a
+   right-aligned pair of small buttons is a desktop habit that reads cramped
+   under a thumb. */
+@media (max-width: 640px) {
+  .usr-form-actions { flex-direction: column; align-items: stretch; }
+  .usr-form-actions .usr-btn { width: 100%; justify-content: center; height: 46px; }
+}
