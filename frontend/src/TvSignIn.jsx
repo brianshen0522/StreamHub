@@ -55,6 +55,20 @@ export default function TvSignIn({ onSession }) {
     }).catch(() => { /* the code below the QR still signs the television in */ });
   }, [pairing]);
 
+  // The code dies on schedule, so it is replaced on schedule: waiting for a
+  // poll to notice leaves an expired QR on screen for up to an interval —
+  // longer on a backgrounded phone, whose timers freeze until it returns.
+  useEffect(() => {
+    if (!pairing || status !== "waiting") return undefined;
+    const gen = generation.current;
+    const ttlMs = Math.max(5, pairing.expiresInSeconds || 600) * 1000;
+    const timer = window.setTimeout(() => {
+      if (generation.current === gen) start();
+    }, ttlMs + 1_000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairing, status]);
+
   // Poll until approved; expiry quietly starts a fresh code.
   useEffect(() => {
     if (!pairing || status !== "waiting") return undefined;

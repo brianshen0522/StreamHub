@@ -335,6 +335,9 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response)
   }
 
   const session = await issueSession(user, sessionOrigin(request));
+  // Every open device list on the account learns about the newcomer without
+  // a reload; the same event fires wherever sessions are made or unmade.
+  broadcast(user.id, { type: "devices" });
   response.json({
     user: serializeUser(user),
     ...session,
@@ -392,9 +395,19 @@ app.post("/api/auth/refresh", refreshLimiter, asyncHandler(async (request, respo
 app.post("/api/auth/logout", asyncHandler(async (request, response) => {
   const refreshToken = String(request.body?.refreshToken || "");
   if (refreshToken) {
-    await prisma.userSession.deleteMany({
+    // Found before deleting so the account can be told: the device lists on
+    // every other screen drop this row live, and any socket the leaving
+    // device still holds is severed rather than lingering until its token
+    // runs out.
+    const session = await prisma.userSession.findFirst({
       where: { refreshTokenHash: hashRefreshToken(refreshToken) },
+      select: { id: true, userId: true },
     });
+    if (session) {
+      await prisma.userSession.deleteMany({ where: { id: session.id } });
+      kickSession(session.userId, session.id);
+      broadcast(session.userId, { type: "devices" });
+    }
   }
   response.json({ ok: true });
 }));
@@ -526,6 +539,7 @@ app.post("/api/auth/device/poll", devicePollLimiter, asyncHandler(async (request
     userAgent: record.userAgent,
     clientKind: record.clientKind,
   });
+  broadcast(record.user.id, { type: "devices" });
 
   response.json({
     status: "approved",
@@ -698,6 +712,7 @@ app.delete("/api/me/sessions/:id", requireAuth(), asyncHandler(async (request, r
   // severed here, so the signed-out device goes quiet immediately rather
   // than when its token happens to expire.
   kickSession(request.auth.user.id, request.params.id);
+  broadcast(request.auth.user.id, { type: "devices" });
   response.json({ ok: true });
 }));
 
