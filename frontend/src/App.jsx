@@ -499,9 +499,18 @@ function App() {
   const tRef = useRef(t);
   const restoredFromUrlRef = useRef(false);
   const searchRequestIdRef = useRef(0);
+  // What question the cached result groups answer, and what is fetched or in
+  // flight — read by the provider filter, which tops results up rather than
+  // re-asking for what is already on screen.
+  const lastSearchQueryRef = useRef("");
+  const resultsRef = useRef([]);
+  const pendingSearchRef = useRef([]);
   const lastProgressSentRef = useRef(0);
   const sourcesAbortRef = useRef(null);
   useEffect(() => { tRef.current = t; }, [t]);
+
+  resultsRef.current = results;
+  pendingSearchRef.current = pendingSearchProviders;
 
   const groupedResults = useMemo(
     () => results.filter((group) => group.items.length > 0),
@@ -512,8 +521,10 @@ function App() {
     [availableProviders],
   );
   const visibleSearchGroups = useMemo(
-    () => results.filter((group) => group.items.length > 0 || pendingSearchProviders.includes(group.provider)),
-    [results, pendingSearchProviders],
+    () => results.filter((group) =>
+      (providerFilter === "all" || group.provider === providerFilter)
+      && (group.items.length > 0 || pendingSearchProviders.includes(group.provider))),
+    [results, pendingSearchProviders, providerFilter],
   );
   const currentPlaybackPayload = useMemo(() => {
     if (!selectedItem) return null;
@@ -1595,17 +1606,11 @@ function App() {
     event.preventDefault();
     if (!query.trim()) return;
     sourcesAbortRef.current?.abort();
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
     const providerNames = providerFilter === "all" ? availableProviders.map((provider) => provider.key) : [providerFilter];
     if (providerNames.length === 0) {
       setError("No providers are enabled for this account.");
       return;
     }
-    setSearching(true);
-    setPendingSearchProviders(providerNames);
-    setError("");
-    setResults(providerNames.map((provider) => ({ provider, items: [] })));
     setSelectedItem(null);
     setItemDetail(null);
     setEpisodes([]);
@@ -1615,10 +1620,51 @@ function App() {
     setActiveSource(null);
     setPlaybackMode("");
     history.replaceState(null, "", window.location.pathname);
+    runProviderSearch(query.trim(), providerNames, { fresh: true });
+  }
+
+  /**
+   * The provider filter is a lens over what has already been fetched, not a
+   * reason to fetch it again. Narrowing to a provider whose results are on
+   * screen re-queries nothing; widening — to "all", or to a provider the
+   * current search never asked — fetches only the providers that are missing
+   * and leaves every cached group exactly where it was. Only the Search
+   * button itself starts over.
+   */
+  function handleProviderFilter(option) {
+    setProviderFilter(option);
+    const searchedQuery = lastSearchQueryRef.current;
+    // Nothing searched yet, or the box has moved on from what the cached
+    // results answer: the filter only scopes the next search.
+    if (!searchedQuery || searchedQuery !== query.trim()) return;
+    const have = new Set(resultsRef.current.map((group) => group.provider));
+    const pending = new Set(pendingSearchRef.current);
+    const wanted = option === "all" ? availableProviders.map((provider) => provider.key) : [option];
+    const missing = wanted.filter((provider) => !have.has(provider) && !pending.has(provider));
+    if (missing.length) runProviderSearch(searchedQuery, missing, { fresh: false });
+  }
+
+  function runProviderSearch(searchQuery, providerNames, { fresh }) {
+    const requestId = fresh ? searchRequestIdRef.current + 1 : searchRequestIdRef.current;
+    searchRequestIdRef.current = requestId;
+    lastSearchQueryRef.current = searchQuery;
+    setSearching(true);
+    setError("");
+    if (fresh) {
+      setPendingSearchProviders(providerNames);
+      setResults(providerNames.map((provider) => ({ provider, items: [] })));
+    } else {
+      // Topping up: the groups already fetched stay untouched, the new ones
+      // join them with a spinner each.
+      setPendingSearchProviders((current) => [...current, ...providerNames]);
+      setResults((current) => [
+        ...current.filter((group) => !providerNames.includes(group.provider)),
+        ...providerNames.map((provider) => ({ provider, items: [] })),
+      ]);
+    }
     const errors = [];
     let finished = 0;
     let hasAnyResults = false;
-    const searchQuery = query.trim();
 
     providerNames.forEach(async (providerName) => {
       const controller = new AbortController();
@@ -2230,7 +2276,7 @@ function App() {
               type="button"
               key={option}
               className={providerFilter === option ? "is-active" : ""}
-              onClick={() => setProviderFilter(option)}
+              onClick={() => handleProviderFilter(option)}
             >
               {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : option === "777tv" ? t.provider777tv : t.providerDramasq}
             </button>
@@ -2468,6 +2514,13 @@ function App() {
         )}
 
         {/* ── Results grid ───────────────────────────────────── */}
+        {/* A provider narrowed to nothing: the search ran, other providers
+            had results, this one had none. Without a word here the page just
+            goes blank under an active-looking filter. */}
+        {!searching && !selectedItem && visibleSearchGroups.length === 0 && groupedResults.length > 0 ? (
+          <div className="error-banner">{t.noResults}</div>
+        ) : null}
+
         {visibleSearchGroups.length > 0 && (
           <section className="results-section">
             {visibleSearchGroups.map((group) => (
