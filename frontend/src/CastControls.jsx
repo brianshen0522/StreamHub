@@ -214,6 +214,11 @@ function CastRemote({ cast, t, onClose }) {
   const reportedAt = useRef(Date.now());
   const [, tick] = useState(0);
 
+  // Nothing loaded is not "playing from zero": an idle receiver has no
+  // position to advance, and interpolating from a missing report counted a
+  // connected-but-idle device upward from 0:00 forever.
+  const idle = !state || !state.title;
+
   useEffect(() => {
     reportedAt.current = Date.now();
     if (pending !== null && Math.abs((state?.positionMs ?? 0) / 1000 - pending) < 2) {
@@ -222,11 +227,20 @@ function CastRemote({ cast, t, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.positionMs]);
 
+  // A scrub the receiver ignored — or answered with an end-of-episode — must
+  // not hold a wrong position on screen forever. Same 4-second give-up the
+  // phone remote has.
   useEffect(() => {
-    if (state?.paused) return undefined;
+    if (pending === null) return undefined;
+    const timer = window.setTimeout(() => setPending(null), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [pending]);
+
+  useEffect(() => {
+    if (idle || state?.paused) return undefined;
     const timer = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(timer);
-  }, [state?.paused]);
+  }, [idle, state?.paused]);
 
   useEffect(() => {
     function onKey(event) { if (event.key === "Escape") onClose(); }
@@ -235,7 +249,7 @@ function CastRemote({ cast, t, onClose }) {
   }, [onClose]);
 
   const base = (state?.positionMs ?? 0) / 1000;
-  const live = state?.paused ? base : base + (Date.now() - reportedAt.current) / 1000;
+  const live = idle ? 0 : state?.paused ? base : base + (Date.now() - reportedAt.current) / 1000;
   const shown = scrubbing ?? pending ?? live;
 
   return (
@@ -264,7 +278,7 @@ function CastRemote({ cast, t, onClose }) {
           max={Math.max(duration, 1)}
           step={1}
           value={Math.min(shown, Math.max(duration, 1))}
-          disabled={!state || cast.lost}
+          disabled={idle || cast.lost}
           onChange={(event) => setScrubbing(Number(event.target.value))}
           onMouseUp={commitScrub}
           onTouchEnd={commitScrub}
@@ -288,16 +302,16 @@ function CastRemote({ cast, t, onClose }) {
           >
             ⏮
           </button>
-          <button type="button" onClick={() => cast.seek(Math.max(0, live - 10) * 1000)} disabled={!state || cast.lost}>−10</button>
+          <button type="button" onClick={() => cast.seek(Math.max(0, live - 10) * 1000)} disabled={idle || cast.lost}>−10</button>
           <button
             type="button"
             className="cast-remote-play"
             onClick={() => (state?.paused ? cast.resume() : cast.pause())}
-            disabled={!state || cast.lost}
+            disabled={idle || cast.lost}
           >
             {state?.paused ? "▶" : "❚❚"}
           </button>
-          <button type="button" onClick={() => cast.seek((live + 10) * 1000)} disabled={!state || cast.lost}>+10</button>
+          <button type="button" onClick={() => cast.seek((live + 10) * 1000)} disabled={idle || cast.lost}>+10</button>
           <button
             type="button"
             onClick={() => cast.next()}
