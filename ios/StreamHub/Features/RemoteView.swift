@@ -186,6 +186,13 @@ struct RemoteView: View {
                 pendingSeek = nil
             }
         }
+        // A scrub the receiver ignored must not hold a wrong position on
+        // screen forever — the same 4-second give-up the other remotes have.
+        .task(id: pendingSeek) {
+            guard pendingSeek != nil else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            pendingSeek = nil
+        }
     }
 
     /// The reported position, advanced locally between reports.
