@@ -247,27 +247,80 @@ function insertSourceSorted(prev, source) {
  * removed is proof of a clean result, where `adSeconds === 0` is only an
  * absence of evidence.
  */
+/**
+ * CDN hosts this device could not reach, remembered for a week.
+ *
+ * Reachability is a property of the *viewer's* network, not of the source: a
+ * mobile carrier that cannot resolve one CDN family fails it instantly and
+ * forever, while the same host answers the server fine — which is why the
+ * failure only ever surfaced on a phone, as a proxy fallback on every play.
+ * Remembering the dead host and auto-picking around it turns that permanent
+ * proxy habit into one failed attempt per host per week.
+ */
+const BAD_HOST_KEY = "streamhub.unreachableHosts";
+const BAD_HOST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function readUnreachableHosts() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(BAD_HOST_KEY) || "{}");
+    const now = Date.now();
+    return new Map(Object.entries(stored).filter(([, at]) => now - at < BAD_HOST_TTL_MS));
+  } catch {
+    return new Map();
+  }
+}
+
+function markUnreachableHost(url) {
+  try {
+    const parsed = new URL(url, window.location.href);
+    // Only ever a CDN: a failure against our own origin is the server being
+    // down, and blacklisting ourselves would be a strange way to say so.
+    if (parsed.origin === window.location.origin) return;
+    const hosts = Object.fromEntries(readUnreachableHosts());
+    hosts[parsed.host] = Date.now();
+    localStorage.setItem(BAD_HOST_KEY, JSON.stringify(hosts));
+  } catch { /* not a URL, or storage refused */ }
+}
+
+function isUnreachableHost(url) {
+  try {
+    return readUnreachableHosts().has(new URL(url, window.location.href).host);
+  } catch {
+    return false;
+  }
+}
+
 function pickAutoSource(arrived, preferredLabel) {
-  const modal = modalDuration(arrived);
+  // Hosts this device has failed to reach go to the back of every line —
+  // stable, so within each group the arrival order still breaks ties.
+  const ranked = [...arrived].sort((a, b) =>
+    Number(isUnreachableHost(a.directUrl || a.url)) - Number(isUnreachableHost(b.directUrl || b.url)));
+  const modal = modalDuration(ranked);
 
   if (preferredLabel) {
-    const preferred = arrived.find((source) => source.sourceLabel === preferredLabel);
+    const preferred = ranked.find((source) => source.sourceLabel === preferredLabel);
     // Honour the saved choice unless it runs longer than the consensus, which
     // means it carries ads the filter cannot see. Picking it once should not
-    // pin every later episode to an ad-laden source.
-    if (preferred && (!modal || (preferred.durationSeconds ?? 0) <= modal)) {
+    // pin every later episode to an ad-laden source — nor to a host this
+    // device cannot reach, which would proxy every episode that follows.
+    if (preferred
+      && (!modal || (preferred.durationSeconds ?? 0) <= modal)
+      && !isUnreachableHost(preferred.directUrl || preferred.url)) {
       return { source: preferred, fromPreference: true };
     }
   }
 
   if (modal) {
-    const onModal = arrived.filter((source) => source.durationSeconds === modal);
+    const onModal = ranked.filter((source) => source.durationSeconds === modal);
     if (onModal.length) {
       const proven = onModal.find((source) => (source.adSeconds || 0) > 0);
-      return { source: proven || onModal[0], fromPreference: false };
+      // The proven-clean pick still defers to reachability: the first entry
+      // of the ranked modal group is reachable whenever any of them is.
+      const choice = proven && !isUnreachableHost(proven.directUrl || proven.url) ? proven : onModal[0];
+      return { source: choice, fromPreference: false };
     }
   }
-  return { source: arrived[0] || null, fromPreference: false };
+  return { source: ranked[0] || null, fromPreference: false };
 }
 
 function posterProxyUrl(url) {
@@ -709,6 +762,12 @@ function App() {
         instance.destroy();
         hlsRef.current = null;
         const detail = describeHlsError(data);
+        // A connection-level death against the CDN — no HTTP status, nothing
+        // answered — is this network telling us it cannot reach that host.
+        // Remembered, so the auto-pick stops walking into it.
+        if (data?.type === "networkError") {
+          markUnreachableHost(data?.frag?.url || data?.context?.url || urls.directUrl);
+        }
         if (urls.proxyUrl && urls.directUrl && urls.directUrl !== urls.proxyUrl) {
           setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadWithHls(urls.proxyUrl, "proxy", (proxyInstance, proxyData) => {
@@ -739,6 +798,9 @@ function App() {
       video.onerror = () => {
         const err = video.error;
         const detail = err ? `MediaError ${err.code}${err.message ? ` ${err.message}` : ""}` : "";
+        // MEDIA_ERR_NETWORK on the native path: the manifest came from us,
+        // so what died was a segment fetch against the CDN itself.
+        if (err?.code === 2) markUnreachableHost(directUrl);
         if (proxyUrl && video.src !== proxyUrl) {
           setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadNative(proxyUrl, "proxy");
