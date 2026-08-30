@@ -1,4 +1,4 @@
-import { getAccessToken, refreshSession } from "./api.js";
+import { getAccessToken, refreshSession, signalAuthFailure } from "./api.js";
 
 /**
  * Live library updates.
@@ -14,6 +14,7 @@ const RECONNECT_MAX_MS = 30_000;
 
 /** Server closes with this once the access token behind the handshake lapses. */
 const CLOSE_TOKEN_EXPIRED = 4002;
+const CLOSE_UNAUTHORIZED = 4003;
 
 const listeners = new Set();
 
@@ -108,6 +109,13 @@ function connect() {
       refreshSession()
         .then(() => connect())
         .catch(() => scheduleReconnect());
+      return;
+    }
+    // Revoked outright — this session was signed out from another device.
+    // Reconnecting would be refused with the same code forever; sign this
+    // tab out now rather than waiting for the next heartbeat's 401.
+    if (event.code === CLOSE_UNAUTHORIZED) {
+      signalAuthFailure();
       return;
     }
     scheduleReconnect();

@@ -40,6 +40,25 @@ const MIN_STATE_INTERVAL_MS = 250;
 /** userId -> Set<WebSocket> */
 const clients = new Map();
 
+/**
+ * Severs a signed-out session's live connections on the spot. Deleting the
+ * session row stops the *next* request; the socket it already holds — the
+ * realtime feed, the cast channel — would otherwise live on until its token
+ * ran out, hours after the person pressed sign out.
+ */
+export function kickSession(userId, sessionId) {
+  const sockets = clients.get(String(userId));
+  if (!sockets) return;
+  for (const socket of sockets) {
+    if (socket.sessionId !== sessionId) continue;
+    try {
+      socket.close(CLOSE_UNAUTHORIZED, "Session revoked.");
+    } catch {
+      /* the heartbeat will reap it */
+    }
+  }
+}
+
 export function broadcast(userId, event) {
   const sockets = clients.get(String(userId));
   if (!sockets?.size) return;
@@ -232,18 +251,23 @@ export function attachRealtime(server) {
       const expiresAt = Number(claims.exp) * 1000;
 
       // The receiver list has to name devices the same way Settings does, and
-      // that name lives on the session row rather than in the token.
+      // that name lives on the session row rather than in the token. The row
+      // is also the revocation switch: a token whose session was signed out
+      // does not get a socket, however long the JWT itself has left.
       let deviceName = null;
       let clientKind = null;
       if (sessionId) {
         const session = await prisma.userSession.findFirst({
           where: { id: sessionId, userId: claims.sub },
-          select: { userAgent: true, clientKind: true },
+          select: { userAgent: true, clientKind: true, expiresAt: true },
         });
-        if (session) {
-          deviceName = describeDevice(session);
-          clientKind = session.clientKind ?? null;
+        if (!session || session.expiresAt <= new Date()) {
+          clearTimeout(authTimer);
+          socket.close(CLOSE_UNAUTHORIZED, "Session revoked.");
+          return;
         }
+        deviceName = describeDevice(session);
+        clientKind = session.clientKind ?? null;
       }
 
       clearTimeout(authTimer);

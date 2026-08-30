@@ -20,7 +20,7 @@ import {
 import { prisma } from "./db.js";
 import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./middleware.js";
 import { startMonitoring } from "./monitoring.js";
-import { attachRealtime, broadcast } from "./realtime.js";
+import { attachRealtime, broadcast, kickSession } from "./realtime.js";
 import { describeDevice } from "./devices.js";
 import {
   DEVICE_CODE_TTL_SECONDS,
@@ -694,6 +694,10 @@ app.delete("/api/me/sessions/:id", requireAuth(), asyncHandler(async (request, r
   await prisma.userSession.deleteMany({
     where: { id: request.params.id, userId: request.auth.user.id },
   });
+  // The deleted row stops the next request; the sockets it already holds are
+  // severed here, so the signed-out device goes quiet immediately rather
+  // than when its token happens to expire.
+  kickSession(request.auth.user.id, request.params.id);
   response.json({ ok: true });
 }));
 

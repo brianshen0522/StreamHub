@@ -13,6 +13,15 @@ function notifySession(session) {
   });
 }
 
+/**
+ * For the realtime layer: a socket closed with "session revoked" is the same
+ * event as a 401 the fetch layer cannot refresh past, and walks the app to
+ * the sign-in screen through the same listeners.
+ */
+export function signalAuthFailure() {
+  notifyAuthFailure();
+}
+
 function notifyAuthFailure() {
   authFailureListeners.forEach((listener) => {
     try {

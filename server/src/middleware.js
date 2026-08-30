@@ -59,16 +59,33 @@ export function requireAuth() {
       return;
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: String(payload.sub) },
-    });
+    // The session row is the revocation switch: signing a device out deletes
+    // its row, and a token whose row is gone must die *now*, not when the JWT
+    // expires hours later. Looking the session up costs nothing extra — the
+    // user had to be fetched anyway, and rides along on the same query.
+    let user = null;
+    if (payload.sid) {
+      const session = await prisma.userSession.findUnique({
+        where: { id: String(payload.sid) },
+        include: { user: true },
+      });
+      if (!session || session.userId !== String(payload.sub) || session.expiresAt <= new Date()) {
+        response.status(401).json({ error: "Session revoked." });
+        return;
+      }
+      user = session.user;
+    } else {
+      // Tokens issued before sid was a claim; they expire within the
+      // access-token lifetime, so nothing needs migrating.
+      user = await prisma.user.findUnique({
+        where: { id: String(payload.sub) },
+      });
+    }
     if (!user || user.status !== UserStatus.ACTIVE) {
       response.status(401).json({ error: "User not available." });
       return;
     }
 
-    // sessionId is null for tokens issued before it was a claim; they expire
-    // within the access-token lifetime, so nothing needs migrating.
     request.auth = { user, sessionId: payload.sid ?? null };
     slideSessionExpiry(request.auth.sessionId);
     next();
