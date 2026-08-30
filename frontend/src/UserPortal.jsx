@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { CastBar } from "./CastControls.jsx";
-import { stashPlayRequest, useReceiverPresence } from "./castReceiver.js";
+import { detachReceiver, isReceiverDetached, reattachReceiver, stashPlayRequest, useReceiverPresence } from "./castReceiver.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
@@ -666,6 +666,22 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
     }
   }
 
+  // Whether other devices may drive this browser. The flag lives in
+  // localStorage (see castReceiver.js) so it survives reloads; the watch
+  // page's "stop remote control" sets it too, and this is where it is undone.
+  const [remoteAllowed, setRemoteAllowed] = useState(() => !isReceiverDetached());
+  function toggleRemote() {
+    if (remoteAllowed) {
+      detachReceiver();
+      setRemoteAllowed(false);
+      toast(t.remoteCtlDisabled);
+    } else {
+      reattachReceiver();
+      setRemoteAllowed(true);
+      toast(t.remoteCtlEnabled);
+    }
+  }
+
   async function saveProfile(event) {
     event.preventDefault();
     setSavingProfile(true);
@@ -798,6 +814,20 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
                 ))}
                 {devices.length === 0 ? <div className="usr-device-meta">—</div> : null}
               </div>
+            </div>
+          </section>
+
+          <section className="usr-panel">
+            <header className="usr-panel-head">
+              <div className="usr-panel-title">{t.remoteCtlTitle}</div>
+              <div className="usr-panel-desc">
+                {remoteAllowed ? t.remoteCtlDescOn : t.remoteCtlDescOff}
+              </div>
+            </header>
+            <div className="usr-panel-body">
+              <button type="button" className="usr-btn usr-btn-ghost" onClick={toggleRemote}>
+                {remoteAllowed ? t.remoteCtlDisable : t.remoteCtlEnable}
+              </button>
             </div>
           </section>
 

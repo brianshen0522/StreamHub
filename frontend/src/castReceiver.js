@@ -37,6 +37,41 @@ const LEASE_KEY = "streamhub.receiverLease";
 const LEASE_TTL_MS = 12_000;
 const tabId = Math.random().toString(36).slice(2);
 
+/**
+ * The person at this browser saying "stop letting other devices drive me".
+ *
+ * Being a receiver is the default, and everything about it is account-scoped —
+ * any signed-in device can hand this one a title. The one thing that must
+ * beat the account is the person physically at the screen. The flag lives in
+ * localStorage so every tab of this browser honours it and a reload does not
+ * quietly re-open the door; it is undone only from the Profile page's toggle.
+ */
+const OPT_OUT_KEY = "streamhub.receiverOptOut";
+
+export function isReceiverDetached() {
+  try {
+    return localStorage.getItem(OPT_OUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse remote control from now on, and leave the account's cast lists. */
+export function detachReceiver() {
+  try { localStorage.setItem(OPT_OUT_KEY, "1"); } catch { /* still refuse below */ }
+  releaseLease();
+  // Retried once: the whole point of the press is to leave the list, and a
+  // socket mid-reconnect at that instant would otherwise swallow it silently.
+  if (!sendRealtime({ type: "playback", withdraw: true })) {
+    window.setTimeout(() => sendRealtime({ type: "playback", withdraw: true }), 1_000);
+  }
+}
+
+/** Accept remote control again — the next heartbeat re-lists this browser. */
+export function reattachReceiver() {
+  try { localStorage.removeItem(OPT_OUT_KEY); } catch { /* covered by the beat */ }
+}
+
 /** Set by the watch page while it has local playback to report. */
 let stateGetter = null;
 /** Set by the watch page while it is mounted and can act on commands. */
@@ -64,6 +99,7 @@ export function announceNow() {
   if (announceTimer) return;
   announceTimer = window.setTimeout(() => {
     announceTimer = null;
+    if (isReceiverDetached()) return;
     const state = stateGetter ? stateGetter() : null;
     if (!holdsLease(Boolean(state))) return;
     sendRealtime({ type: "playback", state });
@@ -122,6 +158,7 @@ export function useReceiverPresence({ onPlay }) {
 
   useEffect(() => {
     const beat = window.setInterval(() => {
+      if (isReceiverDetached()) return;
       const state = stateGetter ? stateGetter() : null;
       if (!holdsLease(Boolean(state))) return;
       sendRealtime({ type: "playback", state });
@@ -129,6 +166,10 @@ export function useReceiverPresence({ onPlay }) {
 
     const unsubscribe = subscribeRealtime((event) => {
       if (event?.type !== "command" || !event.command) return;
+      // Detached means deaf as well as silent: the withdrawal already removed
+      // this browser from every picker, but a command aimed at the session id
+      // before that landed must die here, not land as a surprise.
+      if (isReceiverDetached()) return;
       // Addressed to this session; only the leaseholder answers, or every tab
       // of this browser would obey at once.
       const state = stateGetter ? stateGetter() : null;
@@ -149,14 +190,31 @@ export function useReceiverPresence({ onPlay }) {
       }
     });
 
-    // A closing tab cannot rely on React cleanup, and an unreleased lease
-    // makes the session's next tab wait out the TTL before it may announce.
-    window.addEventListener("pagehide", releaseLease);
+    // A page on its way out — closing, navigating, or being frozen into the
+    // back-forward cache — must resign the receiver role explicitly. A frozen
+    // page's socket stays open and answers protocol pings by itself while its
+    // script never runs again, which used to leave a zombie on the cast list:
+    // reachable, listed, showing a position frozen at the moment of freezing,
+    // and deaf to every command. React cleanup cannot be relied on for any of
+    // these, so the withdrawal rides pagehide and freeze; pageshow and resume
+    // re-announce on the way back in, so a restored page reappears at once.
+    const resign = () => {
+      releaseLease();
+      sendRealtime({ type: "playback", withdraw: true });
+    };
+    const reappear = () => announceNow();
+    window.addEventListener("pagehide", resign);
+    document.addEventListener("freeze", resign);
+    window.addEventListener("pageshow", reappear);
+    document.addEventListener("resume", reappear);
     return () => {
       window.clearInterval(beat);
-      window.removeEventListener("pagehide", releaseLease);
+      window.removeEventListener("pagehide", resign);
+      document.removeEventListener("freeze", resign);
+      window.removeEventListener("pageshow", reappear);
+      document.removeEventListener("resume", reappear);
       unsubscribe();
-      releaseLease();
+      resign();
     };
   }, []);
 }

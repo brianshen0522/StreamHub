@@ -805,6 +805,22 @@ body.has-immersive-player { overflow: hidden; }
   pointer-events: none;
 }
 
+/* The way out for whoever is physically at the driven screen. The badge
+   itself stays click-through; only this is pressable. */
+.vp-driven-detach {
+  pointer-events: auto;
+  margin-left: 4px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.vp-driven-detach:hover { background: rgba(255, 255, 255, 0.2); }
+
 .vp-driven-dot {
   width: 8px;
   height: 8px;

@@ -172,6 +172,10 @@ function sanitizePlaybackState(raw) {
     // remotes disable their skip buttons off these.
     hasNext: Boolean(raw.hasNext),
     hasPrevious: Boolean(raw.hasPrevious),
+    // Who last drove this receiver, as the receiver remembers it. Relayed so
+    // that when two remotes hold the same device, each can see the other's
+    // hand on it instead of wondering why the state keeps jumping.
+    controlledBy: text(raw.controlledBy, 120),
   };
 }
 
@@ -296,6 +300,9 @@ export function attachRealtime(server) {
         type: "ready",
         expiresAt,
         sessionId,
+        // Its own name, as the receiver lists will spell it — a remote needs
+        // it to tell "also controlled by someone else" from its own hand.
+        deviceName: socket.deviceName,
         receivers: receiversFor(userId),
       }));
     };
@@ -318,6 +325,17 @@ export function attachRealtime(server) {
 
       switch (message?.type) {
         case "playback": {
+          // A receiver may take itself off the table: `withdraw` is the only
+          // way out of the list short of closing the socket, and it is what
+          // "stop accepting remote control" on the device sends. Without it a
+          // socket that announced once was a receiver forever, stale state
+          // and all.
+          if (message.withdraw === true) {
+            socket.isReceiver = false;
+            socket.playbackState = null;
+            publishReceivers(socket.userId);
+            return;
+          }
           // Sending this frame at all is how a device announces it can be
           // driven; an idle television still has to appear in the cast list,
           // so a null state is a valid announcement rather than a withdrawal.

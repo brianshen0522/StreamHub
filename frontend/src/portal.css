@@ -1159,6 +1159,22 @@
 .cast-remote-title b { display: block; font-size: 17px; }
 .cast-remote-title small { color: var(--t2); }
 
+.cast-remote-other,
+.remote-panel-other {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(229, 9, 20, 0.12);
+  color: var(--accent);
+  align-self: flex-start;
+}
+.cast-remote-other { margin-bottom: 10px; }
+.remote-panel-other { background: rgba(229, 9, 20, 0.25); color: #ffb3b8; }
+
 .cast-remote-seek { width: 100%; accent-color: var(--accent); }
 .cast-remote-times {
   display: flex;

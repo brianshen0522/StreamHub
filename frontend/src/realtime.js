@@ -23,6 +23,7 @@ let reconnectTimer = null;
 let attempts = 0;
 let closedByUs = false;
 let ownSessionId = null;
+let ownDeviceName = null;
 
 function endpoint() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -87,6 +88,7 @@ function connect() {
       // sees it without waiting for the next announcement. It used to be
       // swallowed here, back when the frame held nothing worth reading.
       ownSessionId = payload.sessionId ?? null;
+      ownDeviceName = payload.deviceName ?? null;
       emit({ type: "receivers", receivers: payload.receivers ?? [] });
       return;
     }
@@ -96,6 +98,7 @@ function connect() {
   ws.addEventListener("close", (event) => {
     if (socket === ws) socket = null;
     ownSessionId = null;
+    ownDeviceName = null;
     // The receiver list only exists in the server's memory for as long as
     // those sockets are open, so a drop means this tab knows of none.
     emit({ type: "receivers", receivers: [] });
@@ -175,6 +178,11 @@ export function sendRealtime(frame) {
 /** This tab's own session, as the server sees it. Null until the handshake. */
 export function getRealtimeSessionId() {
   return ownSessionId;
+}
+
+/** What the receiver lists call this device. Null until the handshake. */
+export function getRealtimeDeviceName() {
+  return ownDeviceName;
 }
 
 /** Reconnect with a fresh token — used after the session is renewed. */

@@ -35,6 +35,12 @@ data class CastPlaybackState(
      */
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
+    /**
+     * Who last drove this receiver, by device name, while that is fresh.
+     * Relayed so two remotes holding the same device can see each other's
+     * hand on it instead of reading the jumps as glitches.
+     */
+    val controlledBy: String? = null,
 ) {
     /** Nothing loaded. The device is reachable but showing its own UI. */
     val idle: Boolean get() = title == null && durationMs == 0L

@@ -282,6 +282,8 @@ fun PlayerScreen(
                 buffering = player.playbackState == Player.STATE_BUFFERING,
                 hasNext = request.nextEpisodeLabel != null,
                 hasPrevious = request.prevEpisodeLabel != null,
+                // The badge's driver, on the same 12-second freshness.
+                controlledBy = driver,
             )
         )
     }

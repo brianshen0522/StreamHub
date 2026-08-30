@@ -1,6 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useCast } from "./cast.js";
+import { getRealtimeDeviceName } from "./realtime.js";
+
+/**
+ * The other hand on the same remote-controlled device, if any.
+ *
+ * The receiver reports who last drove it; showing that back — except when it
+ * is this device itself — is what keeps two remotes from reading each other's
+ * presses as glitches: the state that keeps jumping has a name attached.
+ */
+function otherController(state) {
+  const name = state?.controlledBy;
+  if (!name) return null;
+  const own = getRealtimeDeviceName();
+  return own && name === own ? null : name;
+}
 
 /**
  * Casting, for the browser.
@@ -389,6 +404,11 @@ function CastRemote({ cast, t, onClose }) {
               doubled in either language. */}
           {state?.episodeLabel ? <small>{state.episodeLabel}</small> : null}
         </div>
+        {otherController(state) ? (
+          <div className="cast-remote-other">
+            {(t?.castAlsoControlled || "Also being controlled from {d}").replace("{d}", otherController(state))}
+          </div>
+        ) : null}
 
         <RemoteSeek cast={cast} r={r} />
         <RemoteTransport cast={cast} r={r} t={t} />
@@ -455,6 +475,12 @@ export function RemotePanel({ t, poster, canSend, onSendCurrent }) {
             <small>{t?.castIdleHint || "Pick an episode or a source below to start it there."}</small>
           ) : null}
         </div>
+
+        {otherController(state) ? (
+          <div className="remote-panel-other">
+            {(t?.castAlsoControlled || "Also being controlled from {d}").replace("{d}", otherController(state))}
+          </div>
+        ) : null}
 
         {canSend ? (
           <button type="button" className="remote-panel-send" onClick={onSendCurrent}>

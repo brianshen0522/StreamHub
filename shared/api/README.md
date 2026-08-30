@@ -217,7 +217,9 @@ must arrive within 5 seconds:
 ```
 
 The server answers `{ "type": "ready", "expiresAt": <ms epoch>, "sessionId": …,
-"receivers": [...] }`. Events are `favorites` (`added` / `removed`) and
+"deviceName": …, "receivers": [...] }` — `deviceName` is what the receiver
+lists will call *this* client, which a remote needs to tell "also controlled
+by someone else" apart from its own hand. Events are `favorites` (`added` / `removed`) and
 `progress` (`updated` / `removed`); a `progress.updated` frame carries
 `history: boolean` telling the client whether history also needs refetching.
 
@@ -248,6 +250,19 @@ null state while idle, the way a television on its home screen does — so an
 idle browser is listed and can be handed a title even before anything plays.
 A `play` arriving while the watch page is not mounted is stashed and honoured
 after navigating there.
+
+A receiver may include `controlledBy` (the device name of whoever last drove
+it, while that is fresh — the badge's own 12-second window) in its state;
+remotes show it back so two controllers holding one device see each other
+instead of reading the jumps as glitches. And a receiver may leave the role:
+`{ "type": "playback", "withdraw": true }` takes it off every picker and
+clears its state — this is what "stop remote control" on a device sends, and
+short of closing the socket it is the only way out of the list. The client
+should go deaf to commands at the same moment, since one aimed at it may
+already be in flight. A web receiver must also withdraw on `pagehide` and
+`freeze` (and re-announce on `pageshow` / `resume`): a frozen page's socket
+stays open and answers pings by itself while its script never runs, which
+otherwise leaves a zombie on the cast list.
 
 A receiver should announce **on every transition** — play, pause, seek,
 buffering — and immediately after applying a command, with a ~1 s heartbeat

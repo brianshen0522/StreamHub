@@ -11,7 +11,7 @@ import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
-import { announceNow, consumePlayRequest, useBrowserReceiver } from "./castReceiver.js";
+import { announceNow, consumePlayRequest, detachReceiver, useBrowserReceiver } from "./castReceiver.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -1064,11 +1064,29 @@ function App() {
   // Who is holding this tab's remote right now, for the on-screen badge. A
   // controller that goes quiet for a while is no longer visibly in charge.
   const [controlledBy, setControlledBy] = useState(null);
+  const controlledByRef = useRef(null);
+  controlledByRef.current = controlledBy;
   useEffect(() => {
     if (!controlledBy) return undefined;
     const timer = window.setTimeout(() => setControlledBy(null), 12_000);
     return () => window.clearTimeout(timer);
   }, [controlledBy]);
+
+  // Confirmation that "stop remote control" took, shown briefly where the
+  // fullscreen hint appears. The action itself is silent — the badge just
+  // disappears — and silence after a press reads as a broken button.
+  const [detachedNote, setDetachedNote] = useState(false);
+  useEffect(() => {
+    if (!detachedNote) return undefined;
+    const timer = window.setTimeout(() => setDetachedNote(false), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [detachedNote]);
+  const handleDetach = () => {
+    detachReceiver();
+    setControlledBy(null);
+    setImmersive(false);
+    setDetachedNote(true);
+  };
 
   /**
    * Whether this tab is showing the handed-over video edge to edge.
@@ -1089,6 +1107,11 @@ function App() {
    */
   const [immersive, setImmersive] = useState(false);
   const playerCardRef = useRef(null);
+  // A remote play tears the old source down before the new one is up, and the
+  // moment of no-source in between must not read as "playback over" — that
+  // was exactly the moment the immersive layout used to be torn down when a
+  // hand-over landed on a page already playing something else.
+  const remotePlayPendingRef = useRef(false);
   // Whether the browser itself is fullscreen — read from the document, since
   // the person can enter and leave it (Esc) without going through us.
   const [realFullscreen, setRealFullscreen] = useState(false);
@@ -1116,7 +1139,11 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [immersive, realFullscreen]);
   useEffect(() => {
-    if (!activeSource) setImmersive(false);
+    if (activeSource) {
+      remotePlayPendingRef.current = false;
+      return;
+    }
+    if (!remotePlayPendingRef.current) setImmersive(false);
   }, [activeSource]);
   useEffect(() => {
     if (!immersive) {
@@ -1211,6 +1238,7 @@ function App() {
     // lands as a detail page with nothing playing.
     if (castTargetId) cast.disconnect();
     // Chosen from across the room as the screen to watch on: fill it.
+    remotePlayPendingRef.current = true;
     setImmersive(true);
     void receiverHandlersRef.current.handleSelectItem(
       {
@@ -1266,6 +1294,9 @@ function App() {
         buffering: video.readyState < 3 && !video.paused,
         hasNext: Boolean(handlers.neighbours?.next),
         hasPrevious: Boolean(handlers.neighbours?.prev),
+        // Who is driving, so a second remote holding this device can see the
+        // first one's hand on it. Follows the badge's own 12-second fade.
+        controlledBy: controlledByRef.current,
       };
     },
     onCommand: (command, fromName) => {
@@ -1300,6 +1331,7 @@ function App() {
             video.load();
           }
           setActiveSource(null);
+          remotePlayPendingRef.current = false;
           setImmersive(false);
           break;
         }
@@ -2216,11 +2248,19 @@ function App() {
                     <div className="vp-driven" role="status">
                       <span className="vp-driven-dot" />
                       {(t.controlledFrom || "Controlled from {d}").replace("{d}", controlledBy)}
+                      {/* The person at this screen outranks the account: one
+                          press and this browser leaves every picker and goes
+                          deaf to commands, until Profile turns it back on. */}
+                      <button type="button" className="vp-driven-detach" onClick={handleDetach}>
+                        {t.castDetach || "Stop remote control"}
+                      </button>
                     </div>
                   ) : null}
-                  {fsHint ? (
+                  {fsHint || detachedNote ? (
                     <div className="vp-fs-hint" role="status">
-                      {t.castFsHint || "Tap the picture — or press OK — for browser fullscreen"}
+                      {detachedNote
+                        ? (t.castDetached || "Remote control is off for this browser — turn it back on from Profile.")
+                        : (t.castFsHint || "Tap the picture — or press OK — for browser fullscreen")}
                     </div>
                   ) : null}
                   {cast.target || cast.lostDevice ? (
