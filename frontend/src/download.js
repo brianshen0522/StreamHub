@@ -314,48 +314,105 @@ export async function downloadStream({ id, url, fileName, onProgress, signal }) 
     await writeRecord(record);
   }
 
-  const keyCache = new Map();
+  // Segments come down a window at a time rather than strictly one after
+  // another: each fetch spends most of its life waiting on the CDN's round
+  // trip, so six in flight is roughly six times the throughput, and the
+  // decrypt of one overlaps the transfer of the next. Chunks are keyed by
+  // index so arrival order does not matter to storage; what *resume* needs is
+  // the record's contiguous frontier — completedSegments only advances across
+  // segments with no gap below them, which keeps the old invariant intact: a
+  // resumed download re-fetches at most the few in-flight segments above the
+  // frontier, and re-putting a chunk simply overwrites it.
+  const CONCURRENCY = 6;
 
-  while (record.completedSegments < record.segments.length) {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const index = record.completedSegments;
+  // Keys cached as promises, so six segments hitting the same key URI at once
+  // fetch it once instead of racing six copies.
+  const keyPromises = new Map();
+  const getKey = (uri) => {
+    let promise = keyPromises.get(uri);
+    if (!promise) {
+      promise = (async () => {
+        const keyResponse = await fetch(uri, { signal });
+        if (!keyResponse.ok) throw new Error(`Key request failed (${keyResponse.status})`);
+        return importKey(new Uint8Array(await keyResponse.arrayBuffer()));
+      })();
+      keyPromises.set(uri, promise);
+    }
+    return promise;
+  };
+
+  const total = record.segments.length;
+  let frontier = record.completedSegments;
+  let frontierBytes = record.bytes;
+  let reportedBytes = record.bytes;
+  let storedCount = frontier;
+  let nextIndex = frontier;
+  const storedSizes = new Map();
+  let lastPersist = 0;
+
+  // The record is written when the frontier moves, throttled: per-segment
+  // writes were half the time spent on fast links, and losing the last few
+  // hundred milliseconds of bookkeeping only means re-fetching those
+  // segments — their chunks are already stored and the re-put overwrites.
+  const persist = async (force) => {
+    const now = Date.now();
+    if (!force && now - lastPersist < 800) return;
+    lastPersist = now;
+    record = { ...record, completedSegments: frontier, bytes: frontierBytes, finished: frontier === total };
+    await writeRecord(record);
+  };
+
+  const fetchSegment = async (index) => {
     const segment = record.segments[index];
-
     const response = await fetch(segment.url, { signal });
     if (!response.ok) throw new Error(`Segment ${index + 1} failed (${response.status})`);
     let data = new Uint8Array(await response.arrayBuffer());
 
     if (segment.key?.method === "AES-128") {
-      let cryptoKey = keyCache.get(segment.key.uri);
-      if (!cryptoKey) {
-        const keyResponse = await fetch(segment.key.uri, { signal });
-        if (!keyResponse.ok) throw new Error(`Key request failed (${keyResponse.status})`);
-        cryptoKey = await importKey(new Uint8Array(await keyResponse.arrayBuffer()));
-        keyCache.set(segment.key.uri, cryptoKey);
-      }
+      const cryptoKey = await getKey(segment.key.uri);
       const iv = segment.key.ivHex ? hexToBytes(segment.key.ivHex) : sequenceIv(segment.sequence);
       data = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv }, cryptoKey, data));
     }
 
-    // The chunk goes in before the record moves: killed between the two, the
-    // worst case is one segment stored twice-over, which the next put simply
-    // overwrites. The other order would record progress the storage cannot back.
     await putChunk(id, index, new Blob([data]));
-    record = {
-      ...record,
-      completedSegments: index + 1,
-      bytes: record.bytes + data.byteLength,
-      finished: index + 1 === record.segments.length,
-    };
-    await writeRecord(record);
+    storedSizes.set(index, data.byteLength);
+    storedCount += 1;
+    reportedBytes += data.byteLength;
+    while (storedSizes.has(frontier)) {
+      frontierBytes += storedSizes.get(frontier);
+      storedSizes.delete(frontier);
+      frontier += 1;
+    }
+    await persist(false);
+    report({ phase: "downloading", done: storedCount, total, bytes: reportedBytes });
+  };
 
-    report({
-      phase: "downloading",
-      done: record.completedSegments,
-      total: record.segments.length,
-      bytes: record.bytes,
-    });
+  let failed = false;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, Math.max(1, total - frontier)) }, async () => {
+    while (!failed && nextIndex < total) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        await fetchSegment(index);
+      } catch (error) {
+        // One bad segment stops the others from starting new work; whatever
+        // they already have in flight lands harmlessly in storage.
+        failed = true;
+        throw error;
+      }
+    }
+  });
+
+  try {
+    await Promise.all(workers);
+  } catch (error) {
+    // Keep what is contiguously ours before leaving — this is what makes a
+    // cancel at 80% cost nothing.
+    await persist(true).catch(() => {});
+    throw error;
   }
+  await persist(true);
 
   report({ phase: "assembling", done: record.completedSegments, total: record.segments.length, bytes: record.bytes });
   await assembleAndSave(record);

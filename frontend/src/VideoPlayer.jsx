@@ -140,6 +140,21 @@ export default function VideoPlayer({
   const [dragTime, setDragTime] = useState(0);
   const [hoverX, setHoverX] = useState(null);
   const [flash, setFlash] = useState(null);
+
+  // The download outcome is a notice, not a status light: "done" or "paused
+  // at 80%" earns a few seconds on screen and then gets out of the picture's
+  // way. The state behind it stays — the button still knows how to resume —
+  // only the chip fades. Keyed on the label so a new outcome shows afresh.
+  const [dlNoteShown, setDlNoteShown] = useState(false);
+  useEffect(() => {
+    if (download && !download.active && (download.label || download.error)) {
+      setDlNoteShown(true);
+      const timer = window.setTimeout(() => setDlNoteShown(false), 8_000);
+      return () => window.clearTimeout(timer);
+    }
+    setDlNoteShown(false);
+    return undefined;
+  }, [download?.active, download?.label, download?.error]);
   const [showHelp, setShowHelp] = useState(false);
   const [showRemaining, setShowRemaining] = useState(false);
   const [levels, setLevels] = useState([]);
@@ -664,7 +679,7 @@ export default function VideoPlayer({
         </div>
       ) : null}
 
-      {download && !download.active && (download.label || download.error) ? (
+      {dlNoteShown && download && !download.active && (download.label || download.error) ? (
         <div className={`vp-dl-note${download.error ? " is-error" : ""}`}>
           {download.error ? <IconClose /> : <IconDownload />}
           <span>{download.error || download.label}</span>
