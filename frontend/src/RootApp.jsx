@@ -33,6 +33,22 @@ function isTvBrowser(userAgent = navigator.userAgent) {
 }
 
 /**
+ * Whether the pairing flow should lead the sign-in page. A recognised
+ * television always qualifies; beyond that, any wide (landscape) screen
+ * does — a desktop, a television the sniff missed, a tablet on its side.
+ * On a wide screen the phone in your hand is the easier keyboard, and a
+ * portrait phone is the one shape where typing beats scanning yourself.
+ */
+function prefersQrSignIn() {
+  if (isTvBrowser()) return true;
+  try {
+    return window.innerWidth > window.innerHeight;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Keeps the API's own vocabulary off the sign-in screen.
  *
  * Everything else the server says here is already written for a person — wrong
@@ -57,7 +73,7 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
   // with a remote is the thing the device flow exists to avoid — but the
   // password form stays one press away. Every other device starts on the
   // form and can reach the pairing flow through the link under it.
-  const tv = allowTv && isTvBrowser();
+  const tv = allowTv && prefersQrSignIn();
   const [usePassword, setUsePassword] = useState(!tv);
 
   async function handleSubmit(event) {
