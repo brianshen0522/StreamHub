@@ -247,6 +247,15 @@ actor APIClient {
         url(["manifest"], query: [URLQueryItem(name: "target", value: target)])
     }
 
+    /// The same stream through the server instead of straight from the CDN —
+    /// the playback recovery ladder's second rung. The proxied playlist is
+    /// rewritten so every segment routes back through the server with the
+    /// caller's token baked in, so it keeps playing where the device's own
+    /// path to the CDN has died. Unlike `manifestURL` it is not ad-filtered.
+    nonisolated func streamURL(target: String) -> URL {
+        url(["stream"], query: [URLQueryItem(name: "target", value: target)])
+    }
+
     nonisolated func posterURL(target: String) -> URL? {
         guard !target.isEmpty else { return nil }
         return url(["poster"], query: [URLQueryItem(name: "target", value: target)])
