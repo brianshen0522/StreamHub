@@ -1120,15 +1120,30 @@ function App() {
       if (document.fullscreenElement) return;
       if (event.target.closest?.("button, input, a, select, [role=button]")) return;
       event.stopPropagation();
+      event.preventDefault?.();
       tryBrowserFullscreen();
     };
     if (canFullscreen) document.addEventListener("click", upgrade, true);
+
+    // A television remote's OK button arrives as a keydown, not a click —
+    // Enter, on every TV browser seen so far — so the same upgrade rides it.
+    // Only Enter: the player's own shortcuts (K, F, space…) must keep working
+    // while immersive, and Enter is the one key the player does not use.
+    const upgradeKey = (event) => {
+      if (event.key !== "Enter" || document.fullscreenElement) return;
+      if (event.target.closest?.("button, input, a, select, [role=button]")) return;
+      upgrade(event);
+    };
+    if (canFullscreen) document.addEventListener("keydown", upgradeKey, true);
 
     const onKey = (event) => { if (event.key === "Escape") setImmersive(false); };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.classList.remove("has-immersive-player");
-      if (canFullscreen) document.removeEventListener("click", upgrade, true);
+      if (canFullscreen) {
+        document.removeEventListener("click", upgrade, true);
+        document.removeEventListener("keydown", upgradeKey, true);
+      }
       window.removeEventListener("keydown", onKey);
       if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     };
