@@ -67,8 +67,8 @@ android {
         applicationId = "com.streamhub.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 12
-        versionName = "0.8.2"
+        versionCode = 13
+        versionName = "0.8.3"
 
         buildConfigField("String", "GIT_SHA", "\"${gitSha()}\"")
         buildConfigField("String", "SERVER_URL", "\"${serverUrl()}\"")
