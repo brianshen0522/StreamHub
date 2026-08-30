@@ -1029,7 +1029,16 @@ function App() {
     }
     if (!activeSource) return;
 
-    const url = activeSource.directUrl || activeSource.url || activeSource.proxyUrl;
+    // The download takes the road playback proved passable. It always went
+    // for the CDN first — but on a phone whose network cannot reach that
+    // CDN, playback has already failed over to the proxy, and a download
+    // aimed at the same dead host died the same death. Playback mode is the
+    // live verdict; the unreachable-host memory covers the next episode
+    // before it has played.
+    const directDl = activeSource.directUrl || activeSource.url;
+    const proxyDl = activeSource.proxyUrl;
+    const preferProxy = playbackMode === "proxy" || (directDl && isUnreachableHost(directDl));
+    const url = preferProxy ? (proxyDl || directDl) : (directDl || proxyDl);
     if (!url) return;
 
     const id = await downloadIdentityFor();
@@ -1102,7 +1111,7 @@ function App() {
     } finally {
       downloadAbortRef.current = null;
     }
-  }, [download, activeSource, itemDetail, selectedItem, selectedEpisode, downloadIdentityFor, t]);
+  }, [download, activeSource, playbackMode, itemDetail, selectedItem, selectedEpisode, downloadIdentityFor, t]);
 
   // Switching source or episode stops the transfer but keeps its storage, then
   // asks what is already on disk for the new one — so coming back to a
