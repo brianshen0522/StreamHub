@@ -1076,22 +1076,61 @@ function App() {
    * A title arriving from another device means someone across the room chose
    * this screen to *watch on* — a video playing inside the page layout, rail
    * and topbar and all, is not that. Entered automatically on a remote play
-   * and toggleable from the remote's fullscreen button; a browser will not
-   * grant real fullscreen without a local gesture, so this is the viewport
-   * kind — which on a television's browser is the whole panel anyway.
+   * and toggleable from the remote's fullscreen button.
+   *
+   * The viewport layout is the guaranteed floor; *browser* fullscreen sits on
+   * top of it, taken wherever the rules allow. A remote command is not a
+   * local gesture, and without one a browser refuses requestFullscreen — so
+   * entering immersive merely *attempts* it (television browsers and webviews
+   * are often lenient), and failing that, the first tap anywhere on the
+   * immersive screen is spent on finishing the job rather than on whatever it
+   * landed on. Leaving needs no gesture at all, so the remote's toggle-off
+   * always collapses browser fullscreen too.
    */
   const [immersive, setImmersive] = useState(false);
+  const playerCardRef = useRef(null);
   useEffect(() => {
     if (!activeSource) setImmersive(false);
   }, [activeSource]);
   useEffect(() => {
-    if (!immersive) return undefined;
+    if (!immersive) {
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+      return undefined;
+    }
     document.body.classList.add("has-immersive-player");
+
+    const tryBrowserFullscreen = () => {
+      const el = playerCardRef.current;
+      if (!el || document.fullscreenElement) return;
+      try {
+        const attempt = el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.();
+        attempt?.catch?.(() => { /* no gesture yet — the first tap will finish it */ });
+      } catch { /* same */ }
+    };
+    tryBrowserFullscreen();
+
+    // The upgrade tap. Captured at the document so the player never sees it:
+    // a tap spent on entering fullscreen must not also pause the film. Taps
+    // on real controls are left alone — reaching for the exit button has to
+    // press the exit button, not vanish into a fullscreen request. Only wired
+    // where element fullscreen exists at all (an iPhone has none), or every
+    // tap on the picture would be eaten for nothing.
+    const canFullscreen = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+    const upgrade = (event) => {
+      if (document.fullscreenElement) return;
+      if (event.target.closest?.("button, input, a, select, [role=button]")) return;
+      event.stopPropagation();
+      tryBrowserFullscreen();
+    };
+    if (canFullscreen) document.addEventListener("click", upgrade, true);
+
     const onKey = (event) => { if (event.key === "Escape") setImmersive(false); };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.classList.remove("has-immersive-player");
+      if (canFullscreen) document.removeEventListener("click", upgrade, true);
       window.removeEventListener("keydown", onKey);
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     };
   }, [immersive]);
 
@@ -2104,18 +2143,6 @@ function App() {
   return (
     <div className="app-shell">
 
-      {controlledBy ? (
-        // The driven screen shows who is driving it. Fixed over everything so
-        // it reads from across a room, pulsing so it reads as live. This must
-        // live in the page's own tree, not the topbar chrome — the chrome is
-        // a snapshot re-injected only when its deps change, and a badge put
-        // there renders its mount-time value forever.
-        <div className="vp-driven" role="status">
-          <span className="vp-driven-dot" />
-          {(t.controlledFrom || "Controlled from {d}").replace("{d}", controlledBy)}
-        </div>
-      ) : null}
-
       {/* ── Main ─────────────────────────────────────────────── */}
       <main className="main-content">
 
@@ -2136,7 +2163,18 @@ function App() {
             {/* Player leads; season/episode rail is secondary. */}
             <div className={`watch-layout${showRail ? "" : " no-rail"}`}>
               <div className="watch-main">
-                <div className={`player-card${immersive ? " is-immersive" : ""}`}>
+                <div ref={playerCardRef} className={`player-card${immersive ? " is-immersive" : ""}`}>
+                  {controlledBy ? (
+                    // The driven screen shows who is driving it. Fixed over
+                    // everything, pulsing so it reads as live. It lives inside
+                    // the player card — not the topbar chrome, whose snapshot
+                    // would freeze it, and not the page root, which browser
+                    // fullscreen of this card would stop rendering.
+                    <div className="vp-driven" role="status">
+                      <span className="vp-driven-dot" />
+                      {(t.controlledFrom || "Controlled from {d}").replace("{d}", controlledBy)}
+                    </div>
+                  ) : null}
                   {cast.target || cast.lostDevice ? (
                     // Connected to another device, this page *is* the remote:
                     // the player area shows what the receiver is doing and
