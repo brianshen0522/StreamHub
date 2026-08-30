@@ -18,7 +18,11 @@ import { apiJson } from "./api.js";
 
 export default function TvSignIn({ onSession }) {
   const [pairing, setPairing] = useState(null);
-  const [status, setStatus] = useState("starting"); // starting | waiting | denied | error
+  const [status, setStatus] = useState("starting"); // starting | waiting | error
+  // A declined request rolls straight into a fresh code — the declined one is
+  // dead either way, and a screen stuck on "declined" with a stale QR is a
+  // screen nobody can sign in from. The notice explains the new code.
+  const [declined, setDeclined] = useState(false);
   const canvasRef = useRef(null);
   // The generation counter tears down a superseded pairing's poll loop:
   // restarting after expiry must not leave the old loop polling a dead code.
@@ -44,6 +48,14 @@ export default function TvSignIn({ onSession }) {
     return () => { generation.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The declined notice explains why the code just changed, then gets out of
+  // the way once the new one has been up long enough to read.
+  useEffect(() => {
+    if (!declined) return undefined;
+    const timer = window.setTimeout(() => setDeclined(false), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [declined]);
 
   // Draw the QR whenever a pairing is live.
   useEffect(() => {
@@ -90,7 +102,8 @@ export default function TvSignIn({ onSession }) {
         onSession(result);
       } else if (result.status === "denied") {
         window.clearInterval(timer);
-        setStatus("denied");
+        setDeclined(true);
+        start();
       } else if (result.status === "expired") {
         window.clearInterval(timer);
         start();
@@ -112,14 +125,12 @@ export default function TvSignIn({ onSession }) {
       <div className="auth-tv-code" aria-label="Pairing code">
         {status === "starting" && "········"}
         {status === "error" && "—"}
-        {(status === "waiting" || status === "denied") && (pairing?.userCode || "")}
+        {status === "waiting" && (pairing?.userCode || "")}
       </div>
-      {status === "waiting" ? <p className="auth-tv-hint">Waiting for approval…</p> : null}
-      {status === "denied" ? (
-        <p className="auth-tv-hint">
-          The request was declined. <button type="button" className="auth-tv-again" onClick={start}>Get a new code</button>
-        </p>
+      {status === "waiting" && declined ? (
+        <p className="auth-tv-hint">The request was declined — here is a fresh code.</p>
       ) : null}
+      {status === "waiting" && !declined ? <p className="auth-tv-hint">Waiting for approval…</p> : null}
       {status === "error" ? (
         <p className="auth-tv-hint">
           Could not reach the server. <button type="button" className="auth-tv-again" onClick={start}>Try again</button>
