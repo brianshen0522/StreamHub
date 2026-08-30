@@ -762,6 +762,27 @@ body.has-immersive-player { overflow: hidden; }
 }
 .vp-immersive-exit:hover { opacity: 1; }
 
+/* Names the upgrade tap for a few seconds when the handed-over screen is not
+   yet browser-fullscreen. Bottom centre, out of the picture's way. */
+.vp-fs-hint {
+  position: fixed;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 402;
+  max-width: min(90vw, 520px);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+  animation: vp-driven-in 220ms ease-out;
+}
+
 /* The driven screen names its driver. Fixed over everything — including the
    handed-over full screen — pulsing while a controller is actively in charge,
    gone twelve quiet seconds later. */

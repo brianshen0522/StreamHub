@@ -1089,6 +1089,32 @@ function App() {
    */
   const [immersive, setImmersive] = useState(false);
   const playerCardRef = useRef(null);
+  // Whether the browser itself is fullscreen — read from the document, since
+  // the person can enter and leave it (Esc) without going through us.
+  const [realFullscreen, setRealFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setRealFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    document.addEventListener("webkitfullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
+    };
+  }, []);
+  // The upgrade tap has to be discovered somehow: the hint names it for a few
+  // seconds each time immersive comes up, and vanishes for good the moment
+  // browser fullscreen actually lands.
+  const [fsHint, setFsHint] = useState(false);
+  useEffect(() => {
+    if (!immersive || realFullscreen) {
+      setFsHint(false);
+      return undefined;
+    }
+    if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) return undefined;
+    setFsHint(true);
+    const timer = window.setTimeout(() => setFsHint(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [immersive, realFullscreen]);
   useEffect(() => {
     if (!activeSource) setImmersive(false);
   }, [activeSource]);
@@ -2179,15 +2205,22 @@ function App() {
             <div className={`watch-layout${showRail ? "" : " no-rail"}`}>
               <div className="watch-main">
                 <div ref={playerCardRef} className={`player-card${immersive ? " is-immersive" : ""}`}>
-                  {controlledBy ? (
+                  {controlledBy && !immersive ? (
                     // The driven screen shows who is driving it. Fixed over
                     // everything, pulsing so it reads as live. It lives inside
                     // the player card — not the topbar chrome, whose snapshot
                     // would freeze it, and not the page root, which browser
-                    // fullscreen of this card would stop rendering.
+                    // fullscreen of this card would stop rendering. Not shown
+                    // while immersive: whoever is watching the handed-over
+                    // full screen asked for a picture, not a status bar.
                     <div className="vp-driven" role="status">
                       <span className="vp-driven-dot" />
                       {(t.controlledFrom || "Controlled from {d}").replace("{d}", controlledBy)}
+                    </div>
+                  ) : null}
+                  {fsHint ? (
+                    <div className="vp-fs-hint" role="status">
+                      {t.castFsHint || "Tap the picture — or press OK — for browser fullscreen"}
                     </div>
                   ) : null}
                   {cast.target || cast.lostDevice ? (
