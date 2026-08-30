@@ -38,6 +38,27 @@ export const MAX_SANDWICH_RUN_SECONDS = 60;
 export const MIN_SANDWICH_NEIGHBOR_SECONDS = 300;
 export const MAX_SANDWICH_RUN_COUNT = 9;
 
+/**
+ * The cadence signal's fences. Some encoders cut a discontinuity every N
+ * segments like clockwork; in those playlists an ad re-encoded into the
+ * feature's own stream — same directory, URIs numbered seamlessly into the
+ * feature's sequence — still betrays itself by breaking the beat with a
+ * short run of fewer segments. Only trusted when the beat is strong (most
+ * runs carry exactly the modal count) and long enough to mean something;
+ * the first and last runs are exempt, since starting and ending off-beat
+ * is just how a file begins and ends.
+ */
+export const MIN_CADENCE_RUN_COUNT = 12;
+export const MIN_CADENCE_SEGMENTS = 6;
+export const MIN_CADENCE_SHARE = 0.75;
+export const MAX_CADENCE_AD_SECONDS = 60;
+// A broken-beat run must also be clearly *shorter* than the beat to be an
+// ad. The splice cuts the feature mid-run, and the stub left behind breaks
+// the beat too — one segment short but nearly full length. The ads observed
+// run 20-26 s against a 40 s beat; the stubs 34-40 s. Cutting stubs would
+// cut feature.
+export const CADENCE_SHORT_RATIO = 0.7;
+
 export function directoryOf(uri, baseUrl) {
   try {
     const absolute = new URL(uri, baseUrl);
@@ -133,6 +154,45 @@ export function classifyRuns(runs, playlistUrl) {
         && meta[index - 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS
         && meta[index + 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS) {
         adFlags[index] = true;
+      }
+    }
+  }
+
+  // ── Signal 4: the broken cadence ────────────────────────────────────────
+  // Clockwork playlists — a discontinuity every N segments — where the ad is
+  // re-encoded into the feature's own stream, URIs numbered seamlessly into
+  // its sequence. Directory, repetition and sandwich all see nothing; the
+  // only tell left is a short interior run that breaks the beat.
+  //
+  // Only consulted when every other signal is silent. Where a splice is
+  // already caught by directory or repetition, the beat around it is broken
+  // by the *feature*: the run the ad landed in comes out as two off-beat
+  // stubs either side of it, summing to one beat — and reading those as ads
+  // cut forty seconds of feature at every break.
+  if (!adFlags.some(Boolean) && runs.length >= MIN_CADENCE_RUN_COUNT) {
+    const tally = new Map();
+    for (const run of runs) {
+      tally.set(run.segments.length, (tally.get(run.segments.length) || 0) + 1);
+    }
+    let beat = 0;
+    let beatRuns = 0;
+    for (const [count, occurrences] of tally) {
+      if (occurrences > beatRuns) {
+        beatRuns = occurrences;
+        beat = count;
+      }
+    }
+    if (beat >= MIN_CADENCE_SEGMENTS && beatRuns / runs.length >= MIN_CADENCE_SHARE) {
+      const beatSeconds = runs
+        .map((run, index) => (run.segments.length === beat ? meta[index].seconds : null))
+        .filter((seconds) => seconds !== null)
+        .sort((a, b) => a - b);
+      const medianBeatSeconds = beatSeconds[Math.floor(beatSeconds.length / 2)] || 0;
+      const shortEnough = Math.min(MAX_CADENCE_AD_SECONDS, medianBeatSeconds * CADENCE_SHORT_RATIO);
+      for (let index = 1; index < runs.length - 1; index += 1) {
+        if (runs[index].segments.length < beat && meta[index].seconds <= shortEnough) {
+          adFlags[index] = true;
+        }
       }
     }
   }
