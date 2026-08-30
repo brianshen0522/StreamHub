@@ -714,7 +714,14 @@
 
 .usr-panel-title { font-size: 13.5px; font-weight: 650; }
 .usr-panel-desc { margin-top: 2px; font-size: 12px; color: var(--usr-fg-3); }
-.usr-panel-body { padding: 18px; }
+.usr-panel-body {
+  padding: 18px;
+  /* Direct children breathe. Most bodies hold a single form (which spaces
+     itself), but the approve card holds a device summary and its action row
+     side by side — and they sat glued together. */
+  display: grid;
+  gap: 16px;
+}
 
 .usr-form { display: grid; gap: 14px; }
 .usr-field { display: grid; gap: 6px; min-width: 0; }
