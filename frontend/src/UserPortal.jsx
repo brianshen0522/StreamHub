@@ -649,6 +649,12 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
     apiJson("/api/me/sessions").then((payload) => setDevices(payload.sessions || [])).catch(() => {});
   }, []);
   useEffect(() => { loadDevices(); }, [loadDevices]);
+  // Sessions are made and unmade on other devices — a browser signing out, a
+  // television pairing in — and this list should drop or grow the moment it
+  // happens rather than on the next visit.
+  useEffect(() => subscribeRealtime((event) => {
+    if (event.type === "devices") loadDevices();
+  }), [loadDevices]);
 
   async function signOutDevice(id) {
     try {

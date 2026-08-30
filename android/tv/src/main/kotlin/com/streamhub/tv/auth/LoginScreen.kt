@@ -123,9 +123,17 @@ class LoginViewModel(private val container: AppContainer) : ViewModel() {
                 _state.update { it.copy(pairing = pairing, pairingError = null) }
 
                 val interval = pairing.intervalSeconds.coerceAtLeast(1) * 1000L
+                val expiresAt = System.currentTimeMillis() + pairing.expiresInSeconds.coerceAtLeast(5) * 1000L
                 var resolved = false
                 while (isActive && !resolved) {
                     delay(interval)
+                    // The code dies on schedule, so it is replaced on
+                    // schedule: waiting for a poll to say "expired" leaves a
+                    // dead QR on the screen for up to a full interval.
+                    if (System.currentTimeMillis() >= expiresAt) {
+                        resolved = true
+                        continue
+                    }
                     val status = try {
                         container.api.pollDevicePairing(pairing.deviceCode)
                     } catch (error: Exception) {
