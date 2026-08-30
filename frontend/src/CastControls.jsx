@@ -196,21 +196,25 @@ export function CastBar({ t }) {
 }
 
 /**
- * The full remote.
+ * The remote's live picture of the receiver, shared by every surface that
+ * draws one — the modal remote and the watch page's remote panel.
  *
- * Two things here are not obvious. The receiver reports its position about
- * once a second, so the bar is advanced locally between reports or it ticks in
- * visible steps — but only while playing, since a paused position that crept
- * forward would be a lie about the television. And a scrub is held on screen
- * until the television reports back near it, or the bar snaps to a stale
- * position for a second and reads as a failed seek.
+ * Three tricks make the remote feel attached to the television rather than a
+ * second behind it. The position is advanced locally between reports — but
+ * only while playing, since a paused position that crept forward would be a
+ * lie. A scrub is held on screen until the television reports back near it,
+ * or the bar snaps to a stale position and reads as a failed seek. And a
+ * press of play or pause is *assumed* to land: the button flips at once and
+ * the receiver's echo confirms it a round-trip later — shown wrong for 2.5
+ * seconds at worst, against reading wrong after every single press before.
  */
-function CastRemote({ cast, t, onClose }) {
+function useRemoteTransport(cast) {
   const state = cast.target?.state;
   const duration = (state?.durationMs ?? 0) / 1000;
 
   const [scrubbing, setScrubbing] = useState(null);
   const [pending, setPending] = useState(null);
+  const [assumed, setAssumed] = useState(null);
   const reportedAt = useRef(Date.now());
   const [, tick] = useState(0);
 
@@ -236,21 +240,134 @@ function CastRemote({ cast, t, onClose }) {
     return () => window.clearTimeout(timer);
   }, [pending]);
 
+  // The assumption yields to the receiver: confirmed, it is no longer needed;
+  // unanswered, it expires rather than hold a lie.
   useEffect(() => {
-    if (idle || state?.paused) return undefined;
+    if (assumed === null) return undefined;
+    if (Boolean(state?.paused) === assumed) {
+      setAssumed(null);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setAssumed(null), 2_500);
+    return () => window.clearTimeout(timer);
+  }, [assumed, state?.paused]);
+
+  const paused = assumed ?? Boolean(state?.paused);
+
+  useEffect(() => {
+    if (idle || paused) return undefined;
     const timer = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(timer);
-  }, [idle, state?.paused]);
+  }, [idle, paused]);
+
+  const base = (state?.positionMs ?? 0) / 1000;
+  const live = idle ? 0 : paused ? base : base + (Date.now() - reportedAt.current) / 1000;
+  const shown = scrubbing ?? pending ?? live;
+
+  const seekTo = (seconds) => {
+    const position = Math.max(0, duration > 0 ? Math.min(seconds, duration) : seconds);
+    setPending(position);
+    cast.seek(position * 1000);
+  };
+
+  return {
+    state,
+    idle,
+    duration,
+    live,
+    shown,
+    paused,
+    scrubbing,
+    beginScrub: setScrubbing,
+    commitScrub: () => {
+      if (scrubbing === null) return;
+      const position = scrubbing;
+      setScrubbing(null);
+      seekTo(position);
+    },
+    togglePause: () => {
+      if (idle) return;
+      const next = !paused;
+      setAssumed(next);
+      if (next) cast.pause();
+      else cast.resume();
+    },
+    seekBy: (delta) => seekTo(live + delta),
+  };
+}
+
+function RemoteSeek({ cast, r }) {
+  return (
+    <>
+      <input
+        className="cast-remote-seek"
+        type="range"
+        min={0}
+        max={Math.max(r.duration, 1)}
+        step={1}
+        value={Math.min(r.shown, Math.max(r.duration, 1))}
+        disabled={r.idle || cast.lost}
+        onChange={(event) => r.beginScrub(Number(event.target.value))}
+        onMouseUp={r.commitScrub}
+        onTouchEnd={r.commitScrub}
+        onKeyUp={r.commitScrub}
+      />
+      <div className="cast-remote-times">
+        <span>{clock(r.shown)}</span>
+        <span>{clock(r.duration)}</span>
+      </div>
+    </>
+  );
+}
+
+function RemoteTransport({ cast, r, t }) {
+  const state = r.state;
+  return (
+    <div className="cast-remote-transport">
+      {/* The television is the one holding the episode list, so whether a
+          skip exists comes from its report — at a season's first episode
+          there is no previous, at its last no next, and the button says so
+          by being disabled rather than by failing silently. */}
+      <button
+        type="button"
+        onClick={() => cast.previous()}
+        disabled={!state?.hasPrevious || cast.lost}
+        aria-label={t?.prevEpisode || "Previous episode"}
+      >
+        ⏮
+      </button>
+      <button type="button" onClick={() => r.seekBy(-10)} disabled={r.idle || cast.lost}>−10</button>
+      <button
+        type="button"
+        className="cast-remote-play"
+        onClick={r.togglePause}
+        disabled={r.idle || cast.lost}
+      >
+        {r.paused ? "▶" : "❚❚"}
+      </button>
+      <button type="button" onClick={() => r.seekBy(10)} disabled={r.idle || cast.lost}>+10</button>
+      <button
+        type="button"
+        onClick={() => cast.next()}
+        disabled={!state?.hasNext || cast.lost}
+        aria-label={t?.nextEpisode || "Next episode"}
+      >
+        ⏭
+      </button>
+    </div>
+  );
+}
+
+/** The full remote, as a sheet over any page. */
+function CastRemote({ cast, t, onClose }) {
+  const r = useRemoteTransport(cast);
+  const state = r.state;
 
   useEffect(() => {
     function onKey(event) { if (event.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const base = (state?.positionMs ?? 0) / 1000;
-  const live = idle ? 0 : state?.paused ? base : base + (Date.now() - reportedAt.current) / 1000;
-  const shown = scrubbing ?? pending ?? live;
 
   return (
     <Scrim onClose={onClose}>
@@ -268,61 +385,18 @@ function CastRemote({ cast, t, onClose }) {
 
         <div className="cast-remote-title">
           <b>{state?.title || (t?.nothingPlaying || "Nothing playing")}</b>
-          {state?.episodeLabel ? <small>{`${t?.episode || "Episode"} ${state.episodeLabel}`}</small> : null}
+          {/* The label names itself — "第03集", "EP3" — a prefix on top reads
+              doubled in either language. */}
+          {state?.episodeLabel ? <small>{state.episodeLabel}</small> : null}
         </div>
 
-        <input
-          className="cast-remote-seek"
-          type="range"
-          min={0}
-          max={Math.max(duration, 1)}
-          step={1}
-          value={Math.min(shown, Math.max(duration, 1))}
-          disabled={idle || cast.lost}
-          onChange={(event) => setScrubbing(Number(event.target.value))}
-          onMouseUp={commitScrub}
-          onTouchEnd={commitScrub}
-          onKeyUp={commitScrub}
-        />
-        <div className="cast-remote-times">
-          <span>{clock(shown)}</span>
-          <span>{clock(duration)}</span>
-        </div>
-
-        <div className="cast-remote-transport">
-          {/* The television is the one holding the episode list, so whether a
-              skip exists comes from its report — at a season's first episode
-              there is no previous, at its last no next, and the button says so
-              by being disabled rather than by failing silently. */}
-          <button
-            type="button"
-            onClick={() => cast.previous()}
-            disabled={!state?.hasPrevious || cast.lost}
-            aria-label={t?.prevEpisode || "Previous episode"}
-          >
-            ⏮
-          </button>
-          <button type="button" onClick={() => cast.seek(Math.max(0, live - 10) * 1000)} disabled={idle || cast.lost}>−10</button>
-          <button
-            type="button"
-            className="cast-remote-play"
-            onClick={() => (state?.paused ? cast.resume() : cast.pause())}
-            disabled={idle || cast.lost}
-          >
-            {state?.paused ? "▶" : "❚❚"}
-          </button>
-          <button type="button" onClick={() => cast.seek((live + 10) * 1000)} disabled={idle || cast.lost}>+10</button>
-          <button
-            type="button"
-            onClick={() => cast.next()}
-            disabled={!state?.hasNext || cast.lost}
-            aria-label={t?.nextEpisode || "Next episode"}
-          >
-            ⏭
-          </button>
-        </div>
+        <RemoteSeek cast={cast} r={r} />
+        <RemoteTransport cast={cast} r={r} t={t} />
 
         <div className="cast-remote-actions">
+          <button type="button" onClick={() => cast.fullscreen()} disabled={r.idle || cast.lost}>
+            {t?.castFullscreen || "Fullscreen"}
+          </button>
           <button type="button" onClick={() => { cast.disconnect(); onClose(); }}>
             {t?.playHere || "Play here"}
           </button>
@@ -333,14 +407,79 @@ function CastRemote({ cast, t, onClose }) {
       </div>
     </Scrim>
   );
+}
 
-  function commitScrub() {
-    if (scrubbing === null) return;
-    const position = scrubbing;
-    setScrubbing(null);
-    setPending(position);
-    cast.seek(position * 1000);
-  }
+/**
+ * The watch page while it is a remote.
+ *
+ * Connected to another device, the page's player area *is* the remote: what
+ * the receiver is showing, a scrub bar, transport, and where to send things —
+ * not a dark video element with the real controls hidden behind a bar at the
+ * bottom of the screen. Episode and source rows stay where they always are,
+ * below; while this panel is up, choosing one plays it on the receiver.
+ */
+export function RemotePanel({ t, poster, canSend, onSendCurrent }) {
+  const cast = useCast();
+  const r = useRemoteTransport(cast);
+  const device = cast.target ?? cast.lostDevice;
+  if (!device) return null;
+  const state = r.state;
+
+  return (
+    <div className={`remote-panel${cast.lost ? " is-lost" : ""}`}>
+      {poster ? (
+        <div className="remote-panel-art" style={{ backgroundImage: `url("${poster}")` }} aria-hidden="true" />
+      ) : null}
+      <div className="remote-panel-veil" aria-hidden="true" />
+
+      <div className="remote-panel-body">
+        <div className="remote-panel-head">
+          <span
+            className={`remote-panel-dot${!r.idle && !r.paused && !cast.lost ? " is-live" : ""}`}
+            aria-hidden="true"
+          />
+          <span>
+            {cast.lost
+              ? `${device.deviceName} · ${t?.disconnected || "Disconnected"}`
+              : r.idle
+                ? (t?.castConnectedTo || "Connected to {device}").replace("{device}", device.deviceName)
+                : (t?.castPlayingOnDevice || "Playing on {device}").replace("{device}", device.deviceName)}
+          </span>
+        </div>
+
+        <div className="remote-panel-now">
+          <b>{state?.title || (t?.nothingPlaying || "Nothing playing")}</b>
+          {state?.episodeLabel || state?.subtitle ? (
+            <small>{[state?.episodeLabel, state?.subtitle].filter(Boolean).join(" · ")}</small>
+          ) : r.idle && !cast.lost ? (
+            <small>{t?.castIdleHint || "Pick an episode or a source below to start it there."}</small>
+          ) : null}
+        </div>
+
+        {canSend ? (
+          <button type="button" className="remote-panel-send" onClick={onSendCurrent}>
+            {(t?.castPlayThisHere || "Play this on {device}").replace("{device}", device.deviceName)}
+          </button>
+        ) : null}
+
+        <div className="remote-panel-controls">
+          <RemoteSeek cast={cast} r={r} />
+          <RemoteTransport cast={cast} r={r} t={t} />
+          <div className="remote-panel-actions">
+            <button type="button" onClick={() => cast.fullscreen()} disabled={r.idle || cast.lost}>
+              {t?.castFullscreen || "Fullscreen"}
+            </button>
+            <button type="button" onClick={() => cast.disconnect()}>
+              {t?.playHere || "Play here"}
+            </button>
+            <button type="button" className="remote-panel-stop" onClick={() => cast.stop()}>
+              {t?.stop || "Stop"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function clock(seconds) {

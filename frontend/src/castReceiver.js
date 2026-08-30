@@ -43,6 +43,32 @@ let stateGetter = null;
 let commandHandler = null;
 /** A play request waiting for the watch page to mount and consume it. */
 let pendingPlay = null;
+/** A queued immediate announcement — see `announceNow`. */
+let announceTimer = null;
+
+/**
+ * Announce this tab's state right now instead of on the next heartbeat.
+ *
+ * The heartbeat alone is why remotes used to feel broken: press pause and the
+ * remote's button sat wrong for up to a second, long enough to press it again
+ * and undo the first press. The player calls this on every transition — play,
+ * pause, seek, buffering — and the presence layer calls it after applying a
+ * command, so the controller hears the effect within a round-trip.
+ *
+ * Deferred one tick rather than sent inline: transitions arrive in bursts
+ * (pause fires pause and seeked together) and the element's state is only
+ * settled once the burst is over. One frame carrying the settled state beats
+ * three carrying the intermediate ones.
+ */
+export function announceNow() {
+  if (announceTimer) return;
+  announceTimer = window.setTimeout(() => {
+    announceTimer = null;
+    const state = stateGetter ? stateGetter() : null;
+    if (!holdsLease(Boolean(state))) return;
+    sendRealtime({ type: "playback", state });
+  }, 60);
+}
 
 function readLease() {
   try {
@@ -72,6 +98,10 @@ function holdsLease(playing) {
 }
 
 function releaseLease() {
+  // A queued announcement would re-claim the lease this is releasing —
+  // `holdsLease` takes any lease that is absent — so it dies with it.
+  window.clearTimeout(announceTimer);
+  announceTimer = null;
   try {
     const lease = readLease();
     if (lease?.tab === tabId) localStorage.removeItem(LEASE_KEY);
@@ -105,6 +135,10 @@ export function useReceiverPresence({ onPlay }) {
       if (!holdsLease(Boolean(state))) return;
       if (commandHandler) {
         commandHandler(event.command, event.fromName || null);
+        // The echo: whoever sent the command sees its effect immediately,
+        // not on the next heartbeat. `announceNow`'s deferral gives the
+        // player a tick to settle first.
+        announceNow();
         return;
       }
       // No watch page mounted: an idle tab still honours a hand-over, the way

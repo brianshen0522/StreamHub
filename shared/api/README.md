@@ -225,7 +225,9 @@ The same socket carries casting. Any client that sends
 `{ "type": "playback", "state": {...} | null }` becomes a **receiver** — it
 appears in every other same-account client's `receivers` list and can be sent
 `{ "type": "command", "to": "<sessionId>", "command": {...} }` frames
-(`pause` / `resume` / `seek` / `stop` / `next` / `previous` / `play`). The
+(`pause` / `resume` / `seek` / `stop` / `next` / `previous` / `play` /
+`fullscreen` — the last toggles the receiver's own idea of full screen; a
+native television is already there and may ignore it). The
 television was merely the first client to take the role; the web app now takes
 it too whenever it is playing locally. Two things follow from the routing being
 by *session id*:
@@ -247,9 +249,14 @@ idle browser is listed and can be handed a title even before anything plays.
 A `play` arriving while the watch page is not mounted is stashed and honoured
 after navigating there.
 
-State frames are throttled server-side (dropped under 250 ms apart), so a
-receiver announcing "idle" right after its last heartbeat must delay that frame
-or it is silently lost and pickers keep showing the finished title.
+A receiver should announce **on every transition** — play, pause, seek,
+buffering — and immediately after applying a command, with a ~1 s heartbeat
+underneath as the position ticker. The echo is what makes a remote feel
+attached: a controller shows its press optimistically and expects the
+receiver's own report to confirm it within a round-trip, not on the next
+heartbeat. State frames inside the server's 250 ms window are no longer
+dropped — the newest is held and published when the window closes — so bursts
+are safe and the last word always lands.
 
 Close codes matter: `4001` auth timeout, `4003` unauthorized, and **`4002` access
 token expired** — the server closes the socket precisely when the JWT expires.

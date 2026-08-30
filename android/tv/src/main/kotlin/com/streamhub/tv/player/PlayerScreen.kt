@@ -263,26 +263,35 @@ fun PlayerScreen(
         }
     }
 
+    // What this screen is doing, as one snapshot. `paused` reports intent
+    // (playWhenReady), not isPlaying: a buffering player that means to play is
+    // "playing, buffering" to the remote, or its play button reads paused and
+    // a tap on it does nothing.
+    fun publishState() {
+        receiver.publish(
+            CastPlaybackState(
+                provider = request.providerKey,
+                itemUrl = request.itemUrl,
+                title = request.title,
+                subtitle = request.sourceLabel,
+                posterUrl = request.posterUrl,
+                episodeLabel = request.episodeLabel,
+                positionMs = player.currentPosition.coerceAtLeast(0),
+                durationMs = player.duration.coerceAtLeast(0),
+                paused = !player.playWhenReady,
+                buffering = player.playbackState == Player.STATE_BUFFERING,
+                hasNext = request.nextEpisodeLabel != null,
+                hasPrevious = request.prevEpisodeLabel != null,
+            )
+        )
+    }
+
     // Tell the account's phones what is on screen. Once a second, which is what
-    // the phone's remote is built to interpolate between.
+    // the phone's remote is built to interpolate between; transitions echo
+    // immediately from the command collector below.
     LaunchedEffect(player, request.directUrl) {
         while (true) {
-            receiver.publish(
-                CastPlaybackState(
-                    provider = request.providerKey,
-                    itemUrl = request.itemUrl,
-                    title = request.title,
-                    subtitle = request.sourceLabel,
-                    posterUrl = request.posterUrl,
-                    episodeLabel = request.episodeLabel,
-                    positionMs = player.currentPosition.coerceAtLeast(0),
-                    durationMs = player.duration.coerceAtLeast(0),
-                    paused = !player.isPlaying,
-                    buffering = player.playbackState == Player.STATE_BUFFERING,
-                    hasNext = request.nextEpisodeLabel != null,
-                    hasPrevious = request.prevEpisodeLabel != null,
-                )
-            )
+            publishState()
             delay(1_000)
         }
     }
@@ -314,6 +323,13 @@ fun PlayerScreen(
                 // the episode with this label" and does not care which way.
                 is CastCommand.Previous -> request.prevEpisodeLabel?.let(onNextEpisode)
                 is CastCommand.Play -> Unit // handled by the app root, which navigates
+            }
+            // The echo: whoever pressed the button on a phone is watching
+            // their remote for the answer, and the next heartbeat is up to a
+            // second away. A moment's delay lets the player settle first.
+            if (command !is CastCommand.Stop && command !is CastCommand.Play) {
+                delay(60)
+                publishState()
             }
         }
     }

@@ -723,13 +723,53 @@
 }
 .vp-cast-cta:hover { background: #f40612; }
 
-/* The driven screen names its driver. Fixed over everything, pulsing while a
-   controller is actively in charge, gone twelve quiet seconds later. */
+/* ── the handed-over full screen ─────────────────────────────
+   A title arriving from another device fills this one edge to edge. CSS
+   rather than the Fullscreen API, because a browser refuses real fullscreen
+   without a local gesture and a command over a socket is not one — and on a
+   television's browser the viewport already is the panel. */
+.player-card.is-immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  margin: 0;
+  gap: 0;
+  background: #000;
+}
+.player-card.is-immersive .vp {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+body.has-immersive-player { overflow: hidden; }
+
+.vp-immersive-exit {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  z-index: 402;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  background: rgba(12, 12, 16, 0.6);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.vp-immersive-exit:hover { opacity: 1; }
+
+/* The driven screen names its driver. Fixed over everything — including the
+   handed-over full screen — pulsing while a controller is actively in charge,
+   gone twelve quiet seconds later. */
 .vp-driven {
   position: fixed;
   top: calc(72px + env(safe-area-inset-top, 0px));
   right: 16px;
-  z-index: 60;
+  z-index: 402;
   display: flex;
   align-items: center;
   gap: 8px;

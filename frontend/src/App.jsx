@@ -4,14 +4,14 @@ import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
 import { useCast } from "./cast.js";
-import { CastButton } from "./CastControls.jsx";
+import { CastButton, RemotePanel } from "./CastControls.jsx";
 import VideoPlayer from "./VideoPlayer.jsx";
 import { EpisodeRail, SeasonSelect, SourceSelect } from "./WatchPanels.jsx";
 import { createAdFilterLoader } from "./adfilter.js";
 import { subscribeRealtime } from "./realtime.js";
 import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload } from "./download.js";
 import ImeSafeInput from "./ImeSafeInput.jsx";
-import { consumePlayRequest, useBrowserReceiver } from "./castReceiver.js";
+import { announceNow, consumePlayRequest, useBrowserReceiver } from "./castReceiver.js";
 
 const providerOptions = ["movieffm", "777tv", "dramasq"];
 
@@ -447,17 +447,30 @@ function App() {
    * back to playing here.
    */
   function sendToTelevision(source) {
-    const { play, payload, resume, nextEpisodeLabel, prevEpisodeLabel } = castStateRef.current;
+    const { play, payload, resume, nextEpisodeLabel, prevEpisodeLabel, targetState } = castStateRef.current;
     if (!play || !payload || !source) return false;
+
+    // Switching the source of the episode the television is already showing
+    // continues from where the television *is*, not from the account's saved
+    // progress — progress pings lag the picture by several seconds, and a
+    // thirty-second courtesy rewind on top made every source switch feel
+    // like a seek backwards. A different episode still resumes the saved way.
+    const liveHandover = targetState?.itemUrl
+      && targetState.itemUrl === payload.itemUrl
+      && (targetState.episodeLabel || null) === (payload.episodeLabel || null)
+      && targetState.positionMs > 0;
+
     return play({
       ...payload,
       sourceLabel: source.sourceLabel,
       directUrl: source.directUrl || source.url,
       // The same thirty-second rewind the local player applies, so handing a
       // title to a television lands where it would have landed here.
-      resumeAtSeconds: resume?.isCompleted
-        ? 0
-        : Math.max(0, (resume?.positionSeconds || 0) - 30),
+      resumeAtSeconds: liveHandover
+        ? Math.max(0, targetState.positionMs / 1000 - 2)
+        : resume?.isCompleted
+          ? 0
+          : Math.max(0, (resume?.positionSeconds || 0) - 30),
       nextEpisodeLabel,
       prevEpisodeLabel,
     });
@@ -550,7 +563,13 @@ function App() {
     // this element stays dark. The sending itself lives in its own effect,
     // keyed on whether a gesture armed it: a restored page auto-selecting a
     // source is not a request to play anything anywhere.
-    if (castTargetId) {
+    //
+    // A *lost* television holds the same silence. The target is derived from
+    // the live receiver list, so a blip of this tab's own socket — not the
+    // television's — used to null it for a moment, and this effect answered
+    // by blasting the episode out of the local speakers. Only the person
+    // choosing to play here (which forgets the device) moves playback back.
+    if (castTargetId || cast.lost) {
       return undefined;
     }
 
@@ -670,7 +689,8 @@ function App() {
     // The session id, not the device object: that object is rebuilt from the
     // receiver list every time the server republishes it, and an effect that
     // now sends a play command must not re-fire on a list that has not changed.
-  }, [activeSource, castTargetId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSource, castTargetId, cast.lost]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1035,6 +1055,9 @@ function App() {
     resume: resumeProgress,
     nextEpisodeLabel: episodeNeighbours?.next?.label || null,
     prevEpisodeLabel: episodeNeighbours?.prev?.label || null,
+    // What the receiver last said it was doing — a source switch mid-episode
+    // reads its position from here so the picture carries straight on.
+    targetState: cast.target?.state ?? null,
   };
 
   // ── the receiver role: this tab can be driven like a television ──────────
@@ -1046,6 +1069,45 @@ function App() {
     const timer = window.setTimeout(() => setControlledBy(null), 12_000);
     return () => window.clearTimeout(timer);
   }, [controlledBy]);
+
+  /**
+   * Whether this tab is showing the handed-over video edge to edge.
+   *
+   * A title arriving from another device means someone across the room chose
+   * this screen to *watch on* — a video playing inside the page layout, rail
+   * and topbar and all, is not that. Entered automatically on a remote play
+   * and toggleable from the remote's fullscreen button; a browser will not
+   * grant real fullscreen without a local gesture, so this is the viewport
+   * kind — which on a television's browser is the whole panel anyway.
+   */
+  const [immersive, setImmersive] = useState(false);
+  useEffect(() => {
+    if (!activeSource) setImmersive(false);
+  }, [activeSource]);
+  useEffect(() => {
+    if (!immersive) return undefined;
+    document.body.classList.add("has-immersive-player");
+    const onKey = (event) => { if (event.key === "Escape") setImmersive(false); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.classList.remove("has-immersive-player");
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [immersive]);
+
+  // Transitions are announced the moment they happen, not on the heartbeat:
+  // the person holding the remote pressed the button and is watching *their*
+  // screen for the answer. The heartbeat stays as the position ticker.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !activeSource || castTargetId || cast.lost) return undefined;
+    const names = ["play", "playing", "pause", "seeked", "waiting", "ended", "durationchange", "loadedmetadata"];
+    const onTransition = () => announceNow();
+    for (const name of names) video.addEventListener(name, onTransition);
+    return () => {
+      for (const name of names) video.removeEventListener(name, onTransition);
+    };
+  }, [activeSource, castTargetId, cast.lost]);
 
   const receiverHandlersRef = useRef({});
   receiverHandlersRef.current = {
@@ -1068,6 +1130,8 @@ function App() {
     // this, the player effect defers to the held target and the command
     // lands as a detail page with nothing playing.
     if (castTargetId) cast.disconnect();
+    // Chosen from across the room as the screen to watch on: fill it.
+    setImmersive(true);
     void receiverHandlersRef.current.handleSelectItem(
       {
         url: playback.itemUrl,
@@ -1100,7 +1164,10 @@ function App() {
   }, []);
 
   useBrowserReceiver({
-    active: Boolean(activeSource) && !castTargetId,
+    // Holding a remote — even one whose device just blinked off the list —
+    // means nothing is playing *here*, and announcing this tab's empty video
+    // element as a receiver would put a phantom device in every picker.
+    active: Boolean(activeSource) && !castTargetId && !cast.lost,
     getState: () => {
       const video = videoRef.current;
       const payload = castStateRef.current.payload;
@@ -1153,8 +1220,12 @@ function App() {
             video.load();
           }
           setActiveSource(null);
+          setImmersive(false);
           break;
         }
+        case "fullscreen":
+          setImmersive((value) => !value);
+          break;
         case "play":
           applyPlayRef.current(command.playback || {});
           break;
@@ -2065,7 +2136,28 @@ function App() {
             {/* Player leads; season/episode rail is secondary. */}
             <div className={`watch-layout${showRail ? "" : " no-rail"}`}>
               <div className="watch-main">
-                <div className="player-card">
+                <div className={`player-card${immersive ? " is-immersive" : ""}`}>
+                  {cast.target || cast.lostDevice ? (
+                    // Connected to another device, this page *is* the remote:
+                    // the player area shows what the receiver is doing and
+                    // the controls that drive it, not a dark video element.
+                    // The episode and source rows below keep working — while
+                    // this panel is up, choosing one plays it over there.
+                    <RemotePanel
+                      t={t}
+                      // Proxied like every other poster: providers refuse
+                      // hot-linked images, so the raw URL draws nothing.
+                      poster={posterProxyUrl(
+                        cast.target?.state?.posterUrl
+                          || cast.lostDevice?.state?.posterUrl
+                          || selectedItem.posterUrl
+                          || itemDetail?.posterUrl
+                          || "",
+                      )}
+                      canSend={Boolean(cast.target) && Boolean(activeSource) && castSendState === "idle"}
+                      onSendCurrent={() => setCastSendState("armed")}
+                    />
+                  ) : (
                   <VideoPlayer
                     videoRef={videoRef}
                     hls={hlsInstance}
@@ -2086,15 +2178,7 @@ function App() {
                         <p>{sourcesLoading ? t.loadingSources : t.noSources}</p>
                       </>
                     ) : null}
-                    overlay={!nextEpPrompt && cast.target && activeSource && castSendState === "idle" ? (
-                      <button
-                        type="button"
-                        className="vp-cast-cta"
-                        onClick={() => setCastSendState("armed")}
-                      >
-                        {t.castPlayThisHere.replace("{device}", cast.target.deviceName)}
-                      </button>
-                    ) : nextEpPrompt ? (
+                    overlay={nextEpPrompt ? (
                       <div className="autoplay-prompt">
                         <div className="prompt-header">
                           <span className="prompt-title">{t.upNext}: {nextEpPrompt.episode || nextEpPrompt.season?.label}</span>
@@ -2114,7 +2198,20 @@ function App() {
                       </div>
                     ) : null}
                   />
-                  {playerError && <div className="error-box">{playerError}</div>}
+                  )}
+                  {immersive ? (
+                    // The way out of the handed-over full screen, for whoever
+                    // is at *this* device. Esc does the same.
+                    <button
+                      type="button"
+                      className="vp-immersive-exit"
+                      onClick={() => setImmersive(false)}
+                      aria-label={t.exitFullscreen}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                  {playerError && !cast.target && !cast.lostDevice ? <div className="error-box">{playerError}</div> : null}
                 </div>
 
                 <div className="watch-info">

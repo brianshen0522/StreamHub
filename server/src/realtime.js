@@ -31,9 +31,11 @@ const CLOSE_TOKEN_EXPIRED = 4002;
 const CLOSE_UNAUTHORIZED = 4003;
 
 /**
- * A receiver reports its position about once a second. Rejecting anything
- * faster keeps a buggy or hostile client from turning one socket into a
- * fan-out amplifier against every other device on the account.
+ * A receiver reports on every transition now, not on a metronome, so bursts
+ * are normal — a pause lands as pause+seeked within milliseconds. The window
+ * still caps how often the account-wide fan-out runs, but a frame inside it
+ * is *held*, never dropped: the last word of a burst is exactly the one the
+ * remotes need to settle on.
  */
 const MIN_STATE_INTERVAL_MS = 250;
 
@@ -184,6 +186,9 @@ function sanitizeCommand(raw) {
     case "stop":
     case "next":
     case "previous":
+    // Toggles the receiver's own idea of full screen — on the web that is the
+    // immersive layout, a native television is already there and ignores it.
+    case "fullscreen":
       return { action };
     case "seek": {
       const positionMs = Number(raw.positionMs);
@@ -316,11 +321,25 @@ export function attachRealtime(server) {
           // Sending this frame at all is how a device announces it can be
           // driven; an idle television still has to appear in the cast list,
           // so a null state is a valid announcement rather than a withdrawal.
-          const now = Date.now();
-          if (now - socket.lastStateAt < MIN_STATE_INTERVAL_MS) return;
-          socket.lastStateAt = now;
           socket.isReceiver = true;
           socket.playbackState = sanitizePlaybackState(message.state);
+          const now = Date.now();
+          const wait = MIN_STATE_INTERVAL_MS - (now - socket.lastStateAt);
+          if (wait > 0) {
+            // Inside the window: the state is already recorded above, so one
+            // deferred publish carries whatever the burst settles on. Dropping
+            // it instead let a pause's own report die and left every remote
+            // showing "playing" until the next heartbeat.
+            if (!socket.trailingPublish) {
+              socket.trailingPublish = setTimeout(() => {
+                socket.trailingPublish = null;
+                socket.lastStateAt = Date.now();
+                if (socket.readyState === socket.OPEN) publishReceivers(socket.userId);
+              }, wait);
+            }
+            return;
+          }
+          socket.lastStateAt = now;
           publishReceivers(socket.userId);
           return;
         }
@@ -357,6 +376,8 @@ export function attachRealtime(server) {
     const cleanup = () => {
       clearTimeout(authTimer);
       clearTimeout(expiryTimer);
+      clearTimeout(socket.trailingPublish);
+      socket.trailingPublish = null;
       if (!socket.userId) return;
       const userId = socket.userId;
       const wasReceiver = socket.isReceiver;

@@ -1207,6 +1207,126 @@
 }
 .cast-remote-stop { color: var(--danger) !important; }
 
+/* ── the watch page as a remote ──────────────────────────────
+   While this browser drives another device, the player area is a remote: the
+   receiver's poster as a backdrop, its state, and the controls. Always dark —
+   it stands in for a video frame — so the reused cast-remote-* controls get
+   on-image colors here rather than the theme's. */
+.remote-panel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 340px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #101014;
+  color: #fff;
+  display: flex;
+}
+.remote-panel-art {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(20px) brightness(0.5) saturate(1.1);
+  transform: scale(1.15);
+}
+.remote-panel.is-lost .remote-panel-art { filter: blur(20px) brightness(0.28) grayscale(0.8); }
+.remote-panel-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(8, 8, 12, 0.5), rgba(8, 8, 12, 0.85));
+}
+.remote-panel-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 20px 22px;
+  min-width: 0;
+}
+.remote-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+.remote-panel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  flex: none;
+}
+.remote-panel-dot.is-live {
+  background: var(--accent);
+  animation: remote-live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes remote-live-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .remote-panel-dot.is-live { animation: none; }
+}
+.remote-panel-now b {
+  display: block;
+  font-size: clamp(18px, 2.6vw, 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-panel-now small {
+  display: block;
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+.remote-panel-send {
+  align-self: flex-start;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 650;
+  font-size: 14px;
+  cursor: pointer;
+}
+.remote-panel-send:hover { filter: brightness(1.1); }
+.remote-panel-controls { display: flex; flex-direction: column; gap: 2px; }
+.remote-panel .cast-remote-times { color: rgba(255, 255, 255, 0.7); }
+.remote-panel .cast-remote-transport { margin: 12px 0; }
+.remote-panel .cast-remote-transport button {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.remote-panel-actions { display: flex; gap: 10px; }
+.remote-panel-actions button {
+  flex: 1;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-panel-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.remote-panel-stop { color: #ff6b74 !important; }
+@media (max-width: 640px) {
+  .remote-panel { aspect-ratio: auto; min-height: 0; }
+  .remote-panel-body { padding: 16px; }
+}
+
 /* Only while a cast is running — see CastBar. Without it the bar sits on top
    of the last rows of whatever page is open. */
 body.has-cast-bar .usr-body,

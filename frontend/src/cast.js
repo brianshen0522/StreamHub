@@ -248,5 +248,8 @@ export function useCast() {
     next: useCallback(() => command({ action: "next" }), [command]),
     previous: useCallback(() => command({ action: "previous" }), [command]),
     seek: useCallback((positionMs) => command({ action: "seek", positionMs: Math.round(positionMs) }), [command]),
+    /** Asks the receiver to fill its screen — the web receiver's immersive
+     *  layout. A native television is already edge to edge and ignores it. */
+    fullscreen: useCallback(() => command({ action: "fullscreen" }), [command]),
   };
 }
