@@ -844,6 +844,27 @@ export default function VideoPlayer({
                         <span className="vp-menu-item-value">{activeSubtitleLabel}<IconChevronRight /></span>
                       </button>
                     ) : null}
+                    {onDownload ? (
+                      // The control bar hides the download button on narrow
+                      // players (a portrait phone), where there is no room —
+                      // the menu is where it lives then, mirroring how Speed
+                      // is reachable at every width.
+                      <button
+                        type="button"
+                        className="vp-menu-item"
+                        onClick={() => { setMenu(null); onDownload(); }}
+                        role="menuitem"
+                      >
+                        <IconDownload />
+                        {download?.active
+                          ? t.dlCancel
+                          : download?.finished
+                            ? t.dlSaveAgain
+                            : download?.partial
+                              ? t.dlResume.replace("{p}", download.partial)
+                              : t.dlDownload}
+                      </button>
+                    ) : null}
                     <button type="button" className="vp-menu-item" onClick={() => { setMenu(null); setShowHelp(true); }} role="menuitem">
                       <IconKeyboard />
                       {t.vpShortcuts}
