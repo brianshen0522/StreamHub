@@ -1681,8 +1681,30 @@ function App() {
     history.replaceState(null, "", v ? `?v=${v}` : window.location.pathname);
   }, [selectedItem, selectedSeason, selectedEpisode, detailLoading]);
 
+  // The detail view's exits used to leave the hls.js instance sitting in its
+  // ref, fully loaded — Media Source buffers, tick timers, in-flight segment
+  // fetches — until the next title happened to replace it. With the buffer
+  // target raised to the browser's quota, "until the next title" means up to
+  // ~150 MB held, and the network still filling it, while someone reads a
+  // search list. The element unmounts with the view; the instance must not
+  // outlive it.
+  function teardownPlayback() {
+    const video = videoRef.current;
+    if (video) {
+      video.onerror = null;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+    setHlsInstance(null);
+    setAdCuts([]);
+  }
+
   function handleGoHome() {
     sourcesAbortRef.current?.abort();
+    teardownPlayback();
     setNextEpPrompt(null);
     setIsPromptDismissed(false);
     setSelectedItem(null);
@@ -1709,6 +1731,7 @@ function App() {
       setError("No providers are enabled for this account.");
       return;
     }
+    teardownPlayback();
     setSelectedItem(null);
     setItemDetail(null);
     setEpisodes([]);
