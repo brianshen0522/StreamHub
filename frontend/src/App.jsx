@@ -591,10 +591,27 @@ function App() {
     }
 
     function loadWithHls(url, mode, onFatalError) {
-      // Strips spliced ad segments out of each media playlist before hls.js
-      // parses it, so they are never fetched and never reach the timeline.
+      // Buffer the whole film, not the next thirty seconds. These sources
+      // come off scraped CDNs that stall and vanish mid-episode, and every
+      // buffered minute is a minute those failures cannot touch — so the
+      // target is the full runtime and the real limit is memory. The byte
+      // cap scales with what the device reports (Chrome caps the report at
+      // 8 GB); past it, hls.js's own quota handling pauses filling until
+      // the playhead frees room, so an over-ask degrades into exactly the
+      // old behaviour rather than an error.
+      const memoryGb = navigator.deviceMemory || 4;
       const hls = new Hls({
+        // Strips spliced ad segments out of each media playlist before
+        // hls.js parses it, so they are never fetched and never reach the
+        // timeline.
         pLoader: createAdFilterLoader(Hls, (result) => setAdCuts(result.cuts)),
+        maxBufferLength: 4 * 3600,
+        maxMaxBufferLength: 4 * 3600,
+        maxBufferSize: Math.min(memoryGb * 150, 1500) * 1_000_000,
+        // What has played stays buffered: rewinding inside a film should
+        // never refetch, and the quota handler above reclaims it first when
+        // memory actually runs short.
+        backBufferLength: Infinity,
       });
       setMode(mode);
       setHlsInstance(hls);
