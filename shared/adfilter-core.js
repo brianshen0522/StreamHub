@@ -10,16 +10,33 @@
  * browser, an hls.js loader — belongs in the caller, not here.
  *
  * These providers emit no SCTE-35 / #EXT-X-CUE-OUT, so ad breaks are inferred
- * structurally: spliced ad segments live in a *different directory* than the
- * feature and are bracketed by #EXT-X-DISCONTINUITY. Discontinuity count alone
- * is not usable — one sampled playlist had 80 of them, only 5 being ads; the
- * rest were routine ~40s encoder splits.
+ * structurally, by three signals over the runs between #EXT-X-DISCONTINUITY:
+ * the foreign directory (ads spliced from somewhere else than the feature),
+ * the repeated run (the same URI sequence recurring — a feature never plays
+ * the same segments twice, an ad break spliced into every act does), and the
+ * sandwiched interloper (a short run wedged between two feature-length
+ * blocks, for the providers that re-encode ads into the feature's own
+ * directory). Discontinuity count alone is not usable — one sampled playlist
+ * had 80 of them, only 5 being ads; the rest were routine ~40s encoder
+ * splits — which is what the fences on each signal are for.
  */
 
 /** Guards — if any fails the playlist is treated as carrying no ads. */
 export const MIN_CONTENT_SHARE = 0.6;   // dominant directory must hold most of the runtime
 export const MAX_AD_RUN_SECONDS = 240;  // a long foreign run is more likely content than an ad
 export const MAX_STRIP_SHARE = 0.35;    // never treat more than this much as advertising
+
+/**
+ * The sandwich signal's fences. A run is only called an ad on shape alone
+ * when it is short, both neighbours are unmistakably feature-sized, and the
+ * playlist is made of a handful of large blocks rather than confetti — the
+ * routine-discontinuity playlists (one every 20 segments, or one every 6)
+ * fail the neighbour and run-count fences and are left untouched, along with
+ * whatever hides in them.
+ */
+export const MAX_SANDWICH_RUN_SECONDS = 60;
+export const MIN_SANDWICH_NEIGHBOR_SECONDS = 300;
+export const MAX_SANDWICH_RUN_COUNT = 9;
 
 export function directoryOf(uri, baseUrl) {
   try {
@@ -64,23 +81,67 @@ export function classifyRuns(runs, playlistUrl) {
     return { directory, seconds };
   });
 
-  if (byDirectory.size < 2) return none("single-directory");
+  const adFlags = meta.map(() => false);
 
+  // ── Signal 1: the foreign directory ─────────────────────────────────────
+  // Spliced ads usually live somewhere else than the feature. Only usable
+  // when one directory clearly owns the runtime.
   let contentDirectory = null;
-  let contentSeconds = 0;
-  for (const [directory, seconds] of byDirectory) {
-    if (seconds > contentSeconds) {
-      contentSeconds = seconds;
-      contentDirectory = directory;
+  if (byDirectory.size >= 2) {
+    let contentSeconds = 0;
+    for (const [directory, seconds] of byDirectory) {
+      if (seconds > contentSeconds) {
+        contentSeconds = seconds;
+        contentDirectory = directory;
+      }
+    }
+    if (contentSeconds / totalSeconds >= MIN_CONTENT_SHARE) {
+      meta.forEach((run, index) => {
+        if (run.directory !== contentDirectory && run.seconds <= MAX_AD_RUN_SECONDS) adFlags[index] = true;
+      });
+    } else {
+      contentDirectory = null;
     }
   }
 
-  if (contentSeconds / totalSeconds < MIN_CONTENT_SHARE) return none("no-dominant-directory");
+  // ── Signal 2: the repeated run ──────────────────────────────────────────
+  // A feature never plays the same segments twice; an ad break spliced into
+  // every act does, URI for URI. Every occurrence of a repeated short run is
+  // an ad — including in playlists where the ads share the feature's
+  // directory and signal 1 sees nothing.
+  const signatures = new Map();
+  runs.forEach((run, index) => {
+    const signature = run.segments.map((segment) => segment.uri).join("\n");
+    if (!signatures.has(signature)) signatures.set(signature, []);
+    signatures.get(signature).push(index);
+  });
+  for (const indexes of signatures.values()) {
+    if (indexes.length < 2) continue;
+    for (const index of indexes) {
+      if (meta[index].seconds <= MAX_AD_RUN_SECONDS) adFlags[index] = true;
+    }
+  }
 
-  const adFlags = meta.map((run) => run.directory !== contentDirectory && run.seconds <= MAX_AD_RUN_SECONDS);
+  // ── Signal 3: the sandwiched interloper ─────────────────────────────────
+  // Same-directory splices with unique URIs still give themselves away by
+  // shape: a playlist that is a few feature-length blocks with a short run
+  // wedged between two of them. Fenced hard (see the constants) so playlists
+  // that are all confetti — a discontinuity every N segments — never match.
+  if (runs.length >= 3 && runs.length <= MAX_SANDWICH_RUN_COUNT) {
+    for (let index = 1; index < runs.length - 1; index += 1) {
+      if (meta[index].seconds <= MAX_SANDWICH_RUN_SECONDS
+        && meta[index - 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS
+        && meta[index + 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS) {
+        adFlags[index] = true;
+      }
+    }
+  }
+
   const adSeconds = meta.reduce((total, run, index) => total + (adFlags[index] ? run.seconds : 0), 0);
 
-  if (!adSeconds) return none("no-foreign-runs");
+  if (!adSeconds) {
+    return none(byDirectory.size < 2 ? "single-directory" : (contentDirectory ? "no-foreign-runs" : "no-dominant-directory"));
+  }
   if (adSeconds / totalSeconds > MAX_STRIP_SHARE) return none("would-remove-too-much");
 
   return {
