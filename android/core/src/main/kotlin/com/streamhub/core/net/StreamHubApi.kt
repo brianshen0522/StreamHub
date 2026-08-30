@@ -426,6 +426,17 @@ class StreamHubApi(
         path("manifest") { addQueryParameter("target", target) }.toString()
 
     /**
+     * The same stream through the server instead of straight from the CDN —
+     * the playback recovery ladder's second rung. The proxied playlist is
+     * rewritten so every segment routes back through the server with the
+     * caller's token baked in, so it keeps playing where the device's own
+     * path to the CDN has died. Unlike [manifestUrl] it is not ad-filtered:
+     * proxying collapses the directory signal the classifier needs.
+     */
+    fun streamUrl(target: String): String =
+        path("stream") { addQueryParameter("target", target) }.toString()
+
+    /**
      * Where the ads were in the stream the player is about to show. Shares the
      * server's parse with [manifestUrl], so asking costs no extra fetch.
      */

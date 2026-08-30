@@ -47,6 +47,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -57,6 +58,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.streamhub.core.model.AdCut
+import com.streamhub.core.net.StreamHubApi
+import com.streamhub.core.playback.RecoveryLadder
 import com.streamhub.mobile.AppContainer
 import com.streamhub.mobile.PlaybackRequest
 import kotlinx.coroutines.delay
@@ -90,6 +93,22 @@ fun PlayerScreen(
     var ended by remember { mutableStateOf(false) }
     var fillScreen by remember { mutableStateOf(false) }
     val view = LocalView.current
+
+    // ── mid-stream failure recovery ──────────────────────────────────────────
+    // A fatal player error with nobody listening is a black rectangle that
+    // ignores every tap. The ladder retries in place, then relays the stream
+    // through the server, then admits defeat visibly. A downloaded episode
+    // has no relay to fall back to — its second rung is the error prompt.
+    val isLocal = request.directUrl.startsWith("file:")
+    val recovery = remember(request.directUrl) { RecoveryLadder() }
+    var faultNonce by remember(request.directUrl) { mutableStateOf(0L) }
+    var faultMessage by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var recoveringLabel by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var fatal by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var lastGoodPositionMs by remember(request.directUrl) {
+        mutableStateOf(request.resumeAtSeconds * 1000L)
+    }
+    var lastFaultAt by remember(request.directUrl) { mutableStateOf(0L) }
 
     // Rotating is not full screen on its own. Without hiding the bars the video
     // sits between a status bar and a navigation bar, which is what made the
@@ -153,21 +172,40 @@ fun PlayerScreen(
                 // dies with UnrecognizedInputFormatException.
                 // A downloaded episode is a plain file on this phone: no
                 // manifest to fetch, no HLS to hint, nothing behind auth.
-                val isLocal = request.directUrl.startsWith("file:")
-                setMediaItem(
-                    if (isLocal) {
-                        MediaItem.fromUri(request.directUrl)
-                    } else {
-                        MediaItem.Builder()
-                            .setUri(api.manifestUrl(request.directUrl))
-                            .setMimeType(MimeTypes.APPLICATION_M3U8)
-                            .build()
-                    }
-                )
+                setMediaItem(mediaItemFor(api, request.directUrl, isLocal, tier = 0))
                 if (request.resumeAtSeconds > 0) seekTo(request.resumeAtSeconds * 1000L)
                 prepare()
                 playWhenReady = true
             }
+    }
+
+    // Each fault climbs the ladder, carrying the position so a recovered
+    // stream resumes where the picture died rather than at zero.
+    LaunchedEffect(faultNonce) {
+        if (faultNonce == 0L) return@LaunchedEffect
+        lastFaultAt = System.currentTimeMillis()
+        val position = maxOf(lastGoodPositionMs, player.currentPosition.coerceAtLeast(0))
+        var step = recovery.next()
+        if (step == RecoveryLadder.Step.SWITCH_TO_RELAY && isLocal) step = RecoveryLadder.Step.GIVE_UP
+        when (step) {
+            RecoveryLadder.Step.RETRY -> {
+                recoveringLabel = "Reconnecting…"
+                player.setMediaItem(mediaItemFor(api, request.directUrl, isLocal, recovery.tier), position)
+                player.prepare()
+                player.playWhenReady = true
+            }
+            RecoveryLadder.Step.SWITCH_TO_RELAY -> {
+                recoveringLabel = "Switching to the server relay…"
+                player.setMediaItem(mediaItemFor(api, request.directUrl, isLocal, tier = 1), position)
+                player.prepare()
+                player.playWhenReady = true
+            }
+            RecoveryLadder.Step.GIVE_UP -> {
+                recoveringLabel = null
+                fatal = faultMessage ?: "Playback failed"
+            }
+        }
+        controlsVisible = true
     }
 
     // Where the ads were, so the scrub bar can mark them. The picture jumps at
@@ -181,10 +219,38 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(player) {
+        var stallMs = 0L
+        var stallAnchorMs = -1L
         while (true) {
             state.readFrom(player)
             if (player.isPlaying) {
                 viewModel.report(player.currentPosition, player.duration.coerceAtLeast(0), "progress")
+                // Healthy playback clears the recovery banner, remembers where
+                // the picture is, and after a minute forgives the ladder.
+                recoveringLabel = null
+                if (player.currentPosition > 0) lastGoodPositionMs = player.currentPosition
+                if (lastFaultAt > 0 && System.currentTimeMillis() - lastFaultAt > 60_000) {
+                    recovery.reset()
+                    lastFaultAt = 0
+                }
+            }
+
+            // The stall watchdog: buffering forever against a dead source is
+            // the same black screen as a fatal error, so it climbs the same
+            // ladder after 45 seconds pinned in place.
+            if (player.playbackState == Player.STATE_BUFFERING && fatal == null) {
+                if (player.currentPosition == stallAnchorMs) stallMs += 500 else {
+                    stallAnchorMs = player.currentPosition
+                    stallMs = 0
+                }
+                if (stallMs >= 45_000) {
+                    stallMs = 0
+                    faultMessage = "Stream stalled"
+                    faultNonce += 1
+                }
+            } else {
+                stallMs = 0
+                stallAnchorMs = -1
             }
             delay(500)
         }
@@ -217,6 +283,11 @@ fun PlayerScreen(
             }
 
             override fun onTracksChanged(tracks: Tracks) = state.readTracks(tracks)
+
+            override fun onPlayerError(error: PlaybackException) {
+                faultMessage = error.errorCodeName
+                faultNonce += 1
+            }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 ended = playbackState == Player.STATE_ENDED
@@ -412,6 +483,22 @@ fun PlayerScreen(
             LaunchedEffect(Unit) { onBack() }
         }
 
+        if (fatal != null) {
+            PlaybackErrorPrompt(
+                message = fatal!!,
+                onRetry = {
+                    fatal = null
+                    recovery.reset()
+                    recoveringLabel = "Reconnecting…"
+                    player.setMediaItem(mediaItemFor(api, request.directUrl, isLocal, tier = 0), lastGoodPositionMs)
+                    player.prepare()
+                    player.playWhenReady = true
+                },
+                onDismiss = onBack,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
         AnimatedVisibility(
             visible = flash != null,
             enter = fadeIn(),
@@ -455,6 +542,22 @@ private fun Context.findActivity(): Activity? {
     }
     return null
 }
+
+/**
+ * What to hand the player at each rung of the recovery ladder. Tier 0 is the
+ * cleaned manifest (ads cut, segments straight at the CDN); tier 1 relays the
+ * stream through the server — not ad-filtered, but reachable when the
+ * device's own path to the CDN has died. A local file has one tier: itself.
+ */
+private fun mediaItemFor(api: StreamHubApi, directUrl: String, isLocal: Boolean, tier: Int): MediaItem =
+    if (isLocal) {
+        MediaItem.fromUri(directUrl)
+    } else {
+        MediaItem.Builder()
+            .setUri(if (tier == 0) api.manifestUrl(directUrl) else api.streamUrl(directUrl))
+            .setMimeType(MimeTypes.APPLICATION_M3U8)
+            .build()
+    }
 
 private fun Activity.enterPip() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

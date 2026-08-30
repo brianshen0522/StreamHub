@@ -317,6 +317,42 @@ private fun CentreButtons(
  * frozen last frame, which is a dead end with nothing on it to press.
  */
 @Composable
+fun PlaybackErrorPrompt(
+    message: String,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.Black.copy(alpha = 0.82f))
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Playback stopped", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(
+                // The error code name — enough to report, short enough to read.
+                message,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onRetry) {
+                Text("Try again")
+            }
+            TextButton(onClick = onDismiss) {
+                Text("Back", color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
 fun UpNextPrompt(
     label: String,
     onPlay: () -> Unit,

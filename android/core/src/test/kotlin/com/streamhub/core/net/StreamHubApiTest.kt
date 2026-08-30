@@ -212,6 +212,16 @@ class StreamHubApiTest {
         assertTrue(api.posterUrl(target).contains("${ApiConfig.BASE_PATH}/poster"))
     }
 
+    @Test
+    fun `stream relay url is versioned and carries the target`() {
+        val target = "http://cdn.example.com/a b/index.m3u8?x=1&y=2"
+
+        val relay = api.streamUrl(target)
+        assertTrue(relay.contains("${ApiConfig.BASE_PATH}/stream"))
+        assertTrue("the target must survive as one parameter", relay.contains("target="))
+        assertTrue(relay.contains("%3Fx%3D1%26y%3D2") || relay.contains("x%3D1"))
+    }
+
     // ── library ─────────────────────────────────────────────────────────────
 
     @Test

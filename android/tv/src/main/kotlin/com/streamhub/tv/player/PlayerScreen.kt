@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -50,6 +51,7 @@ import androidx.tv.material3.Text
 import com.streamhub.core.model.AdCut
 import com.streamhub.core.model.CastCommand
 import com.streamhub.core.model.CastPlaybackState
+import com.streamhub.core.playback.RecoveryLadder
 import com.streamhub.tv.AppContainer
 import com.streamhub.tv.PlaybackRequest
 import com.streamhub.tv.ui.StreamHubColors
@@ -102,30 +104,81 @@ fun PlayerScreen(
 
     val focus = remember { FocusRequester() }
 
+    // ── mid-stream failure recovery ──────────────────────────────────────────
+    // The reported symptom this exists for: the picture goes black mid-episode
+    // and nothing responds. That is a fatal player error with nobody
+    // listening. The ladder retries in place, then routes the stream through
+    // the server, and only then admits defeat — visibly, with a retry button.
+    val recovery = remember(request.directUrl) { RecoveryLadder() }
+    var faultNonce by remember(request.directUrl) { mutableLongStateOf(0L) }
+    var faultMessage by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var recoveringLabel by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var fatal by remember(request.directUrl) { mutableStateOf<String?>(null) }
+    var lastGoodPositionMs by remember(request.directUrl) {
+        mutableLongStateOf(request.resumeAtSeconds * 1000L)
+    }
+    var lastFaultAt by remember(request.directUrl) { mutableLongStateOf(0L) }
+
+    // The MIME type is not optional. ExoPlayer infers the format from the
+    // URI's extension, and these URLs end in a query string rather than
+    // .m3u8, so without the hint it picks the progressive source and dies
+    // with UnrecognizedInputFormatException.
+    val mediaItemForTier = { tier: Int ->
+        MediaItem.Builder()
+            // Tier 0 is the cleaned manifest: ads already cut, segments
+            // straight at the CDN. Tier 1 is the same stream relayed through
+            // the server — not ad-filtered, but reachable when the
+            // television's own path to the CDN has died.
+            .setUri(if (tier == 0) api.manifestUrl(request.directUrl) else api.streamUrl(request.directUrl))
+            .setMimeType(MimeTypes.APPLICATION_M3U8)
+            .build()
+    }
+
     val player = remember(request.directUrl) {
         val dataSourceFactory = OkHttpDataSource.Factory(api.authenticatedClient)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build()
             .apply {
-                // The cleaned manifest, not the raw source: ads are already cut
-                // and segments point straight at the CDN.
-                //
-                // The MIME type is not optional. ExoPlayer infers the format
-                // from the URI's extension, and this URL ends in a query string
-                // rather than .m3u8, so without the hint it picks the
-                // progressive source and dies with
-                // UnrecognizedInputFormatException.
-                setMediaItem(
-                    MediaItem.Builder()
-                        .setUri(api.manifestUrl(request.directUrl))
-                        .setMimeType(MimeTypes.APPLICATION_M3U8)
-                        .build()
-                )
+                setMediaItem(mediaItemForTier(0))
                 if (request.resumeAtSeconds > 0) seekTo(request.resumeAtSeconds * 1000L)
                 prepare()
                 playWhenReady = true
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        faultMessage = error.errorCodeName
+                        faultNonce += 1
+                    }
+                })
             }
+    }
+
+    // Each fault climbs the ladder. Position is carried across every rung so
+    // a recovered stream resumes where the picture died, not at zero.
+    LaunchedEffect(faultNonce) {
+        if (faultNonce == 0L) return@LaunchedEffect
+        lastFaultAt = System.currentTimeMillis()
+        val position = maxOf(lastGoodPositionMs, player.currentPosition.coerceAtLeast(0))
+        when (recovery.next()) {
+            RecoveryLadder.Step.RETRY -> {
+                recoveringLabel = "Reconnecting…"
+                player.setMediaItem(mediaItemForTier(recovery.tier), position)
+                player.prepare()
+                player.playWhenReady = true
+            }
+            RecoveryLadder.Step.SWITCH_TO_RELAY -> {
+                recoveringLabel = "Switching to the server relay…"
+                player.setMediaItem(mediaItemForTier(1), position)
+                player.prepare()
+                player.playWhenReady = true
+            }
+            RecoveryLadder.Step.GIVE_UP -> {
+                recoveringLabel = null
+                fatal = faultMessage ?: "Playback failed"
+            }
+        }
+        controlsVisible = true
+        controlsShownAt = System.currentTimeMillis()
     }
 
     /** Raises the controls and restarts their countdown. */
@@ -146,9 +199,44 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(player) {
+        var stallMs = 0L
+        var stallAnchorMs = -1L
         while (true) {
             isPlaying = player.isPlaying
             buffering = player.playbackState == Player.STATE_BUFFERING
+
+            // Healthy playback clears the recovery banner, remembers where the
+            // picture is, and — after a minute of it — forgives the ladder, so
+            // an error at minute 40 starts fresh instead of inheriting the
+            // strikes of one at minute 2.
+            if (player.isPlaying) {
+                recoveringLabel = null
+                if (player.currentPosition > 0) lastGoodPositionMs = player.currentPosition
+                if (lastFaultAt > 0 && System.currentTimeMillis() - lastFaultAt > 60_000) {
+                    recovery.reset()
+                    lastFaultAt = 0
+                }
+            }
+
+            // The stall watchdog: a player can also die without a fatal error,
+            // buffering forever against a source that stopped answering. That
+            // is the same black screen to the person on the couch, so after
+            // 45 seconds pinned in place it climbs the same ladder.
+            if (buffering && fatal == null) {
+                if (player.currentPosition == stallAnchorMs) stallMs += 500 else {
+                    stallAnchorMs = player.currentPosition
+                    stallMs = 0
+                }
+                if (stallMs >= 45_000) {
+                    stallMs = 0
+                    faultMessage = "Stream stalled"
+                    faultNonce += 1
+                }
+            } else {
+                stallMs = 0
+                stallAnchorMs = -1
+            }
+
             if (player.playbackState == Player.STATE_ENDED && !ended) {
                 ended = true
                 // Finished means finished: reporting the end position is what
@@ -250,6 +338,9 @@ fun PlayerScreen(
                 // and right still mean "seek" to this handler, and consuming
                 // them would leave the prompt's own buttons unreachable.
                 if (ended && request.nextEpisodeLabel != null) return@onKeyEvent false
+                // So does the error panel: an errored player ignores play()
+                // anyway, and the panel's own buttons need the remote.
+                if (fatal != null) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
                         if (player.isPlaying) player.pause() else player.play()
@@ -295,11 +386,27 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (buffering) {
+        if ((buffering || recoveringLabel != null) && fatal == null) {
             Text(
-                "Loading…",
+                recoveringLabel ?: "Loading…",
                 style = MaterialTheme.typography.titleMedium,
                 color = Color.White,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
+        if (fatal != null) {
+            PlaybackErrorPanel(
+                message = fatal!!,
+                onRetry = {
+                    fatal = null
+                    recovery.reset()
+                    recoveringLabel = "Reconnecting…"
+                    player.setMediaItem(mediaItemForTier(0), lastGoodPositionMs)
+                    player.prepare()
+                    player.playWhenReady = true
+                },
+                onBack = onBack,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -350,6 +457,49 @@ fun PlayerScreen(
  * playing to an empty room. Play takes focus, so the common answer is one
  * press of the centre key.
  */
+@Composable
+private fun PlaybackErrorPanel(
+    message: String,
+    onRetry: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+
+    Column(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.86f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 40.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "Playback stopped",
+                style = MaterialTheme.typography.headlineSmall,
+                color = Color.White,
+            )
+            Text(
+                // The error code name, not a stack trace: enough to report,
+                // short enough to read from a couch.
+                message,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.7f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            TvButton(
+                label = "Try again",
+                primary = true,
+                onClick = onRetry,
+                modifier = Modifier.focusRequester(focus),
+            )
+            TvButton(label = "Back", onClick = onBack)
+        }
+    }
+}
+
 @Composable
 private fun UpNextPrompt(
     label: String,
