@@ -477,6 +477,10 @@ function App() {
   }
 
   const [playbackMode, setPlaybackMode] = useState("");
+  // Which machinery is actually playing: hls.js over ManagedMediaSource
+  // (iOS 17.1+), hls.js over MediaSource, or the native HLS stack. Shown
+  // beside the mode chip so a report from a phone names its path.
+  const [playbackEngine, setPlaybackEngine] = useState("");
   const [autoSelectedFromPreference, setAutoSelectedFromPreference] = useState(false);
   const [itemProgressMap, setItemProgressMap] = useState({});
   const [playerError, setPlayerError] = useState("");
@@ -587,6 +591,11 @@ function App() {
     setPlayerError("");
     setPlaybackMode("");
     setAdCuts([]);
+    setPlaybackEngine(
+      Hls.isSupported()
+        ? (typeof ManagedMediaSource !== "undefined" && typeof MediaSource === "undefined" ? "MMS" : "MSE")
+        : "native",
+    );
 
     const directUrl = activeSource.directUrl || activeSource.url;
     const proxyUrl = activeSource.proxyUrl;
@@ -651,9 +660,23 @@ function App() {
         }));
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) onFatalError?.(hls);
+        if (data.fatal) onFatalError?.(hls, data);
       });
       return hls;
+    }
+
+    // What actually broke, spelled out beside the fallback notice. An iPhone
+    // has no console: this line on the screen is the only way a failure in
+    // the field can name itself.
+    function describeHlsError(data) {
+      const url = data?.frag?.url || data?.context?.url || "";
+      let host = "";
+      try { host = url ? new URL(url).host : ""; } catch { /* not a URL */ }
+      return [
+        [data?.type, data?.details].filter(Boolean).join("/"),
+        data?.response?.code ? `HTTP ${data.response.code}` : "",
+        host,
+      ].filter(Boolean).join(" · ");
     }
 
     // hls.js first: Chrome/Edge on macOS answer "maybe" to canPlayType for
@@ -681,19 +704,21 @@ function App() {
         hlsRef.current = null;
       }
 
-      loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance) => {
+      loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance, data) => {
         const urls = sourceUrlsRef.current;
         instance.destroy();
         hlsRef.current = null;
+        const detail = describeHlsError(data);
         if (urls.proxyUrl && urls.directUrl && urls.directUrl !== urls.proxyUrl) {
-          setPlayerError(tRef.current.playbackFallback);
-          loadWithHls(urls.proxyUrl, "proxy", (proxyInstance) => {
-            setPlayerError(tRef.current.statusError);
+          setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
+          loadWithHls(urls.proxyUrl, "proxy", (proxyInstance, proxyData) => {
+            const proxyDetail = describeHlsError(proxyData);
+            setPlayerError(proxyDetail ? `${tRef.current.statusError} — ${proxyDetail}` : tRef.current.statusError);
             proxyInstance.destroy();
             hlsRef.current = null;
           });
         } else {
-          setPlayerError(tRef.current.statusError);
+          setPlayerError(detail ? `${tRef.current.statusError} — ${detail}` : tRef.current.statusError);
         }
       });
       return undefined;
@@ -712,11 +737,13 @@ function App() {
       );
       loadNative(cleaned, "direct");
       video.onerror = () => {
+        const err = video.error;
+        const detail = err ? `MediaError ${err.code}${err.message ? ` ${err.message}` : ""}` : "";
         if (proxyUrl && video.src !== proxyUrl) {
-          setPlayerError(tRef.current.playbackFallback);
+          setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadNative(proxyUrl, "proxy");
         } else {
-          setPlayerError(tRef.current.statusError);
+          setPlayerError(detail ? `${tRef.current.statusError} — ${detail}` : tRef.current.statusError);
         }
       };
       return () => { video.onerror = null; };
@@ -2435,6 +2462,7 @@ function App() {
                         {activeSource ? (
                           <span className="watch-mode">
                             {t.playbackMode}: {playbackMode === "proxy" ? t.playbackProxy : t.playbackDirect}
+                            {playbackEngine ? ` · ${playbackEngine}` : ""}
                           </span>
                         ) : null}
                       </div>
