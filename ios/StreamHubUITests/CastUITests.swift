@@ -22,6 +22,11 @@ final class CastUITests: XCTestCase {
 
         tapTab(app, "Search")
         let field = app.searchFields.firstMatch
+        // On the system search tab the first tap only selects it; the field
+        // expands on a second tap of the same control.
+        if !field.waitForExistence(timeout: 6) {
+            tapTab(app, "Search")
+        }
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         field.tap()
         field.typeText("love\n")

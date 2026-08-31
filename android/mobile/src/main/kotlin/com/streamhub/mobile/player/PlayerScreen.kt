@@ -53,6 +53,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -160,6 +161,24 @@ fun PlayerScreen(
 
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            // Two minutes ahead instead of the stock fifty seconds — these
+            // CDNs stall mid-episode, and buffered minutes are immunity. A
+            // phone gets a smaller ask than the television's three.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(50_000, 120_000, 2_500, 5_000)
+                    .setBackBuffer(30_000, true)
+                    // Byte cap wins over the time targets — samples live on the
+                    // Java heap, and two unbounded minutes of video can outgrow
+                    // a small phone's heap. The television OOM'd this exact way.
+                    .setTargetBufferBytes(
+                        (Runtime.getRuntime().maxMemory() / 4)
+                            .coerceIn(8L * 1024 * 1024, 64L * 1024 * 1024)
+                            .toInt()
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(false)
+                    .build()
+            )
             .build()
             .apply {
                 // The cleaned manifest, not the raw source: ads are already cut
@@ -219,7 +238,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(player) {
-        var stallMs = 0L
+        var stallSinceMs = -1L
         var stallAnchorMs = -1L
         while (true) {
             state.readFrom(player)
@@ -237,19 +256,22 @@ fun PlayerScreen(
 
             // The stall watchdog: buffering forever against a dead source is
             // the same black screen as a fatal error, so it climbs the same
-            // ladder after 45 seconds pinned in place.
+            // ladder after 45 seconds pinned in place — measured on the wall
+            // clock, since a throttled delay() stretches loop turns exactly
+            // when the system is struggling.
             if (player.playbackState == Player.STATE_BUFFERING && fatal == null) {
-                if (player.currentPosition == stallAnchorMs) stallMs += 500 else {
+                val now = System.currentTimeMillis()
+                if (player.currentPosition != stallAnchorMs || stallSinceMs < 0) {
                     stallAnchorMs = player.currentPosition
-                    stallMs = 0
+                    stallSinceMs = now
                 }
-                if (stallMs >= 45_000) {
-                    stallMs = 0
+                if (now - stallSinceMs >= 45_000) {
+                    stallSinceMs = now
                     faultMessage = "Stream stalled"
                     faultNonce += 1
                 }
             } else {
-                stallMs = 0
+                stallSinceMs = -1
                 stallAnchorMs = -1
             }
             delay(500)

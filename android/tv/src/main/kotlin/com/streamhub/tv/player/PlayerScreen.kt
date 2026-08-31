@@ -50,6 +50,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -146,6 +147,26 @@ fun PlayerScreen(
         val dataSourceFactory = OkHttpDataSource.Factory(api.authenticatedClient)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            // These sources come off scraped CDNs that stall and vanish
+            // mid-episode; every buffered minute is a minute those failures
+            // cannot touch. Three minutes ahead instead of the stock fifty
+            // seconds, and a minute behind so a skip back never refetches.
+            // The byte cap must win over the time targets: ExoPlayer buffers
+            // samples on the Java heap, and a television heap can be as small
+            // as 48 MB — three unbounded minutes of video was an OOM crash
+            // mid-episode, not a tuning choice.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(50_000, 180_000, 2_500, 5_000)
+                    .setBackBuffer(60_000, true)
+                    .setTargetBufferBytes(
+                        (Runtime.getRuntime().maxMemory() / 4)
+                            .coerceIn(8L * 1024 * 1024, 64L * 1024 * 1024)
+                            .toInt()
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(false)
+                    .build()
+            )
             .build()
             .apply {
                 setMediaItem(mediaItemForTier(0))
@@ -207,7 +228,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(player) {
-        var stallMs = 0L
+        var stallSinceMs = -1L
         var stallAnchorMs = -1L
         while (true) {
             isPlaying = player.isPlaying
@@ -229,19 +250,23 @@ fun PlayerScreen(
             // The stall watchdog: a player can also die without a fatal error,
             // buffering forever against a source that stopped answering. That
             // is the same black screen to the person on the couch, so after
-            // 45 seconds pinned in place it climbs the same ladder.
+            // 45 seconds pinned in place it climbs the same ladder. Measured
+            // on the wall clock, not by counting loop turns — a throttled
+            // delay() stretches the loop, and a watchdog that ticks slower
+            // exactly when the system is struggling guards nothing.
             if (buffering && fatal == null) {
-                if (player.currentPosition == stallAnchorMs) stallMs += 500 else {
+                val now = System.currentTimeMillis()
+                if (player.currentPosition != stallAnchorMs || stallSinceMs < 0) {
                     stallAnchorMs = player.currentPosition
-                    stallMs = 0
+                    stallSinceMs = now
                 }
-                if (stallMs >= 45_000) {
-                    stallMs = 0
+                if (now - stallSinceMs >= 45_000) {
+                    stallSinceMs = now
                     faultMessage = "Stream stalled"
                     faultNonce += 1
                 }
             } else {
-                stallMs = 0
+                stallSinceMs = -1
                 stallAnchorMs = -1
             }
 
@@ -325,6 +350,9 @@ fun PlayerScreen(
                 // the episode with this label" and does not care which way.
                 is CastCommand.Previous -> request.prevEpisodeLabel?.let(onNextEpisode)
                 is CastCommand.Play -> Unit // handled by the app root, which navigates
+                // A television is already edge to edge; the command exists for
+                // windowed receivers like a browser.
+                is CastCommand.Fullscreen -> Unit
             }
             // The echo: whoever pressed the button on a phone is watching
             // their remote for the answer, and the next heartbeat is up to a
@@ -403,6 +431,19 @@ fun PlayerScreen(
                     Key.MediaNext -> {
                         request.nextEpisodeLabel?.let(onNextEpisode); true
                     }
+                    // The person holding this television's remote outranks the
+                    // account: MENU while being driven refuses remote control —
+                    // the set leaves every picker and goes deaf to commands
+                    // until the app restarts. Only while driven, so the key
+                    // stays free for anything else the rest of the time.
+                    Key.Menu -> {
+                        if (driver != null) {
+                            receiver.refuse()
+                            driver = null
+                            show()
+                            true
+                        } else false
+                    }
                     // Up and down have nothing to steer, so they do the one
                     // thing someone pressing a key in the dark actually wants.
                     Key.DirectionUp, Key.DirectionDown -> { show(); true }
@@ -451,6 +492,12 @@ fun PlayerScreen(
                     "Controlled from $name",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.92f),
+                )
+                // Names the way out, for whoever is holding this remote.
+                Text(
+                    "· MENU to stop",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.55f),
                 )
             }
         }

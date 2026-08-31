@@ -204,6 +204,9 @@ struct CastPlaybackState: Codable, Hashable, Sendable {
     /// remote disables its skips off these.
     var hasNext: Bool = false
     var hasPrevious: Bool = false
+    /// Who last drove this receiver, while that is fresh — so two remotes on
+    /// one device can see each other instead of reading jumps as glitches.
+    var controlledBy: String?
 }
 
 struct CastReceiver: Codable, Hashable, Sendable, Identifiable {
@@ -240,6 +243,9 @@ enum CastCommand: Sendable {
     case next
     case previous
     case seek(positionMs: Int)
+    /// Fill the receiver's screen. A television is already edge to edge and
+    /// ignores it; the web receiver toggles its immersive layout.
+    case fullscreen
 }
 
 // MARK: - Health

@@ -114,4 +114,12 @@ sealed class CastCommand {
     @Serializable
     @SerialName("previous")
     data object Previous : CastCommand()
+
+    /**
+     * Asks the receiver to fill its screen. A television is already edge to
+     * edge and ignores it; the web receiver toggles its immersive layout.
+     */
+    @Serializable
+    @SerialName("fullscreen")
+    data object Fullscreen : CastCommand()
 }

@@ -376,11 +376,14 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     // stopped from elsewhere. There is nothing to control.
                     LaunchedEffect(Unit) { leaveRemote() }
                 } else {
+                    val ownDeviceName by container.realtime.deviceName.collectAsStateWithLifecycle()
                     RemoteScreen(
                         target = active,
                         lost = castLost,
+                        ownDeviceName = ownDeviceName,
                         onPause = container.cast::pause,
                         onResume = container.cast::resume,
+                        onFullscreen = container.cast::fullscreen,
                         onSeek = container.cast::seekTo,
                         onPrevious = container.cast::previous,
                         onNext = container.cast::next,

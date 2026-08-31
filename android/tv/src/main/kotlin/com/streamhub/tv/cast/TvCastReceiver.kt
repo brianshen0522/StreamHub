@@ -57,10 +57,30 @@ class TvCastReceiver(
      */
     val controlledBy: StateFlow<String?> = _controlledBy.asStateFlow()
 
+    private val _refused = MutableStateFlow(false)
+
+    /**
+     * Whether the person holding this television's own remote has said no.
+     *
+     * The account is the authorization model, but the person physically at
+     * the screen outranks the account: refusing withdraws the television
+     * from every picker and goes deaf to commands already in flight. It
+     * lasts until the app restarts — the television has no settings screen
+     * to undo it from, and a restart is the television's natural reset.
+     */
+    val refused: StateFlow<Boolean> = _refused.asStateFlow()
+
+    fun refuse() {
+        _refused.value = true
+        _controlledBy.value = null
+        realtime.withdrawReceiver()
+    }
+
     init {
         scope.launch {
             events.collect { event ->
                 if (event !is RealtimeEvent.Command) return@collect
+                if (_refused.value) return@collect
                 _controlledBy.value = event.fromName
                 when (val command = event.command) {
                     is CastCommand.Play -> _pendingPlay.value = command.playback
@@ -75,7 +95,7 @@ class TvCastReceiver(
         scope.launch {
             while (true) {
                 realtime.connected.first { it }
-                publish(null)
+                if (!_refused.value) publish(null)
                 realtime.connected.first { !it }
             }
         }
@@ -87,6 +107,7 @@ class TvCastReceiver(
 
     /** Tells the account's phones what this television is doing. */
     fun publish(state: CastPlaybackState?) {
+        if (_refused.value) return
         realtime.publishPlayback(state)
     }
 }

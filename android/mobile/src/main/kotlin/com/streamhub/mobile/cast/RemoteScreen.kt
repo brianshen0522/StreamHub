@@ -54,8 +54,10 @@ import kotlin.math.abs
 fun RemoteScreen(
     target: CastReceiver,
     lost: Boolean,
+    ownDeviceName: String?,
     onPause: () -> Unit,
     onResume: () -> Unit,
+    onFullscreen: () -> Unit,
     onSeek: (Long) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -77,6 +79,21 @@ fun RemoteScreen(
     var pendingSeekMs by remember { mutableStateOf<Long?>(null) }
     var scrubbingMs by remember { mutableStateOf<Long?>(null) }
 
+    // What the last press asked for, shown until the television confirms it
+    // or 2.5 seconds pass. Without it the play button lagged a round-trip
+    // behind the thumb — long enough to press again and undo the first press.
+    var assumedPaused by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(assumedPaused, state?.paused) {
+        val assumed = assumedPaused ?: return@LaunchedEffect
+        if (state?.paused == assumed) {
+            assumedPaused = null
+            return@LaunchedEffect
+        }
+        delay(2_500)
+        assumedPaused = null
+    }
+    val effectivePaused = assumedPaused ?: (state?.paused ?: true)
+
     LaunchedEffect(state?.positionMs) {
         reportedMs = state?.positionMs ?: 0L
         reportedAt = 0L
@@ -84,9 +101,10 @@ fun RemoteScreen(
     }
 
     // Advance locally between reports. Only while playing: a paused position
-    // that crept forward would be a lie about the television.
-    LaunchedEffect(state?.paused, state?.positionMs) {
-        if (state == null || state.paused) return@LaunchedEffect
+    // that crept forward would be a lie about the television. The assumed
+    // pause freezes it too, so an optimistic pause stops the clock at once.
+    LaunchedEffect(effectivePaused, state?.positionMs) {
+        if (state == null || effectivePaused) return@LaunchedEffect
         while (true) {
             delay(200)
             elapsedMs += 200
@@ -166,6 +184,19 @@ fun RemoteScreen(
                     maxLines = 1,
                 )
             }
+            // The other hand on the same device, if any. The receiver names
+            // whoever last drove it; showing that back — except when it is
+            // this phone — keeps two remotes from reading each other's
+            // presses as glitches.
+            val otherController = state?.controlledBy?.takeIf { it != ownDeviceName }
+            if (otherController != null) {
+                Text(
+                    text = "Also controlled from $otherController",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
+            }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -200,37 +231,44 @@ fun RemoteScreen(
         }
 
         Row(
+            // Weighted, not fixed-width: five controls at 72dp apiece plus
+            // spacing outgrow a 411dp phone, and a Row does not wrap — the
+            // next-episode button rendered off the edge of the screen.
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The season's edges are the television's to know: at the first
             // episode there is no previous and at the last no next, and the
             // buttons say so by being disabled rather than doing nothing.
-            SkipButton("⏮", enabled = !lost && state?.hasPrevious == true) {
+            SkipButton("⏮", Modifier.weight(1f), enabled = !lost && state?.hasPrevious == true) {
                 onPrevious()
             }
-            SkipButton("−10", enabled = !lost && state != null) {
+            SkipButton("−10", Modifier.weight(1f), enabled = !lost && state != null) {
                 onSeek((livePosition - 10_000).coerceAtLeast(0))
             }
             Surface(
                 modifier = Modifier.size(68.dp).clip(CircleShape),
                 color = MaterialTheme.colorScheme.primary,
-                onClick = { if (state?.paused == true) onResume() else onPause() },
+                onClick = {
+                    val next = !effectivePaused
+                    assumedPaused = next
+                    if (next) onPause() else onResume()
+                },
                 enabled = !lost && state != null,
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     PlayPauseGlyph(
-                        paused = state?.paused ?: true,
+                        paused = effectivePaused,
                         tint = MaterialTheme.colorScheme.onPrimary,
                         sizeDp = 32,
                     )
                 }
             }
-            SkipButton("+10", enabled = !lost && state != null) {
+            SkipButton("+10", Modifier.weight(1f), enabled = !lost && state != null) {
                 onSeek(livePosition + 10_000)
             }
-            SkipButton("⏭", enabled = !lost && state?.hasNext == true) {
+            SkipButton("⏭", Modifier.weight(1f), enabled = !lost && state?.hasNext == true) {
                 onNext()
             }
         }
@@ -239,6 +277,13 @@ fun RemoteScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         ) {
+            TextButton(
+                onClick = onFullscreen,
+                enabled = !lost && state != null,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+            ) { Text("Fullscreen") }
             TextButton(
                 onClick = onPlayHere,
                 colors = ButtonDefaults.textButtonColors(
@@ -260,11 +305,16 @@ fun RemoteScreen(
  * screen; three red controls in a row and none of them is the obvious one.
  */
 @Composable
-private fun SkipButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun SkipButton(
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.width(72.dp),
+        modifier = modifier,
         colors = ButtonDefaults.textButtonColors(
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),

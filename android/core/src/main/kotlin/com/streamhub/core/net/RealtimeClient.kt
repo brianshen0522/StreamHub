@@ -59,6 +59,7 @@ class RealtimeClient(
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
     private val _sessionId = MutableStateFlow<String?>(null)
+    private val _deviceName = MutableStateFlow<String?>(null)
 
     /**
      * This connection's own session id, as the server sees it.
@@ -68,6 +69,12 @@ class RealtimeClient(
      * would offer itself as a target to cast to.
      */
     val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
+
+    /**
+     * What the receiver lists call this device, from the handshake. A remote
+     * needs it to tell "also controlled by someone else" from its own hand.
+     */
+    val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
     /**
      * The socket currently carrying events, for the frames a client sends after
@@ -90,6 +97,16 @@ class RealtimeClient(
         return socket.send(json.encodeToString(PlaybackFrame(type = "playback", state = state)))
     }
 
+    /**
+     * Takes this device off the account's cast lists and goes deaf to
+     * commands already in flight. Short of closing the socket this is the
+     * only way out of the receiver list once a playback frame has been sent.
+     */
+    fun withdrawReceiver(): Boolean {
+        val socket = live ?: return false
+        return socket.send("""{"type":"playback","withdraw":true}""")
+    }
+
     /** Sends a command to one of the account's other devices. */
     fun sendCommand(to: String, command: CastCommand): Boolean {
         val socket = live ?: return false
@@ -105,8 +122,21 @@ class RealtimeClient(
 
             when {
                 // Nothing to authenticate with, or the server rejected the token
-                // outright. Reconnecting cannot help; the app has to sign in.
-                outcome.noSession || outcome.closeCode == CLOSE_UNAUTHORIZED -> return@channelFlow
+                // outright. Reconnecting with what we have cannot help — but the
+                // flow must outlive the condition: screens subscribe once for
+                // the life of the app, so a completed flow here meant signing in
+                // brought up no socket (no cast button, no library sync) until
+                // the process was killed. Wait for a *different* session to
+                // appear and then connect with it.
+                outcome.noSession || outcome.closeCode == CLOSE_UNAUTHORIZED -> {
+                    attempts = 0
+                    val rejected = outcome.token
+                    while (true) {
+                        val current = store.load()?.accessToken
+                        if (!current.isNullOrEmpty() && current != rejected) break
+                        delay(reconnectBaseMs)
+                    }
+                }
 
                 // The socket is only authenticated at the handshake, so the
                 // server drops it the moment the token lapses. Renew *first* —
@@ -159,6 +189,7 @@ class RealtimeClient(
                     sawReady = true
                     _connected.value = true
                     _sessionId.value = frame["sessionId"]?.jsonPrimitive?.contentOrNull
+                    _deviceName.value = frame["deviceName"]?.jsonPrimitive?.contentOrNull
                     // The handshake carries the receivers already connected, so
                     // a phone that opens second still sees the television
                     // without waiting for it to report again.
@@ -190,6 +221,7 @@ class RealtimeClient(
             socket.cancel()
             live = null
             _sessionId.value = null
+            _deviceName.value = null
         }
     }
 

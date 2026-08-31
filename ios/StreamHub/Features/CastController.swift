@@ -17,6 +17,11 @@ final class CastController {
     private(set) var receivers: [CastReceiver] = []
     private(set) var targetId: String?
 
+    /// What the server calls this phone, from the socket handshake. The remote
+    /// compares it against a receiver's `controlledBy` so only *another*
+    /// controller's hand is called out, never this phone's own.
+    private(set) var ownDeviceName: String?
+
     private var realtime: RealtimeClient?
 
     /// The device being driven. Derived rather than stored, so a television that
@@ -50,6 +55,7 @@ final class CastController {
         for await event in client.stream() {
             if case .receivers(let list) = event {
                 receivers = list
+                ownDeviceName = await client.deviceName
             }
         }
     }
@@ -102,6 +108,7 @@ final class CastController {
 
     func pause() { if let targetId { send(.pause, to: targetId) } }
     func resume() { if let targetId { send(.resume, to: targetId) } }
+    func fullscreen() { if let targetId { send(.fullscreen, to: targetId) } }
     func next() { if let targetId { send(.next, to: targetId) } }
     func previous() { if let targetId { send(.previous, to: targetId) } }
     func seek(toMs positionMs: Int) { if let targetId { send(.seek(positionMs: positionMs), to: targetId) } }

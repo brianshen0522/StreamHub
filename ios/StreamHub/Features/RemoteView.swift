@@ -18,6 +18,11 @@ struct RemoteView: View {
     @State private var reported: Double = 0
     @State private var reportedAt = Date()
 
+    /// What the play button just asked for, shown until the television
+    /// confirms it. State reports lag the command by up to a second, and a
+    /// glyph that flips only on the report reads as a dead button.
+    @State private var assumedPaused: Bool?
+
     var body: some View {
         NavigationStack {
             if let target = cast.target {
@@ -48,7 +53,8 @@ struct RemoteView: View {
     private func content(_ target: CastReceiver) -> some View {
         let state = target.state
         let duration = Double(state?.durationMs ?? 0) / 1000
-        let live = livePosition(state)
+        let effectivePaused = assumedPaused ?? (state?.paused ?? true)
+        let live = livePosition(state, paused: effectivePaused)
         let shown = scrubbing ?? pendingSeek ?? live
 
         VStack(spacing: 24) {
@@ -71,6 +77,15 @@ struct RemoteView: View {
                     Text(detail)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                // Another remote's hand, so a jump in the bar reads as a
+                // person elsewhere rather than as this phone glitching. Own
+                // commands echo back with this phone's name; those stay quiet.
+                if let other = state?.controlledBy, other != cast.ownDeviceName {
+                    Text("Also controlled from \(other)")
+                        .font(.footnote)
+                        .foregroundStyle(Color.streamHubAccent)
                         .lineLimit(1)
                 }
             }
@@ -124,15 +139,21 @@ struct RemoteView: View {
                 .accessibilityLabel("Back 10 Seconds")
 
                 Button {
-                    if state?.paused == true { cast.resume() } else { cast.pause() }
+                    if effectivePaused {
+                        assumedPaused = false
+                        cast.resume()
+                    } else {
+                        assumedPaused = true
+                        cast.pause()
+                    }
                 } label: {
-                    Image(systemName: state?.paused == true ? "play.fill" : "pause.fill")
+                    Image(systemName: effectivePaused ? "play.fill" : "pause.fill")
                         .font(.system(size: 34))
                         .frame(width: 72, height: 72)
                         .background(Color.streamHubAccent, in: .circle)
                         .foregroundStyle(.white)
                 }
-                .accessibilityLabel(state?.paused == true ? "Resume" : "Pause")
+                .accessibilityLabel(effectivePaused ? "Resume" : "Pause")
                 // The bar behind this sheet carries the same control, so the
                 // two need telling apart by something other than their glyph.
                 .accessibilityIdentifier("remotePlayPause")
@@ -165,6 +186,16 @@ struct RemoteView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
+                // For receivers that have a windowed state at all — a browser.
+                // A television ignores it, which costs nothing.
+                Button("Fullscreen") {
+                    cast.fullscreen()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .tint(.secondary)
+                .disabled(state == nil || cast.lost)
+
                 // Neutral, not accented. Red already means the transport and
                 // means Stop; a third red control on one screen and none of
                 // them is the obvious one.
@@ -193,16 +224,26 @@ struct RemoteView: View {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             pendingSeek = nil
         }
+        // The assumption clears when the television confirms it, or expires
+        // if it never does — an ignored command must not pin a wrong glyph.
+        .onChange(of: state?.paused) { _, new in
+            if let assumed = assumedPaused, new == assumed { assumedPaused = nil }
+        }
+        .task(id: assumedPaused) {
+            guard assumedPaused != nil else { return }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            assumedPaused = nil
+        }
     }
 
     /// The reported position, advanced locally between reports.
     ///
     /// Only while playing: a paused position that crept forward would be a lie
     /// about the television.
-    private func livePosition(_ state: CastPlaybackState?) -> Double {
+    private func livePosition(_ state: CastPlaybackState?, paused: Bool) -> Double {
         guard let state else { return 0 }
         let base = Double(state.positionMs) / 1000
-        guard !state.paused else { return base }
+        guard !paused else { return base }
         return base + Date().timeIntervalSince(reportedAt)
     }
 }

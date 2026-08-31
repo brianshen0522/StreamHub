@@ -134,6 +134,7 @@ class CastController(
 
     fun pause() = send(CastCommand.Pause)
     fun resume() = send(CastCommand.Resume)
+    fun fullscreen() = send(CastCommand.Fullscreen)
     fun next() = send(CastCommand.Next)
     fun previous() = send(CastCommand.Previous)
     fun seekTo(positionMs: Long) = send(CastCommand.Seek(positionMs))

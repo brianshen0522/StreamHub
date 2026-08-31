@@ -42,7 +42,7 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             if let player {
-                PlayerContainer(player: player, onDone: { leave(.done) })
+                PlayerContainer(player: player)
             } else {
                 ZStack {
                     Color.black
@@ -84,10 +84,16 @@ struct PlayerView: View {
         // A fault mid-stream is a fatal stop AVPlayer announces but never
         // recovers from on its own; every one climbs the ladder.
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { notification in
+            // Unfiltered, this fires for items already replaced by the ladder
+            // — the discarded item's death would climb a rung by itself.
+            guard let item = notification.object as? AVPlayerItem,
+                  item === player?.currentItem else { return }
             let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             fault(error?.localizedDescription ?? "Playback failed")
         }
-        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let item = notification.object as? AVPlayerItem,
+                  item === player?.currentItem else { return }
             guard !ended else { return }
             ended = true
             let duration = player?.currentItem?.duration.seconds ?? 0
@@ -113,6 +119,11 @@ struct PlayerView: View {
         let url = model.api.manifestURL(target: request.directUrl)
         let asset = AVURLAsset(asset: url, headers: model.api.authorizedRequest(url).allHTTPHeaderFields ?? [:])
         let item = AVPlayerItem(asset: asset)
+        // Ahead of the default (AVPlayer's own judgement, usually well under a
+        // minute): these CDNs go quiet for stretches, and two minutes of
+        // buffer is what rides them out. Matches the buffered ceilings the
+        // other clients were given.
+        item.preferredForwardBufferDuration = 120
         let created = AVPlayer(playerItem: item)
 
         if request.resumeAtSeconds > 0 {
@@ -216,7 +227,9 @@ struct PlayerView: View {
             ? model.api.manifestURL(target: request.directUrl)
             : model.api.streamURL(target: request.directUrl)
         let asset = AVURLAsset(asset: url, headers: model.api.authorizedRequest(url).allHTTPHeaderFields ?? [:])
-        player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 120
+        player.replaceCurrentItem(with: item)
         if position > 0 {
             player.seek(to: CMTime(seconds: position, preferredTimescale: 1))
         }
@@ -392,25 +405,16 @@ private struct UpNextPrompt: View {
 /// The system player, hosted.
 private struct PlayerContainer: UIViewControllerRepresentable {
     let player: AVPlayer
-    let onDone: () -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
-        controller.delegate = context.coordinator
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(onDone: onDone) }
-
-    final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
-        private let onDone: () -> Void
-        init(onDone: @escaping () -> Void) { self.onDone = onDone }
-    }
 }
 
 private extension AVURLAsset {

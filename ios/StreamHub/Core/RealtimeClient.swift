@@ -25,6 +25,9 @@ actor RealtimeClient {
     private var running = false
 
     private(set) var sessionId: String?
+    /// What the receiver lists call this device, from the handshake — a
+    /// remote needs it to tell another controller's hand from its own.
+    private(set) var deviceName: String?
 
     private let events: AsyncStream<RealtimeEvent>
     private let continuation: AsyncStream<RealtimeEvent>.Continuation
@@ -88,6 +91,7 @@ actor RealtimeClient {
         case .stop: return ["action": "stop"]
         case .next: return ["action": "next"]
         case .previous: return ["action": "previous"]
+        case .fullscreen: return ["action": "fullscreen"]
         case .seek(let positionMs): return ["action": "seek", "positionMs": positionMs]
         case .play(let request):
             guard let data = try? JSONEncoder().encode(request),
@@ -112,6 +116,7 @@ actor RealtimeClient {
         while running {
             let outcome = await runOnce()
             sessionId = nil
+            deviceName = nil
 
             if outcome.unauthorized { return }
             if outcome.tokenExpired {
@@ -164,6 +169,7 @@ actor RealtimeClient {
                 if type == "ready" {
                     outcome.sawReady = true
                     sessionId = object["sessionId"] as? String
+                    deviceName = object["deviceName"] as? String
                     // The handshake carries the receivers already connected, so
                     // a client that opens second still sees the television
                     // without waiting for it to report again.
