@@ -1343,6 +1343,31 @@ function App() {
     };
   }, [immersive]);
 
+  // Rotating a playing phone must land with the player in view. The rotation
+  // reflows the page — the portrait layout is much taller than landscape —
+  // and the browser's scroll anchoring lands wherever that math says, which
+  // in the field left the player mostly scrolled under the sticky topbar:
+  // its visible sliver sat exactly in the bar's shadow, so every control was
+  // physically covered and taps died on the bar instead. Only while actually
+  // watching — someone reading the episode list mid-rotation keeps their
+  // place.
+  useEffect(() => {
+    const query = window.matchMedia("(orientation: portrait)");
+    const onFlip = () => {
+      const video = videoRef.current;
+      const card = playerCardRef.current;
+      if (!video || video.paused || !card) return;
+      window.requestAnimationFrame(() => {
+        const topbar = document.querySelector(".usr-topbar");
+        const offset = (topbar?.offsetHeight || 0) + 8;
+        const top = card.getBoundingClientRect().top + window.scrollY - offset;
+        window.scrollTo({ top: Math.max(0, top) });
+      });
+    };
+    query.addEventListener("change", onFlip);
+    return () => query.removeEventListener("change", onFlip);
+  }, []);
+
   // Transitions are announced the moment they happen, not on the heartbeat:
   // the person holding the remote pressed the button and is watching *their*
   // screen for the answer. The heartbeat stays as the position ticker.
