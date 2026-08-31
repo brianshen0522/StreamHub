@@ -707,6 +707,28 @@
   .vp-row { gap: 2px; }
   .vp-btn { width: 32px; height: 32px; }
   .vp-time { padding: 0 4px; font-size: 11.5px; }
+  /* The running download stays an icon here — its "46% · 178 MB" label was
+     wider than the row had left to give, and the progress hairline along
+     the top edge already tells the number's story. */
+  .vp-btn-wide.is-on { width: 32px; padding: 0; }
+  .vp-btn-wide.is-on span { display: none; }
+}
+
+/* The running download's progress, as a hairline on the player's top edge. */
+.vp-dl-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  z-index: 5;
+  pointer-events: none;
+}
+.vp-dl-progress-fill {
+  height: 100%;
+  background: var(--vp-accent);
+  transition: width 400ms ease;
 }
 
 /* The explicit cast call-to-action a restored page shows instead of hijacking

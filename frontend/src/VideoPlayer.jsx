@@ -679,6 +679,15 @@ export default function VideoPlayer({
         </div>
       ) : null}
 
+      {download?.active ? (
+        // Progress as a hairline along the player's top edge: legible at any
+        // width, and it costs the control bar nothing. The wide in-button
+        // label was squeezing a portrait phone's control row off the screen.
+        <div className="vp-dl-progress" aria-hidden="true">
+          <div className="vp-dl-progress-fill" style={{ width: `${Math.max(2, download.percent || 0)}%` }} />
+        </div>
+      ) : null}
+
       {dlNoteShown && download && !download.active && (download.label || download.error) ? (
         <div className={`vp-dl-note${download.error ? " is-error" : ""}`}>
           {download.error ? <IconClose /> : <IconDownload />}
