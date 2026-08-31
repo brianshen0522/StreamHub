@@ -1368,6 +1368,50 @@ function App() {
     return () => query.removeEventListener("change", onFlip);
   }, []);
 
+  // The loader's watchdog rides the media clock, because the media clock is
+  // the one thing a hidden tab keeps. With the video in a Picture-in-Picture
+  // window and the page buried behind another window, browsers throttle the
+  // page's timers — and hls.js fills its buffer from a timer. The picture
+  // kept playing off the buffered minutes, the buffer quietly stopped
+  // growing, and ten minutes later playback died until the person switched
+  // back to the window. `timeupdate` fires from the media pipeline for as
+  // long as anything plays, throttled or not: when the buffer has stopped
+  // growing and is running low, a startLoad() kick restarts the loader.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !activeSource || castTargetId || cast.lost) return undefined;
+    let lastEnd = 0;
+    let lastGrowthAt = Date.now();
+    const bufferedEnd = () => (video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0);
+    const kickIfStalled = (force) => {
+      const hls = hlsRef.current;
+      if (!hls) return;
+      const now = Date.now();
+      const end = bufferedEnd();
+      if (end > lastEnd + 0.5) {
+        lastEnd = end;
+        lastGrowthAt = now;
+        return;
+      }
+      const ahead = end - video.currentTime;
+      const quiet = now - lastGrowthAt;
+      if ((force && quiet > 4_000 && ahead < 300) || (quiet > 10_000 && ahead < 90)) {
+        lastGrowthAt = now;
+        try { hls.startLoad(video.currentTime); } catch { /* not attached yet */ }
+      }
+    };
+    const onTime = () => kickIfStalled(false);
+    // Coming back to the window gets an eager kick, so nobody has to wait
+    // out the low-buffer threshold staring at a frozen frame.
+    const onVisible = () => { if (!document.hidden) kickIfStalled(true); };
+    video.addEventListener("timeupdate", onTime);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      video.removeEventListener("timeupdate", onTime);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [activeSource, castTargetId, cast.lost]);
+
   // Transitions are announced the moment they happen, not on the heartbeat:
   // the person holding the remote pressed the button and is watching *their*
   // screen for the answer. The heartbeat stays as the position ticker.
