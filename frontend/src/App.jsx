@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
@@ -378,6 +379,7 @@ function PosterImage({ src, alt, className, fallbackClassName }) {
 }
 
 function App() {
+  const location = useLocation();
   // The portal owns the language so the sidebar and the other pages follow the
   // switch rendered here; the local state is only the standalone fallback.
   const portalLanguage = usePortalLanguage();
@@ -1770,6 +1772,21 @@ function App() {
     setHlsInstance(null);
     setAdCuts([]);
   }
+
+  // The portal's brand mark and its Browse tab both link to "/", the route this
+  // page already occupies, so React Router re-renders it instead of remounting
+  // and the watch view would stay open. The ?v= URL is written with
+  // history.replaceState, which the router never sees, so the only reliable
+  // signal that the user asked for home is a fresh location key on "/" with no
+  // item encoded in the router's own search string.
+  const homeNavKeyRef = useRef(location.key);
+  useEffect(() => {
+    if (location.key === homeNavKeyRef.current) return;
+    homeNavKeyRef.current = location.key;
+    if (location.pathname !== "/") return;
+    if (new URLSearchParams(location.search).get("v")) return;
+    handleGoHome();
+  }, [location]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleGoHome() {
     sourcesAbortRef.current?.abort();

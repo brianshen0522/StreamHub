@@ -970,8 +970,10 @@ export default function UserPortal({ session, setSession, onLogout }) {
             >
               <IconMenu />
             </button>
-            <span className="usr-brand-dot">S</span>
-            <div className="usr-brand-name">StreamHub</div>
+            <Link to="/" className="usr-brand-home" aria-label={t.navBrowse || "Browse"}>
+              <span className="usr-brand-dot">S</span>
+              <div className="usr-brand-name">StreamHub</div>
+            </Link>
           </div>
 
           <nav className="usr-nav">

@@ -82,6 +82,24 @@
   padding: 4px 8px 18px;
 }
 
+/* The mark is a link home; it keeps the row's original flex layout. */
+.usr-brand-home {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--usr-r-sm);
+  transition: opacity 0.15s ease;
+}
+
+.usr-brand-home:hover { opacity: 0.78; }
+
+.usr-brand-home:focus-visible {
+  outline: 2px solid var(--usr-accent-hi);
+  outline-offset: 3px;
+}
+
 .usr-brand-dot {
   display: grid;
   place-items: center;
@@ -878,8 +896,7 @@
   /* Collapsed, the toggle is the only thing in the brand row, so it sits on
      the same centre line as the nav icons underneath. */
   .usr-rail-collapsed .usr-brand { justify-content: center; padding: 4px 0 14px; }
-  .usr-rail-collapsed .usr-brand-name,
-  .usr-rail-collapsed .usr-brand-dot { display: none; }
+  .usr-rail-collapsed .usr-brand-home { display: none; }
   .usr-rail-collapsed .usr-rail-toggle { margin-left: 0; }
 
   .usr-rail-collapsed .usr-nav-item {

@@ -1531,11 +1531,13 @@ export default function AdminPortal({ session, setSession, onLogout }) {
       <div className="adm-shell">
         <aside className="adm-side">
           <div className="adm-brand">
-            <span className="adm-brand-dot">S</span>
-            <div>
-              <div className="adm-brand-name">StreamHub</div>
-              <div className="adm-brand-sub">Admin</div>
-            </div>
+            <Link to="/admin" className="adm-brand-home" aria-label="Dashboard">
+              <span className="adm-brand-dot">S</span>
+              <div>
+                <div className="adm-brand-name">StreamHub</div>
+                <div className="adm-brand-sub">Admin</div>
+              </div>
+            </Link>
           </div>
 
           <div className="adm-nav-label">Console</div>

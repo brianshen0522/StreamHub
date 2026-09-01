@@ -84,6 +84,24 @@
   padding: 4px 8px 18px;
 }
 
+/* The mark is a link to the dashboard; it keeps the row's flex layout. */
+.adm-brand-home {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--adm-r-sm);
+  transition: opacity 0.15s ease;
+}
+
+.adm-brand-home:hover { opacity: 0.78; }
+
+.adm-brand-home:focus-visible {
+  outline: 2px solid var(--adm-accent-hi);
+  outline-offset: 3px;
+}
+
 .adm-brand-dot {
   width: 26px;
   height: 26px;
