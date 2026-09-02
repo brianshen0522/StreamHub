@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover is what lets the layout reach under the notch and
          the home indicator; without it iOS letterboxes a standalone app with
-         white bars. The safe areas are then paid back in CSS. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+         white bars. The safe areas are then paid back in CSS.
+         maximum-scale=1 / user-scalable=no pin the page at 1x so it behaves
+         like an app rather than a web page: no pinch or double-tap zoom, and
+         no iOS auto-zoom when a sub-16px input takes focus. Safari in a
+         browser tab ignores the pinch part for accessibility; standalone
+         (Home Screen) and Android honour it. The rest is done in CSS
+         (touch-action) and main.jsx (gesturestart). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>StreamHub</title>
 
     <!-- The SVG is what current browsers use and the only one that stays sharp

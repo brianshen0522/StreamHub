@@ -38,6 +38,17 @@
 
 /* ── reset ────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+html {
+  /* Scrolling is the only touch gesture the page itself responds to. This
+     is what actually stops double-tap and pinch zoom in Chrome and in iOS
+     standalone mode; the viewport meta alone is advisory. Elements that
+     take their own gestures (the seek bar) override it locally. */
+  touch-action: pan-x pan-y;
+  /* Keep iOS from inflating text when it decides a block "looks like a
+     desktop page" in landscape. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   background: var(--bg);
   color: var(--t1);
