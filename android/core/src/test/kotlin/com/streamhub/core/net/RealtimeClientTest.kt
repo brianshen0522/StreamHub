@@ -1,9 +1,13 @@
 package com.streamhub.core.net
 
 import com.streamhub.core.model.Session
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
@@ -192,8 +196,15 @@ class RealtimeClientTest {
         assertEquals(1, renewals.get())
     }
 
+    /**
+     * Both of the "cannot connect with what we have" cases keep the flow
+     * alive: screens subscribe once for the life of the app, so a flow that
+     * completed on a missing or rejected session left the app without a
+     * socket until it was killed. The client waits for a *different* session
+     * and connects with that — which is what these two tests hold it to.
+     */
     @Test
-    fun `an unauthorized close is not retried`() = runBlocking {
+    fun `an unauthorized close is not retried with the same token`() = runBlocking {
         server.enqueue(
             MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -203,21 +214,52 @@ class RealtimeClientTest {
             })
         )
 
-        val events = withTimeout(10_000) { client().events().toList() }
+        val received = CompletableDeferred<RealtimeEvent>()
+        val collecting = launch { client().events().collect { received.complete(it) } }
 
-        assertTrue(events.isEmpty())
+        // Long past the reconnect delay (10 ms): a retry would have shown up.
+        withTimeout(5_000) { while (authFrames.isEmpty()) delay(10) }
+        delay(300)
         assertEquals("retrying a rejected token is pointless", 1, authFrames.size)
         assertEquals(0, renewals.get())
+        assertTrue(collecting.isActive)
+
+        // A new session is a different matter: connect with it, and only then.
+        server.enqueue(
+            serverSocket { socket ->
+                socket.send("""{"type":"ready"}""")
+                socket.send("""{"type":"favorites","action":"added","id":"f1"}""")
+            }
+        )
+        store.save(session("access-2"))
+
+        assertEquals(RealtimeEvent.Favorites("added", "f1"), withTimeout(5_000) { received.await() })
+        assertEquals("""{"type":"auth","token":"access-2"}""", authFrames.last())
+        collecting.cancelAndJoin()
     }
 
     @Test
-    fun `no stored session means no connection attempt`() = runBlocking {
+    fun `no stored session means no connection attempt until one appears`() = runBlocking {
         store.clear()
 
-        val events = withTimeout(5_000) { client().events().toList() }
+        val received = CompletableDeferred<RealtimeEvent>()
+        val collecting = launch { client().events().collect { received.complete(it) } }
 
-        assertTrue(events.isEmpty())
+        delay(300)
         assertTrue("nothing should have been sent", authFrames.isEmpty())
+        assertTrue(collecting.isActive)
+
+        server.enqueue(
+            serverSocket { socket ->
+                socket.send("""{"type":"ready"}""")
+                socket.send("""{"type":"favorites","action":"added","id":"f1"}""")
+            }
+        )
+        store.save(session("access-1"))
+
+        assertEquals(RealtimeEvent.Favorites("added", "f1"), withTimeout(5_000) { received.await() })
+        assertEquals("""{"type":"auth","token":"access-1"}""", authFrames.single())
+        collecting.cancelAndJoin()
     }
 
     @Test
