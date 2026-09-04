@@ -15,6 +15,7 @@ import {
   isOnline,
   isUpdateReady,
   subscribeOnline,
+  subscribeReconnect,
   subscribeUpdateReady,
 } from "./pwa.js";
 
@@ -116,24 +117,36 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
   );
 }
 
+const BACK_ONLINE_BANNER_MS = 3000;
+
 /**
- * The two things the service worker needs to say, shown over every portal.
+ * The things the connectivity watcher needs to say, shown over every portal.
  *
- * Offline is the browser's word for it and only a hint, so it is a quiet
- * strip rather than a modal — the pages that fail say so in their own place.
+ * Offline means the server stopped answering, so it is a quiet strip rather
+ * than a modal — the pages that fail say so in their own place, and try again
+ * on their own once the server is back. That moment gets a short green strip,
+ * so the retry the person is about to see happen does not look like magic.
  * An update is never applied on its own: the button is the only way a
  * running page reloads, so nothing that is playing gets cut off.
  */
 function PwaBanners() {
   const [online, setOnline] = useState(() => isOnline());
+  const [backOnline, setBackOnline] = useState(false);
   const [updateReady, setUpdateReady] = useState(() => isUpdateReady());
   useEffect(() => subscribeOnline(setOnline), []);
+  useEffect(() => subscribeReconnect(() => setBackOnline(true)), []);
+  useEffect(() => {
+    if (!backOnline) return undefined;
+    const timer = window.setTimeout(() => setBackOnline(false), BACK_ONLINE_BANNER_MS);
+    return () => window.clearTimeout(timer);
+  }, [backOnline]);
   useEffect(() => subscribeUpdateReady(setUpdateReady), []);
-  if (online && !updateReady) return null;
+  if (online && !backOnline && !updateReady) return null;
   const t = translations[resolveLanguage()] || translations["zh-TW"];
   return (
     <div className="pwa-banners">
       {!online ? <div className="pwa-banner pwa-banner-offline">{t.offlineBanner}</div> : null}
+      {online && backOnline ? <div className="pwa-banner pwa-banner-online">{t.backOnline}</div> : null}
       {updateReady ? (
         <div className="pwa-banner pwa-banner-update">
           <span>{t.updateReady}</span>

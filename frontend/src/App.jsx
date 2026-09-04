@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import Hls from "hls.js";
 import { resolveLanguage, translations } from "./i18n.js";
-import { apiJson, apiNdjsonStream, getAccessToken } from "./api.js";
+import { apiJson, apiNdjsonStream, getAccessToken, isOfflineError } from "./api.js";
+import { isOnline, probeServer, subscribeReconnect } from "./pwa.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
 import { useCast } from "./cast.js";
 import { CastButton, RemotePanel } from "./CastControls.jsx";
@@ -568,8 +569,31 @@ function App() {
   const sourcesAbortRef = useRef(null);
   useEffect(() => { tRef.current = t; }, [t]);
 
+  /**
+   * What to do again once the server is back.
+   *
+   * A title opened, a season picked, an episode's sources asked for, a search
+   * run — each of these, when it dies for want of a network, leaves here the
+   * call that would redo it. Only one is ever pending: whichever step failed
+   * last is the one the person is looking at, and every step clears the slot
+   * on its way in. An answer the server actually gave (a 404, a provider
+   * error) is not kept: retrying it would get the same answer.
+   */
+  const retryRef = useRef(null);
+  // Where the playhead was when playback died, so a restart after the outage
+  // picks up there rather than from the top. Consumed by the restart alone —
+  // a source picked by hand keeps its usual resume-from-progress behaviour.
+  const errorPositionRef = useRef(0);
+  const seekAfterLoadRef = useRef(0);
+  // Bumped to run the player effect again on the same source.
+  const [playbackAttempt, setPlaybackAttempt] = useState(0);
+  // Bumped to run the one-shot loaders (providers) again after an outage.
+  const [reconnectTick, setReconnectTick] = useState(0);
+  const latestRef = useRef({});
+
   resultsRef.current = results;
   pendingSearchRef.current = pendingSearchProviders;
+  latestRef.current = { playerError, activeSource, castTargetId, castLost: cast.lost };
 
   const groupedResults = useMemo(
     () => results.filter((group) => group.items.length > 0),
@@ -646,6 +670,15 @@ function App() {
     setPlayerError("");
     setPlaybackMode("");
     setAdCuts([]);
+    // Set only by the restart after an outage. Taken here so a later load of
+    // this same source — a manual pick, another retry — starts clean.
+    const seekTo = seekAfterLoadRef.current;
+    seekAfterLoadRef.current = 0;
+    if (seekTo > 0) {
+      video.addEventListener("loadedmetadata", () => {
+        if (Math.abs(video.currentTime - seekTo) > 1) video.currentTime = seekTo;
+      }, { once: true });
+    }
     setPlaybackEngine(
       Hls.isSupported()
         ? (typeof ManagedMediaSource !== "undefined" && typeof MediaSource === "undefined" ? "MMS" : "MSE")
@@ -657,6 +690,22 @@ function App() {
     sourceUrlsRef.current = { directUrl, proxyUrl };
 
     function setMode(mode) { setPlaybackMode(mode); }
+
+    // The playhead at the moment playback died. The proxy fallback starts
+    // over from zero, so a zero here never overwrites a real position.
+    function rememberErrorPosition() {
+      if (video.currentTime > 0) errorPositionRef.current = video.currentTime;
+    }
+
+    // A CDN that died while the whole network was down is not a bad CDN.
+    // The mark is a week long, so it waits for proof the server itself
+    // answers — which the health probe gives, and which also starts the
+    // offline handling if it does not.
+    function markHostIfServerAnswers(url) {
+      if (isOnline()) {
+        probeServer().then((reachable) => { if (reachable) markUnreachableHost(url); });
+      }
+    }
 
     function loadNative(url, mode) {
       setMode(mode);
@@ -761,6 +810,7 @@ function App() {
 
       loadWithHls(directUrl || proxyUrl, directUrl ? "direct" : "proxy", (instance, data) => {
         const urls = sourceUrlsRef.current;
+        rememberErrorPosition();
         instance.destroy();
         hlsRef.current = null;
         const detail = describeHlsError(data);
@@ -768,12 +818,13 @@ function App() {
         // answered — is this network telling us it cannot reach that host.
         // Remembered, so the auto-pick stops walking into it.
         if (data?.type === "networkError") {
-          markUnreachableHost(data?.frag?.url || data?.context?.url || urls.directUrl);
+          markHostIfServerAnswers(data?.frag?.url || data?.context?.url || urls.directUrl);
         }
         if (urls.proxyUrl && urls.directUrl && urls.directUrl !== urls.proxyUrl) {
           setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadWithHls(urls.proxyUrl, "proxy", (proxyInstance, proxyData) => {
             const proxyDetail = describeHlsError(proxyData);
+            rememberErrorPosition();
             setPlayerError(proxyDetail ? `${tRef.current.statusError} — ${proxyDetail}` : tRef.current.statusError);
             proxyInstance.destroy();
             hlsRef.current = null;
@@ -800,9 +851,10 @@ function App() {
       video.onerror = () => {
         const err = video.error;
         const detail = err ? `MediaError ${err.code}${err.message ? ` ${err.message}` : ""}` : "";
+        rememberErrorPosition();
         // MEDIA_ERR_NETWORK on the native path: the manifest came from us,
         // so what died was a segment fetch against the CDN itself.
-        if (err?.code === 2) markUnreachableHost(directUrl);
+        if (err?.code === 2) markHostIfServerAnswers(directUrl);
         if (proxyUrl && video.src !== proxyUrl) {
           setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadNative(proxyUrl, "proxy");
@@ -819,7 +871,30 @@ function App() {
     // receiver list every time the server republishes it, and an effect that
     // now sends a play command must not re-fire on a list that has not changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSource, castTargetId, cast.lost]);
+  }, [activeSource, castTargetId, cast.lost, playbackAttempt]);
+
+  /**
+   * The server is back. Whatever this page was last stopped by the outage is
+   * done again: the step that failed while loading a title or a search, or,
+   * if the title had loaded and it was playback that died, the player —
+   * restarted at the position it died at. Nothing is retried while a
+   * television is playing this; the set has its own network.
+   */
+  useEffect(() => subscribeReconnect(() => {
+    setReconnectTick((tick) => tick + 1);
+    const retry = retryRef.current;
+    if (retry) {
+      retryRef.current = null;
+      void retry();
+      return;
+    }
+    const latest = latestRef.current;
+    if (latest.playerError && latest.activeSource && !latest.castTargetId && !latest.castLost) {
+      seekAfterLoadRef.current = errorPositionRef.current;
+      errorPositionRef.current = 0;
+      setPlaybackAttempt((attempt) => attempt + 1);
+    }
+  }), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -846,7 +921,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reconnectTick]);
 
   useEffect(() => {
     if (!currentPlaybackPayload) {
@@ -885,17 +960,29 @@ function App() {
 
   // Another tab (or device) may star this title or clear its progress; keep the
   // heart and the resume point in step without a reload.
-  useEffect(() => subscribeRealtime((event) => {
-    if (event.type !== "favorites" && event.type !== "progress") return;
-    apiJson("/api/me/favorites")
-      .then((data) => setFavoriteEntries(data.favorites || []))
-      .catch(() => {});
-    if (selectedItem) {
-      fetchItemProgress(selectedItem.provider, selectedItem.url)
-        .then(setItemProgressMap)
+  useEffect(() => {
+    function refreshLibraryState() {
+      apiJson("/api/me/favorites")
+        .then((data) => setFavoriteEntries(data.favorites || []))
         .catch(() => {});
+      if (selectedItem) {
+        fetchItemProgress(selectedItem.provider, selectedItem.url)
+          .then(setItemProgressMap)
+          .catch(() => {});
+      }
     }
-  }), [selectedItem]);
+    const unsubscribeRealtime = subscribeRealtime((event) => {
+      if (event.type === "favorites" || event.type === "progress") refreshLibraryState();
+    });
+    // Events sent during an outage were never heard, and the heart may have
+    // been drawn from an error. Deliberately not the resume point: refetching
+    // that mid-episode would seek the playhead back to it.
+    const unsubscribeReconnect = subscribeReconnect(refreshLibraryState);
+    return () => {
+      unsubscribeRealtime();
+      unsubscribeReconnect();
+    };
+  }, [selectedItem]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1790,6 +1877,7 @@ function App() {
 
   function handleGoHome() {
     sourcesAbortRef.current?.abort();
+    retryRef.current = null;
     teardownPlayback();
     setNextEpPrompt(null);
     setIsPromptDismissed(false);
@@ -1814,7 +1902,9 @@ function App() {
     sourcesAbortRef.current?.abort();
     const providerNames = providerFilter === "all" ? availableProviders.map((provider) => provider.key) : [providerFilter];
     if (providerNames.length === 0) {
-      setError("No providers are enabled for this account.");
+      // The list is also empty when it could not be fetched; the offline
+      // banner is up in that case, and this should not contradict it.
+      setError(isOnline() ? "No providers are enabled for this account." : t.offlineFetch);
       return;
     }
     teardownPlayback();
@@ -1855,6 +1945,7 @@ function App() {
     const requestId = fresh ? searchRequestIdRef.current + 1 : searchRequestIdRef.current;
     searchRequestIdRef.current = requestId;
     lastSearchQueryRef.current = searchQuery;
+    retryRef.current = null;
     setSearching(true);
     setError("");
     if (fresh) {
@@ -1872,6 +1963,7 @@ function App() {
     const errors = [];
     let finished = 0;
     let hasAnyResults = false;
+    let diedOffline = false;
 
     providerNames.forEach(async (providerName) => {
       const controller = new AbortController();
@@ -1889,6 +1981,7 @@ function App() {
       } catch (searchError) {
         if (searchRequestIdRef.current !== requestId) return;
         errors.push(searchError.message);
+        if (isOfflineError(searchError)) diedOffline = true;
         setResults((current) => current.map((group) => (
           group.provider === providerName ? { provider: providerName, items: [] } : group
         )));
@@ -1901,6 +1994,9 @@ function App() {
           setSearching(false);
           if (errors.length > 0 && !hasAnyResults) {
             setError(errors[0]);
+            if (diedOffline) {
+              retryRef.current = () => runProviderSearch(searchQuery, providerNames, { fresh });
+            }
           }
         }
       }
@@ -1937,6 +2033,8 @@ function App() {
     sourcesAbortRef.current?.abort();
     const controller = new AbortController();
     sourcesAbortRef.current = controller;
+    retryRef.current = null;
+    errorPositionRef.current = 0;
 
     setSourcesLoading(true);
     setSources([]);
@@ -2003,7 +2101,11 @@ function App() {
       commitSelection();
       reconcileSelection();
     } catch (sourceError) {
-      if (sourceError.name !== "AbortError") setError(sourceError.message);
+      if (sourceError.name === "AbortError") return;
+      setError(sourceError.message);
+      if (isOfflineError(sourceError)) {
+        retryRef.current = () => loadSourcesFromRawStreams(streams, provider, title, mediaType);
+      }
     } finally {
       window.clearTimeout(graceTimer);
       setSourcesLoading(false);
@@ -2014,6 +2116,8 @@ function App() {
     sourcesAbortRef.current?.abort();
     const controller = new AbortController();
     sourcesAbortRef.current = controller;
+    retryRef.current = null;
+    errorPositionRef.current = 0;
 
     setNextEpPrompt(null);
     setIsPromptDismissed(false);
@@ -2083,7 +2187,11 @@ function App() {
       commitSelection();
       reconcileSelection();
     } catch (sourceError) {
-      if (sourceError.name !== "AbortError") setError(sourceError.message);
+      if (sourceError.name === "AbortError") return;
+      setError(sourceError.message);
+      if (isOfflineError(sourceError)) {
+        retryRef.current = () => loadEpisodeSources(provider, sourceUrl, episode, title, mediaType);
+      }
     } finally {
       window.clearTimeout(graceTimer);
       setSourcesLoading(false);
@@ -2092,6 +2200,7 @@ function App() {
 
   async function handleSelectItem(item, targetSeasonUrl = null, targetEpisode = null, exact = false, fromUser = true) {
     sourcesAbortRef.current?.abort();
+    retryRef.current = null;
     // A person opening a title is asking to play it — wherever playback goes.
     // A restore is not a person.
     setCastSendState(fromUser ? "armed" : "idle");
@@ -2221,11 +2330,15 @@ function App() {
     } catch (detailError) {
       setError(detailError.message);
       setDetailLoading(false);
+      if (isOfflineError(detailError)) {
+        retryRef.current = () => handleSelectItem(item, targetSeasonUrl, targetEpisode, exact, fromUser);
+      }
     }
   }
 
   async function handleSelectSeason(season) {
     if (!itemDetail) return;
+    retryRef.current = null;
     setCastSendState("armed");
     setSelectedSeason(season);
     setEpisodes([]);
@@ -2246,6 +2359,9 @@ function App() {
     } catch (seasonError) {
       setError(seasonError.message);
       setSourcesLoading(false);
+      if (isOfflineError(seasonError)) {
+        retryRef.current = () => handleSelectSeason(season);
+      }
     }
   }
 

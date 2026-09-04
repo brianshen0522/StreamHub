@@ -1168,6 +1168,11 @@ a { color: inherit; }
   color: #ffd98a;
 }
 
+.pwa-banner-online {
+  background: rgba(20, 58, 36, 0.96);
+  color: #9fe6b4;
+}
+
 .pwa-banner-update button {
   padding: 6px 12px;
   border: 0;

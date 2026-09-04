@@ -1,4 +1,5 @@
 import { getAccessToken, refreshSession, signalAuthFailure } from "./api.js";
+import { subscribeReconnect } from "./pwa.js";
 
 /**
  * Live library updates.
@@ -52,13 +53,17 @@ function scheduleReconnect() {
 
 // The backoff can be half a minute out by the time a phone comes back from a
 // tunnel; the browser knows the moment it happens, so ask again right then.
-window.addEventListener("online", () => {
+function reconnectNow() {
   if (closedByUs || !listeners.size || socket) return;
   attempts = 0;
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
   connect();
-});
+}
+window.addEventListener("online", reconnectNow);
+// The browser's event says an interface came up; this one says the server
+// answered. A Wi-Fi that reconnects without internet fires only the first.
+subscribeReconnect(reconnectNow);
 
 function connect() {
   if (socket || !listeners.size) return;

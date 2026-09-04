@@ -1,4 +1,5 @@
 import { resolveLanguage, translations } from "./i18n.js";
+import { reportServerUnreachable } from "./pwa.js";
 
 const SESSION_STORAGE_KEY = "streamhub.session";
 
@@ -6,6 +7,23 @@ const sessionListeners = new Set();
 const authFailureListeners = new Set();
 
 let refreshPromise = null;
+
+/**
+ * A request that got no response at all — no network, DNS down, the server
+ * not answering. Typed so a page can tell "try this again when we are back"
+ * apart from an answer it should show as it is; the message is already the
+ * sentence the person sees.
+ */
+export class OfflineError extends Error {
+  constructor() {
+    super(translations[resolveLanguage()].offlineFetch);
+    this.name = "OfflineError";
+  }
+}
+
+export function isOfflineError(error) {
+  return error?.name === "OfflineError";
+}
 
 function notifySession(session) {
   sessionListeners.forEach((listener) => {
@@ -144,7 +162,10 @@ export async function apiFetch(path, options = {}, attempt = 0) {
     // have shown the server's, and "Failed to fetch" is not a sentence a
     // person should have to read.
     if (fetchError.name === "AbortError") throw fetchError;
-    throw new Error(translations[resolveLanguage()].offlineFetch);
+    // Tell the connectivity watcher, which confirms with a health probe and
+    // says when the server is back so the caller's page can try again.
+    reportServerUnreachable();
+    throw new OfflineError();
   }
 
   if (response.status === 401 && attempt === 0 && shouldAttemptRefresh(path)) {

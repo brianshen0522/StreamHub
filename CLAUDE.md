@@ -152,7 +152,7 @@ Three levels of routing:
 | `portal-chrome.js` | Contexts letting a routed page inject controls into the shell topbar, and the shared language state |
 | `i18n.js` | Flat `zh-TW` / `en` maps, `resolveLanguage()`, `fmt()` |
 | `sw.js` | **The service worker**, built by `vite-plugin-pwa` (injectManifest) into `/sw.js`. Precaches the shell, caches fonts and posters, and keeps the library lists (`/api/me/{favorites,continue-watching,history,progress,providers}`) network-first with a per-user cached fallback. Never caches search, item, sources, stream or manifest |
-| `pwa.js` | Registers the worker, exposes "update waiting" and online state to the UI, clears the library cache on sign-out |
+| `pwa.js` | Registers the worker, exposes "update waiting" and reachability to the UI, clears the library cache on sign-out. Owns the **reconnect signal**: a request that gets no answer starts a `/api/health` probe with backoff, and `subscribeReconnect` fires once a probe answers |
 
 **Offline:** the app is installable and opens without a network. `sw.js`
 serves the precached shell for any navigation outside `/api/`, and the
@@ -169,6 +169,25 @@ keep straight when touching it:
   only that button (or closing every tab) swaps builds. Auto-reloading would
   stop playback. The worker script itself is served `no-cache` by nginx, and
   `pwa.js` re-checks it hourly and whenever the tab returns to the foreground.
+
+**Reconnecting:** "online" is not the browser's word here. `navigator.onLine`
+is true on a Wi-Fi with no internet, so `pwa.js` treats the server as gone
+only when a request gets no response (`api.js` throws `OfflineError` and
+reports it) or the browser says the interface is down, and treats it as back
+only when `/api/health` answers, probing with backoff up to 30 s and again on
+the browser's `online` event and on the tab returning to the foreground.
+`subscribeReconnect` is what pages act on: the library pages refetch
+(`useLiveRefresh` subscribes for them, because events during the outage were
+never heard), the socket reconnects, and the Watch page redoes whatever the
+outage stopped — it keeps one `retryRef` holding the last step that died
+offline (opening a title, a season, an episode's sources, a search) and, if
+the title had loaded and it was playback that died, restarts the player at
+the position it died at. Only network deaths are retried; an answer the server
+gave is not. hls.js 1.6 handles the browser-reported-offline case on its own
+(it parks fragment retries until the `online` event), so the player restart
+is for the case where the browser never noticed. A CDN host is no longer
+blacklisted for a week on a network error until a probe proves the server
+itself was answering.
 
 DevTools' "Offline" throttle does **not** apply to fetches the worker makes
 itself, so a runtime route can look cached when it was in fact served live.

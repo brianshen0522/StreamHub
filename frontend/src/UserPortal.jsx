@@ -6,6 +6,7 @@ import ImeSafeInput from "./ImeSafeInput.jsx";
 import { apiJson, getAccessToken, setStoredSession } from "./api.js";
 import { LanguageContext, PortalChromeContext, usePortalLanguage } from "./portal-chrome.js";
 import { subscribeRealtime } from "./realtime.js";
+import { subscribeReconnect } from "./pwa.js";
 import { fmt, resolveLanguage, storeLanguage, translations } from "./i18n.js";
 import "./portal.css";
 
@@ -146,11 +147,16 @@ function posterProxyUrl(url) {
 /**
  * Refetch when another tab (or another device) changes the library. The server
  * only says what changed, so reloading is simpler and always correct.
+ *
+ * Also refetches when the server comes back after an outage: what is on
+ * screen then is the worker's cached copy, or an error, and any event that
+ * happened while the socket was down was never heard.
  */
 function useLiveRefresh(matches, reload) {
   useEffect(() => subscribeRealtime((event) => {
     if (matches(event)) reload();
   }), [matches, reload]);
+  useEffect(() => subscribeReconnect(reload), [reload]);
 }
 
 /* ── primitives ────────────────────────────────────────────── */
@@ -640,9 +646,11 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
     setTopbar({ title: t.navProfile, sub: t.profSub });
   }, [setTopbar, t]);
 
-  useEffect(() => {
+  const loadProviders = useCallback(() => {
     apiJson("/api/me/providers").then((payload) => setProviders(payload.providers || [])).catch(() => {});
   }, []);
+  useEffect(() => { loadProviders(); }, [loadProviders]);
+  useEffect(() => subscribeReconnect(loadProviders), [loadProviders]);
 
   const [devices, setDevices] = useState([]);
   const loadDevices = useCallback(() => {
@@ -655,6 +663,7 @@ function ProfilePage({ session, setSession, setTopbar, toast, onLogout }) {
   useEffect(() => subscribeRealtime((event) => {
     if (event.type === "devices") loadDevices();
   }), [loadDevices]);
+  useEffect(() => subscribeReconnect(loadDevices), [loadDevices]);
 
   async function signOutDevice(id) {
     try {
@@ -929,6 +938,7 @@ export default function UserPortal({ session, setSession, onLogout }) {
   useEffect(() => subscribeRealtime((event) => {
     if (event.type === "favorites" || event.type === "progress") loadCounts();
   }), [loadCounts]);
+  useEffect(() => subscribeReconnect(loadCounts), [loadCounts]);
 
   const chromeValue = useMemo(() => ({ setChrome }), []);
   const languageValue = useMemo(() => ({ language, setLanguage, t }), [language, t]);
