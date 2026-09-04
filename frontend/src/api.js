@@ -1,3 +1,5 @@
+import { resolveLanguage, translations } from "./i18n.js";
+
 const SESSION_STORAGE_KEY = "streamhub.session";
 
 const sessionListeners = new Set();
@@ -130,10 +132,20 @@ export async function apiFetch(path, options = {}, attempt = 0) {
     headers.set("content-type", "application/json");
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers,
+    });
+  } catch (fetchError) {
+    // fetch() rejects only when no response came back at all — no network,
+    // DNS, the server down. Every page shows this message where it would
+    // have shown the server's, and "Failed to fetch" is not a sentence a
+    // person should have to read.
+    if (fetchError.name === "AbortError") throw fetchError;
+    throw new Error(translations[resolveLanguage()].offlineFetch);
+  }
 
   if (response.status === 401 && attempt === 0 && shouldAttemptRefresh(path)) {
     await ensureFreshSession();

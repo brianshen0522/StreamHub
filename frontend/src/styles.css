@@ -1132,6 +1132,60 @@ a { color: inherit; }
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
 }
 
+/* Service-worker notices: offline, and a build waiting to be loaded. Pinned
+   to the bottom, above the phone's tab bar and the home indicator, and
+   deliberately small — a strip of information, not a dialog. */
+.pwa-banners {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 600;
+  display: grid;
+  gap: 8px;
+  width: min(92vw, 440px);
+  pointer-events: none;
+}
+
+.pwa-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(38, 38, 38, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+.pwa-banner-offline {
+  background: rgba(64, 52, 20, 0.96);
+  color: #ffd98a;
+}
+
+.pwa-banner-update button {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #e50914;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  /* Clear of the bottom tab bar the user portal becomes on a phone. */
+  .pwa-banners {
+    bottom: calc(76px + var(--safe-bottom));
+  }
+}
+
 .favorite-toggle {
   margin-top: 0;
   margin-left: auto;

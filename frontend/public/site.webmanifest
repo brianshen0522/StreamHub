@@ -1,7 +1,10 @@
 {
+  "id": "/",
   "name": "StreamHub",
   "short_name": "StreamHub",
+  "description": "Search, watch and resume films and series from your own StreamHub.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "categories": ["entertainment"],

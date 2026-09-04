@@ -8,6 +8,15 @@ import {
   setStoredSession,
   subscribeToSession,
 } from "./api.js";
+import { resolveLanguage, translations } from "./i18n.js";
+import {
+  applyUpdate,
+  clearOfflineLibrary,
+  isOnline,
+  isUpdateReady,
+  subscribeOnline,
+  subscribeUpdateReady,
+} from "./pwa.js";
 
 const AdminPortal = lazy(() => import("./AdminPortal.jsx"));
 const UserPortal = lazy(() => import("./UserPortal.jsx"));
@@ -107,6 +116,34 @@ function LoginPage({ onLogin, onSession, title, subtitle, allowTv = false }) {
   );
 }
 
+/**
+ * The two things the service worker needs to say, shown over every portal.
+ *
+ * Offline is the browser's word for it and only a hint, so it is a quiet
+ * strip rather than a modal — the pages that fail say so in their own place.
+ * An update is never applied on its own: the button is the only way a
+ * running page reloads, so nothing that is playing gets cut off.
+ */
+function PwaBanners() {
+  const [online, setOnline] = useState(() => isOnline());
+  const [updateReady, setUpdateReady] = useState(() => isUpdateReady());
+  useEffect(() => subscribeOnline(setOnline), []);
+  useEffect(() => subscribeUpdateReady(setUpdateReady), []);
+  if (online && !updateReady) return null;
+  const t = translations[resolveLanguage()] || translations["zh-TW"];
+  return (
+    <div className="pwa-banners">
+      {!online ? <div className="pwa-banner pwa-banner-offline">{t.offlineBanner}</div> : null}
+      {updateReady ? (
+        <div className="pwa-banner pwa-banner-update">
+          <span>{t.updateReady}</span>
+          <button type="button" onClick={applyUpdate}>{t.updateAction}</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProtectedRoute({ session, role, children }) {
   const location = useLocation();
   if (!session?.user) {
@@ -136,6 +173,7 @@ function RootRouter() {
 
   useEffect(() => subscribeToSession(setSession), []);
   useEffect(() => onAuthFailure(() => {
+    clearOfflineLibrary();
     setAuthNotice("Session expired. Please sign in again.");
     // Read at the moment of failure rather than closed over, so this does not
     // have to re-subscribe on every navigation to know where the person was.
@@ -193,6 +231,7 @@ function RootRouter() {
       });
     } catch {}
     clearStoredSession();
+    clearOfflineLibrary();
     setAuthNotice("");
     navigate("/login");
   }
@@ -200,12 +239,15 @@ function RootRouter() {
   const loadingFallback = <div className="panel-card">Loading portal...</div>;
 
   return (
+    <>
+    <PwaBanners />
     <Routes>
       <Route path="/login" element={session?.user ? <Navigate to={landingFor(session.user.role)} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} onSession={adoptSession} allowTv title="User Sign In" subtitle="Search, watch, resume, and manage your profile." /></div>} />
       <Route path="/admin/login" element={session?.user ? <Navigate to={session.user.role === "ADMIN" ? "/admin" : "/"} replace /> : <div>{authNotice ? <div className="session-banner">{authNotice}</div> : null}<LoginPage onLogin={loginAs} title="Admin Sign In" subtitle="Monitor providers, users, sessions, and system activity." /></div>} />
       <Route path="/admin/*" element={<ProtectedRoute session={session} role="ADMIN"><Suspense fallback={loadingFallback}><AdminPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />
       <Route path="/*" element={<ProtectedRoute session={session} role="USER"><Suspense fallback={loadingFallback}><UserPortal session={session} setSession={setSession} onLogout={logout} /></Suspense></ProtectedRoute>} />
     </Routes>
+    </>
   );
 }
 

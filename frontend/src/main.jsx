@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import RootApp from "./RootApp.jsx";
+import { registerPwa } from "./pwa.js";
 import "./styles.css";
 
 // Safari in a browser tab ignores `user-scalable=no` on purpose, but it does
@@ -8,6 +9,10 @@ import "./styles.css";
 // first one blocks the zoom. Passive must be off or preventDefault is a no-op.
 // Harmless everywhere else: no other engine fires these.
 document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
+
+// Installs the service worker that lets the app open without a network. No-op
+// in dev and in engines without one.
+registerPwa();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

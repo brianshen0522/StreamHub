@@ -50,6 +50,16 @@ function scheduleReconnect() {
   }, delay);
 }
 
+// The backoff can be half a minute out by the time a phone comes back from a
+// tunnel; the browser knows the moment it happens, so ask again right then.
+window.addEventListener("online", () => {
+  if (closedByUs || !listeners.size || socket) return;
+  attempts = 0;
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  connect();
+});
+
 function connect() {
   if (socket || !listeners.size) return;
 

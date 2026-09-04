@@ -151,6 +151,29 @@ Three levels of routing:
 | `download.js` | Client-side HLS→file download, AES-128 via WebCrypto, streams to disk when the File System Access API exists |
 | `portal-chrome.js` | Contexts letting a routed page inject controls into the shell topbar, and the shared language state |
 | `i18n.js` | Flat `zh-TW` / `en` maps, `resolveLanguage()`, `fmt()` |
+| `sw.js` | **The service worker**, built by `vite-plugin-pwa` (injectManifest) into `/sw.js`. Precaches the shell, caches fonts and posters, and keeps the library lists (`/api/me/{favorites,continue-watching,history,progress,providers}`) network-first with a per-user cached fallback. Never caches search, item, sources, stream or manifest |
+| `pwa.js` | Registers the worker, exposes "update waiting" and online state to the UI, clears the library cache on sign-out |
+
+**Offline:** the app is installable and opens without a network. `sw.js`
+serves the precached shell for any navigation outside `/api/`, and the
+library pages fall back to the last response the worker saw. Two things to
+keep straight when touching it:
+
+- **Library responses are keyed per user.** The worker reads `sub` out of the
+  bearer token and adds it to the cache key, so two accounts on one browser
+  never see each other's rows; posters are keyed *without* the `accessToken`
+  query parameter so a token rotation does not miss. The library cache is also
+  wiped on sign-out through `clearOfflineLibrary()`.
+- **A new build is never applied under a running page.** `registerType` is
+  `prompt`: the new worker waits, `RootApp.jsx` shows a "reload" banner, and
+  only that button (or closing every tab) swaps builds. Auto-reloading would
+  stop playback. The worker script itself is served `no-cache` by nginx, and
+  `pwa.js` re-checks it hourly and whenever the tab returns to the foreground.
+
+DevTools' "Offline" throttle does **not** apply to fetches the worker makes
+itself, so a runtime route can look cached when it was in fact served live.
+Test offline behaviour by stopping the frontend container (or the reverse
+proxy), not by throttling the page.
 
 **Playback fallback:** `App.jsx` tries `Hls.isSupported()` *before* `canPlayType`
 (Chrome on macOS claims "maybe" for HLS and then fails to demux), loads
