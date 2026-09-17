@@ -202,15 +202,34 @@ on error.
 
 ## Ad stripping
 
-Providers emit no SCTE-35, so ad breaks are inferred structurally: spliced ad
-segments sit in a **different directory** than the feature and are bracketed by
-`#EXT-X-DISCONTINUITY`. Discontinuity count alone is not a signal.
-
+Providers emit no SCTE-35, so ad breaks are inferred structurally from the runs
+between `#EXT-X-DISCONTINUITY`. Discontinuity count alone is not a signal.
 `shared/adfilter-core.js` holds the classification (`classifyRuns`) and is pure
-ESM that loads unchanged in Node and in the bundle. Three guards keep it
-conservative: the dominant directory must hold ≥60% of the runtime, a foreign run
-over 240 s is treated as content, and it never strips more than 35% of a
-playlist.
+ESM that loads unchanged in Node and in the bundle. Four signals, any of which
+can flag a run:
+
+1. **The foreign directory** — spliced ads sit somewhere else than the feature.
+2. **The repeated run** — the same run recurring. Matched on the URI sequence
+   *and*, separately, on the `#EXTINF` sequence, because some CDNs name every
+   segment by a content hash and re-encode the spot per break: the names differ
+   every time but the cut is identical to the millisecond. The duration half
+   needs ≥4 segments and ≥3 distinct lengths, or a fixed-cadence encoder's
+   `(10,10,10,10)` runs all match each other and the feature gets cut.
+3. **The sandwiched interloper** — a short run between two feature-length
+   blocks. The first and last run are judged on their one neighbour, since a
+   break at an edge cannot be sandwiched and is common.
+4. **The broken cadence** — in clockwork playlists, a short interior run that
+   breaks the beat. Only consulted when every other signal is silent.
+
+Guards keep it conservative: the dominant directory must hold ≥60% of the
+runtime, a run over 240 s is treated as content, and it never strips more than
+35% of a playlist.
+
+**A playlist with no `#EXT-X-DISCONTINUITY` at all is a blind spot** — there are
+no runs to classify, so nothing is stripped (`reason: "no-discontinuities"`).
+Inferring boundaries from segment-duration irregularity was tried against a
+sampled `jisuzyv` playlist and flagged pure content; the feature's own scene
+cuts look exactly like a splice. Do not retry it without a way to verify.
 
 Parsing (`parsePlaylist`) and rewriting (`stripAds`) live there too, so both
 sides clean a playlist the same way. Anything platform-specific stays in the
