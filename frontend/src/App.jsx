@@ -250,64 +250,130 @@ function insertSourceSorted(prev, source) {
  * absence of evidence.
  */
 /**
- * CDN hosts this device could not reach, remembered for a week.
+ * What this device has learnt about reaching each CDN host.
  *
  * Reachability is a property of the *viewer's* network, not of the source: a
  * mobile carrier that cannot resolve one CDN family fails it instantly and
  * forever, while the same host answers the server fine — which is why the
  * failure only ever surfaced on a phone, as a proxy fallback on every play.
- * Remembering the dead host and auto-picking around it turns that permanent
- * proxy habit into one failed attempt per host per week.
+ *
+ * This is deliberately *not* a blacklist. Nothing is ever excluded, and no
+ * host is ever written off: a host is only ever ordered later than its
+ * rivals, so a source on a host that has failed a hundred times is still
+ * played when it is the only source there is. A blacklist cannot express
+ * that, and cannot recover either — the previous version wrote a host off for
+ * a fixed week, which outlived the Wi-Fi that caused it and went on steering
+ * around a host that had been fine for six days.
+ *
+ * Instead each host carries a score built from what actually happened:
+ * failures push it down, a segment that really played pulls it back up, and
+ * the whole record decays with age so evidence from a network you have since
+ * left stops counting. A host recovers on its own, because every successful
+ * play is recorded too.
  */
-const BAD_HOST_KEY = "streamhub.unreachableHosts";
-const BAD_HOST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const HOST_STATS_KEY = "streamhub.hostStats";
+const HOST_STATS_HALF_LIFE_MS = 36 * 60 * 60 * 1000;
+const HOST_STATS_FORGET_MS = 30 * 24 * 60 * 60 * 1000;
+const HOST_STATS_MAX = 60;
 
-function readUnreachableHosts() {
+function readHostStats() {
   try {
-    const stored = JSON.parse(localStorage.getItem(BAD_HOST_KEY) || "{}");
+    const stored = JSON.parse(localStorage.getItem(HOST_STATS_KEY) || "{}");
+    if (!stored || typeof stored !== "object") return {};
     const now = Date.now();
-    return new Map(Object.entries(stored).filter(([, at]) => now - at < BAD_HOST_TTL_MS));
+    const kept = {};
+    for (const [host, stat] of Object.entries(stored)) {
+      if (!stat || typeof stat !== "object") continue;
+      const at = Number(stat.at) || 0;
+      if (now - at > HOST_STATS_FORGET_MS) continue;
+      kept[host] = { ok: Number(stat.ok) || 0, bad: Number(stat.bad) || 0, at };
+    }
+    return kept;
   } catch {
-    return new Map();
+    return {};
   }
 }
 
-function markUnreachableHost(url) {
+function hostOf(url) {
   try {
     const parsed = new URL(url, window.location.href);
-    // Only ever a CDN: a failure against our own origin is the server being
-    // down, and blacklisting ourselves would be a strange way to say so.
-    if (parsed.origin === window.location.origin) return;
-    const hosts = Object.fromEntries(readUnreachableHosts());
-    hosts[parsed.host] = Date.now();
-    localStorage.setItem(BAD_HOST_KEY, JSON.stringify(hosts));
-  } catch { /* not a URL, or storage refused */ }
-}
-
-function isUnreachableHost(url) {
-  try {
-    return readUnreachableHosts().has(new URL(url, window.location.href).host);
+    // Our own origin is never scored: a failure there is the server being
+    // down, and steering around ourselves would be a strange way to say so.
+    if (parsed.origin === window.location.origin) return "";
+    return parsed.host;
   } catch {
-    return false;
+    return "";
   }
 }
 
+/**
+ * Both counts decay by age before the new evidence lands, so a run of
+ * failures on one network fades once that network is behind you rather than
+ * standing until a fixed expiry. Capped so a host cannot accumulate a score
+ * so large that later evidence could never move it.
+ */
+function recordHostResult(url, outcome) {
+  const host = hostOf(url);
+  if (!host) return;
+  try {
+    const stats = readHostStats();
+    const now = Date.now();
+    const previous = stats[host] || { ok: 0, bad: 0, at: now };
+    const decay = 2 ** (-(now - previous.at) / HOST_STATS_HALF_LIFE_MS);
+    const next = {
+      ok: Math.min(HOST_STATS_MAX, previous.ok * decay + (outcome === "ok" ? 1 : 0)),
+      bad: Math.min(HOST_STATS_MAX, previous.bad * decay + (outcome === "ok" ? 0 : 1)),
+      at: now,
+    };
+    stats[host] = { ok: Number(next.ok.toFixed(3)), bad: Number(next.bad.toFixed(3)), at: now };
+    localStorage.setItem(HOST_STATS_KEY, JSON.stringify(stats));
+  } catch { /* storage refused — ordering just stays naive */ }
+}
+
+/**
+ * How much this device distrusts a host, from 0 (no evidence, or proven good)
+ * to 1 (nothing but recent failures). Used only to *order* candidates.
+ */
+function hostPenalty(url) {
+  const host = hostOf(url);
+  if (!host) return 0;
+  const stat = readHostStats()[host];
+  if (!stat) return 0;
+  const decay = 2 ** (-(Date.now() - stat.at) / HOST_STATS_HALF_LIFE_MS);
+  const bad = stat.bad * decay;
+  const ok = stat.ok * decay;
+  if (bad <= 0) return 0;
+  return bad / (bad + ok + 1);
+}
+
+/**
+ * A host with a bad record is ordered behind its rivals, never dropped. The
+ * threshold is what "behind" means in a binary test: below it the evidence is
+ * too thin to reorder anything.
+ */
+const HOST_DOUBT = 0.5;
+
 function pickAutoSource(arrived, preferredLabel) {
-  // Hosts this device has failed to reach go to the back of every line —
-  // stable, so within each group the arrival order still breaks ties.
-  const ranked = [...arrived].sort((a, b) =>
-    Number(isUnreachableHost(a.directUrl || a.url)) - Number(isUnreachableHost(b.directUrl || b.url)));
+  // Hosts this device has struggled with sort to the back — by score, so a
+  // host that failed once yesterday loses to a clean one but still beats a
+  // host that has failed every time. Stable, so arrival order breaks ties.
+  const doubt = (source) => hostPenalty(source.directUrl || source.url);
+  const ranked = [...arrived].sort((a, b) => doubt(a) - doubt(b));
   const modal = modalDuration(ranked);
+  // Only meaningful as a comparison: "worse than something else here". With a
+  // single source, or when every host is equally doubted, nothing is skipped.
+  const best = ranked.length ? doubt(ranked[0]) : 0;
+  const suspect = (source) => doubt(source) >= HOST_DOUBT && doubt(source) > best;
 
   if (preferredLabel) {
     const preferred = ranked.find((source) => source.sourceLabel === preferredLabel);
     // Honour the saved choice unless it runs longer than the consensus, which
     // means it carries ads the filter cannot see. Picking it once should not
-    // pin every later episode to an ad-laden source — nor to a host this
-    // device cannot reach, which would proxy every episode that follows.
+    // pin every later episode to an ad-laden source — nor to a host that keeps
+    // failing here while a better one is on offer.
     if (preferred
       && (!modal || (preferred.durationSeconds ?? 0) <= modal)
-      && !isUnreachableHost(preferred.directUrl || preferred.url)) {
+      && !suspect(preferred)) {
       return { source: preferred, fromPreference: true };
     }
   }
@@ -315,10 +381,12 @@ function pickAutoSource(arrived, preferredLabel) {
   if (modal) {
     const onModal = ranked.filter((source) => source.durationSeconds === modal);
     if (onModal.length) {
+      // Ads seen and removed is proof of a clean result, but not worth
+      // landing on a host that keeps failing when a peer of equal runtime
+      // does not: onModal is already ordered by doubt, so [0] is the least
+      // doubted of the group.
       const proven = onModal.find((source) => (source.adSeconds || 0) > 0);
-      // The proven-clean pick still defers to reachability: the first entry
-      // of the ranked modal group is reachable whenever any of them is.
-      const choice = proven && !isUnreachableHost(proven.directUrl || proven.url) ? proven : onModal[0];
+      const choice = proven && !suspect(proven) ? proven : onModal[0];
       return { source: choice, fromPreference: false };
     }
   }
@@ -552,6 +620,21 @@ function App() {
   // a reused instance keeps its first handler, and without this it would fall
   // back to the previous episode's proxy.
   const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null });
+  /**
+   * Sources already tried and exhausted for the episode on screen, by
+   * `sourceKey`. A source is only added once *both* its roads have died, so
+   * the automatic walk down the list never revisits one, and never gives up
+   * while an untried source remains. Cleared whenever a new set of sources
+   * arrives, and whenever somebody picks one by hand — an explicit choice
+   * means the list is theirs again.
+   */
+  const exhaustedSourcesRef = useRef(new Set());
+  // The live source list, read by the failover: it runs from inside the player
+  // effect's error handler, which outlives the render that created it.
+  const sourcesRef = useRef([]);
+  // A message that must outlive the reload it triggers — the player effect
+  // clears playerError as it starts, so a failover leaves its notice here.
+  const pendingNoticeRef = useRef("");
   const [adCuts, setAdCuts] = useState([]);
   const [download, setDownload] = useState(null);
   const downloadAbortRef = useRef(null);
@@ -593,6 +676,7 @@ function App() {
 
   resultsRef.current = results;
   pendingSearchRef.current = pendingSearchProviders;
+  sourcesRef.current = sources;
   latestRef.current = { playerError, activeSource, castTargetId, castLost: cast.lost };
 
   const groupedResults = useMemo(
@@ -667,7 +751,10 @@ function App() {
       return undefined;
     }
 
-    setPlayerError("");
+    // A failover's explanation survives the reload it causes; anything else
+    // starts clean.
+    setPlayerError(pendingNoticeRef.current);
+    pendingNoticeRef.current = "";
     setPlaybackMode("");
     setAdCuts([]);
     // Set only by the restart after an outage. Taken here so a later load of
@@ -697,20 +784,63 @@ function App() {
       if (video.currentTime > 0) errorPositionRef.current = video.currentTime;
     }
 
-    // A CDN that died while the whole network was down is not a bad CDN.
-    // The mark is a week long, so it waits for proof the server itself
-    // answers — which the health probe gives, and which also starts the
-    // offline handling if it does not.
+    // A CDN that died while the whole network was down is not a bad CDN, so
+    // the failure is only recorded once the health probe proves the server
+    // itself answers — which also starts the offline handling if it does not.
     function markHostIfServerAnswers(url) {
       if (isOnline()) {
-        probeServer().then((reachable) => { if (reachable) markUnreachableHost(url); });
+        probeServer().then((reachable) => { if (reachable) recordHostResult(url, "bad"); });
       }
+    }
+
+    /**
+     * Give up on this source and try the next one that has not been tried.
+     *
+     * This is what makes a bad host survivable without excluding anything:
+     * rather than refuse to play a host, the player plays it, and when both
+     * its roads are dead it walks on. Ordered the same way the auto-pick
+     * orders — closest to the consensus runtime first, least-doubted host
+     * breaking ties — so the walk goes to the next *best* source, not merely
+     * the next one in the list.
+     *
+     * Returns false when there is nothing left, which is when the error the
+     * caller was about to show is the right thing to show.
+     */
+    function failOverToNextSource() {
+      // The source as of now, not as of the render that built this handler: a
+      // reused hls instance keeps its first error handler, so the closure's
+      // activeSource can be a previous episode's. Writing that off would
+      // burn the wrong entry and skip a source that never failed.
+      const dead = latestRef.current.activeSource || activeSource;
+      exhaustedSourcesRef.current.add(sourceKey(dead));
+      const untried = sourcesRef.current.filter(
+        (source) => !exhaustedSourcesRef.current.has(sourceKey(source)),
+      );
+      if (!untried.length) return false;
+      const { source: next } = pickAutoSource(untried, "");
+      if (!next) return false;
+      // Resume where it died: this is the same film from another host, not a
+      // restart. The player effect consumes both of these on the next load —
+      // the notice through the ref, because the effect clears playerError on
+      // its way in and would otherwise wipe the explanation.
+      seekAfterLoadRef.current = errorPositionRef.current;
+      errorPositionRef.current = 0;
+      pendingNoticeRef.current = `${tRef.current.playbackSourceFailover} — ${next.sourceLabel || ""}`.trim();
+      setActiveSource(next);
+      return true;
     }
 
     function loadNative(url, mode) {
       setMode(mode);
       setHlsInstance(null);
       video.src = url;
+      // The native path has no fragment events; enough data to play is the
+      // same proof, and the counterpart to the failure recorded on error.
+      video.addEventListener(
+        "loadeddata",
+        () => recordHostResult(mode === "proxy" ? url : directUrl, "ok"),
+        { once: true },
+      );
       void video.play().catch(() => {});
     }
 
@@ -744,6 +874,15 @@ function App() {
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         void video.play().catch(() => {});
+      });
+      // A segment that actually arrived is the only proof a host is reachable
+      // from here, and it is what lets a host climb back out: without
+      // recording success, one bad evening would order a host last until the
+      // record aged out. Only the first is recorded — a film is thousands of
+      // segments, and a host does not become a thousand times more trusted
+      // for playing one.
+      hls.once(Hls.Events.FRAG_BUFFERED, (_event, data) => {
+        recordHostResult(data?.frag?.url || url, "ok");
       });
       // Where a break was is known twice over: as a sum of #EXTINF values, and
       // as the index of the segment that follows it. Once hls.js has the level
@@ -797,6 +936,12 @@ function App() {
       if (existing && existing.media === video) {
         setMode(directUrl ? "direct" : "proxy");
         existing.loadSource(directUrl || proxyUrl);
+        // The instance is reused, so the success listener from its first load
+        // is spent. Without this, every episode after the first would record
+        // failures and never successes.
+        existing.once(Hls.Events.FRAG_BUFFERED, (_event, data) => {
+          recordHostResult(data?.frag?.url || directUrl || proxyUrl, "ok");
+        });
         void video.play().catch(() => {});
         return undefined;
       }
@@ -825,11 +970,17 @@ function App() {
           loadWithHls(urls.proxyUrl, "proxy", (proxyInstance, proxyData) => {
             const proxyDetail = describeHlsError(proxyData);
             rememberErrorPosition();
-            setPlayerError(proxyDetail ? `${tRef.current.statusError} — ${proxyDetail}` : tRef.current.statusError);
             proxyInstance.destroy();
             hlsRef.current = null;
+            // Both roads to this source are dead. The proxy fetches from the
+            // server, so this is the source itself being gone rather than
+            // this network's view of it — another source is the only thing
+            // left to try, and failing to try it is how a dead CDN used to
+            // end the evening.
+            if (failOverToNextSource()) return;
+            setPlayerError(proxyDetail ? `${tRef.current.statusError} — ${proxyDetail}` : tRef.current.statusError);
           });
-        } else {
+        } else if (!failOverToNextSource()) {
           setPlayerError(detail ? `${tRef.current.statusError} — ${detail}` : tRef.current.statusError);
         }
       });
@@ -858,7 +1009,7 @@ function App() {
         if (proxyUrl && video.src !== proxyUrl) {
           setPlayerError(detail ? `${tRef.current.playbackFallback} — ${detail}` : tRef.current.playbackFallback);
           loadNative(proxyUrl, "proxy");
-        } else {
+        } else if (!failOverToNextSource()) {
           setPlayerError(detail ? `${tRef.current.statusError} — ${detail}` : tRef.current.statusError);
         }
       };
@@ -1122,11 +1273,12 @@ function App() {
     // for the CDN first — but on a phone whose network cannot reach that
     // CDN, playback has already failed over to the proxy, and a download
     // aimed at the same dead host died the same death. Playback mode is the
-    // live verdict; the unreachable-host memory covers the next episode
-    // before it has played.
+    // live verdict; the host's record covers the next episode before it has
+    // played. A download has no failover of its own, so it takes the proxy on
+    // weaker evidence than the auto-pick reorders on.
     const directDl = activeSource.directUrl || activeSource.url;
     const proxyDl = activeSource.proxyUrl;
-    const preferProxy = playbackMode === "proxy" || (directDl && isUnreachableHost(directDl));
+    const preferProxy = playbackMode === "proxy" || (directDl && hostPenalty(directDl) >= HOST_DOUBT);
     const url = preferProxy ? (proxyDl || directDl) : (directDl || proxyDl);
     if (!url) return;
 
@@ -2035,6 +2187,7 @@ function App() {
     sourcesAbortRef.current = controller;
     retryRef.current = null;
     errorPositionRef.current = 0;
+    exhaustedSourcesRef.current = new Set();
 
     setSourcesLoading(true);
     setSources([]);
@@ -2118,6 +2271,7 @@ function App() {
     sourcesAbortRef.current = controller;
     retryRef.current = null;
     errorPositionRef.current = 0;
+    exhaustedSourcesRef.current = new Set();
 
     setNextEpPrompt(null);
     setIsPromptDismissed(false);
@@ -2368,6 +2522,10 @@ function App() {
   async function handleSelectSource(source) {
     setAutoSelectedFromPreference(false);
     setCastSendState("armed");
+    // An explicit choice hands the list back: a source the automatic walk had
+    // written off for this episode can be asked for by name, and must then be
+    // tried rather than skipped.
+    exhaustedSourcesRef.current = new Set();
     await saveSourcePreference(source);
     // Where playback goes — here or on the television — is decided by the
     // player effect, which sees automatic picks as well as this one.
