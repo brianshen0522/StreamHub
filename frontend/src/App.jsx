@@ -201,6 +201,28 @@ function getResumeEpisode(episodes, seasonUrl, progressMap) {
 // directory as the feature), and shorter ones are truncated rips.
 const MIN_MODAL_AGREEMENT = 2;
 const SOURCE_PICK_GRACE_MS = 2500;
+/**
+ * How long a saved preference may hold the pick open.
+ *
+ * Sources are probed in parallel and streamed back as each finishes, so the
+ * preferred one is not reliably among the first to arrive — and the metadata
+ * cache made this worse rather than better: the episode on screen has its
+ * probe cached and answers instantly, while the *next* episode starts cold and
+ * arrives in whatever order the CDNs happen to answer. That is what made a
+ * hand-picked source hold for the episode it was picked on and then change on
+ * the one after.
+ *
+ * So the grace window no longer commits while the preferred source could still
+ * be coming. It is a wait, not a guarantee: a source list that simply does not
+ * carry that label must not hang the page, hence the ceiling.
+ */
+const PREFERENCE_WAIT_MS = 6000;
+/**
+ * Slack allowed before a preferred source is judged to be carrying ads the
+ * filter could not see. Measured runtimes of the same episode differ by
+ * seconds between encodes; an ad break is minutes.
+ */
+const PREFERENCE_DURATION_SLACK_SECONDS = 60;
 
 function modalDuration(list) {
   const counts = new Map();
@@ -367,12 +389,18 @@ function pickAutoSource(arrived, preferredLabel) {
 
   if (preferredLabel) {
     const preferred = ranked.find((source) => source.sourceLabel === preferredLabel);
-    // Honour the saved choice unless it runs longer than the consensus, which
-    // means it carries ads the filter cannot see. Picking it once should not
-    // pin every later episode to an ad-laden source — nor to a host that keeps
-    // failing here while a better one is on offer.
+    // Honour the saved choice unless it runs materially longer than the
+    // consensus, which means it carries ads the filter cannot see. Picking it
+    // once should not pin every later episode to an ad-laden source — nor to a
+    // host that keeps failing here while a better one is on offer.
+    //
+    // The allowance matters: runtimes are measured per source, and two encodes
+    // of the same episode routinely differ by a few seconds over different
+    // recap and credit handling. Exact agreement threw the preference away over
+    // a one-second difference and re-picked every episode. An ad break is
+    // minutes, so a minute of slack separates the two cases comfortably.
     if (preferred
-      && (!modal || (preferred.durationSeconds ?? 0) <= modal)
+      && (!modal || (preferred.durationSeconds ?? 0) <= modal + PREFERENCE_DURATION_SLACK_SECONDS)
       && !suspect(preferred)) {
       return { source: preferred, fromPreference: true };
     }
@@ -2181,6 +2209,111 @@ function App() {
     } catch {}
   }
 
+  /**
+   * Decides which of the arriving sources to play, for both the movie and the
+   * episode path — one object rather than two copies, because the copies had
+   * already drifted apart once and the rule they encode is the same rule.
+   *
+   * Sources stream in as each probe finishes, so this has to choose without
+   * knowing what is still coming. It waits, briefly, for two different reasons:
+   * a short grace for a consensus runtime to form, and a longer one for a saved
+   * preference that might still be in flight.
+   */
+  function createSourceSelector(controller, preferredLabel) {
+    const arrived = [];
+    let activeSelected = false;
+    let graceTimer = null;
+    let waitTimer = null;
+    let streamEnded = false;
+    let committed = null;
+    let committedAutomatically = false;
+
+    function clearTimers() {
+      window.clearTimeout(graceTimer);
+      window.clearTimeout(waitTimer);
+    }
+
+    function apply(source, fromPreference) {
+      committed = source;
+      committedAutomatically = !fromPreference;
+      if (source) {
+        setActiveSource(source);
+        setAutoSelectedFromPreference(fromPreference);
+      }
+    }
+
+    function commit() {
+      if (activeSelected || controller.signal.aborted || !arrived.length) return;
+      // A preference that has not arrived yet is not absent — the probes run in
+      // parallel and finish in any order. Committing here would pick around a
+      // source that is seconds away, which is exactly how a hand-picked source
+      // survived the episode it was chosen on and lost the next one. Wait,
+      // unless the stream has ended (so nothing more is coming) or the ceiling
+      // has passed (so the list plainly does not carry that label).
+      if (preferredLabel
+        && !streamEnded
+        && waitTimer !== null
+        && !arrived.some((source) => source.sourceLabel === preferredLabel)) {
+        return;
+      }
+      activeSelected = true;
+      clearTimers();
+      const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+      apply(source, fromPreference);
+    }
+
+    return {
+      /** Every source that has arrived, in arrival order. */
+      arrived,
+
+      /** Feed a source in as it streams back. */
+      add(source) {
+        arrived.push(source);
+        // An exact preference hit needs no further waiting.
+        if (preferredLabel && source.sourceLabel === preferredLabel) {
+          commit();
+          return;
+        }
+        if (!graceTimer) graceTimer = window.setTimeout(commit, SOURCE_PICK_GRACE_MS);
+        // Runs once, and only when a preference could still be coming: past
+        // this the pick goes ahead without it rather than leaving the page
+        // waiting on a source that may not exist in this list at all.
+        if (preferredLabel && waitTimer === null) {
+          waitTimer = window.setTimeout(() => {
+            waitTimer = null;
+            commit();
+          }, PREFERENCE_WAIT_MS);
+        }
+      },
+
+      /**
+       * The stream is done: everything that exists has arrived. Commits if the
+       * waiting above deferred it, then reconsiders over the full list.
+       *
+       * The grace window can commit on a handful of sources, so the consensus
+       * it used may not be the real one. Recompute and correct — but only while
+       * the pick is still automatic (a manual choice is never overridden) and
+       * playback has barely begun.
+       */
+      finish() {
+        streamEnded = true;
+        clearTimers();
+        commit();
+        if (controller.signal.aborted || !committedAutomatically || !committed) return;
+        const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
+        if (!source || source === committed) return;
+        if ((videoRef.current?.currentTime ?? 0) > 10) return;
+        committed = source;
+        committedAutomatically = !fromPreference;
+        setAutoSelectedFromPreference(fromPreference);
+        // Functional update so a manual pick made in the meantime always wins.
+        setActiveSource((current) => (current === committed ? source : current));
+      },
+
+      cancel: clearTimers,
+    };
+  }
+
   async function loadSourcesFromRawStreams(streams, provider, title, mediaType) {
     sourcesAbortRef.current?.abort();
     const controller = new AbortController();
@@ -2196,44 +2329,7 @@ function App() {
     setAutoSelectedFromPreference(false);
 
     const preferredLabel = await fetchPreferredSourceLabel(provider, mediaType, title);
-    // Give slow-but-clean sources a brief chance to arrive before committing,
-    // instead of always playing whichever responded first.
-    const arrived = [];
-    let activeSelected = false;
-    let graceTimer = null;
-
-    let committed = null;
-    let committedAutomatically = false;
-
-    function commitSelection() {
-      if (activeSelected || controller.signal.aborted || !arrived.length) return;
-      activeSelected = true;
-      window.clearTimeout(graceTimer);
-      const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
-      committed = source;
-      committedAutomatically = !fromPreference;
-      if (source) {
-        setActiveSource(source);
-        setAutoSelectedFromPreference(fromPreference);
-      }
-    }
-
-    /**
-     * The grace window commits on whatever has arrived, so on a slow link the
-     * consensus can be drawn from a handful of sources. Once the stream ends,
-     * recompute over the full set and correct an off-consensus pick — but only
-     * while it is still automatic and playback has barely begun.
-     */
-    function reconcileSelection() {
-      if (controller.signal.aborted || !committedAutomatically || !committed) return;
-      const modal = modalDuration(arrived);
-      if (!modal || committed.durationSeconds === modal) return;
-      const { source } = pickAutoSource(arrived, preferredLabel);
-      if (!source || source === committed) return;
-      if ((videoRef.current?.currentTime ?? 0) > 10) return;
-      // Functional update so a manual pick made in the meantime always wins.
-      setActiveSource((current) => (current === committed ? source : current));
-    }
+    const selector = createSourceSelector(controller, preferredLabel);
 
     try {
       await apiNdjsonStream(
@@ -2241,18 +2337,11 @@ function App() {
         { method: "POST", body: JSON.stringify({ streams, provider, preferredLabel }), signal: controller.signal },
         (source) => {
           const normalized = normalizeSourceItem(source);
-          arrived.push(normalized);
           setSources((prev) => insertSourceSorted(prev, normalized));
-          // An exact preference hit needs no further waiting.
-          if (preferredLabel && normalized.sourceLabel === preferredLabel) {
-            commitSelection();
-            return;
-          }
-          if (!graceTimer) graceTimer = window.setTimeout(commitSelection, SOURCE_PICK_GRACE_MS);
+          selector.add(normalized);
         },
       );
-      commitSelection();
-      reconcileSelection();
+      selector.finish();
     } catch (sourceError) {
       if (sourceError.name === "AbortError") return;
       setError(sourceError.message);
@@ -2260,7 +2349,7 @@ function App() {
         retryRef.current = () => loadSourcesFromRawStreams(streams, provider, title, mediaType);
       }
     } finally {
-      window.clearTimeout(graceTimer);
+      selector.cancel();
       setSourcesLoading(false);
     }
   }
@@ -2283,44 +2372,7 @@ function App() {
     setAutoSelectedFromPreference(false);
 
     const preferredLabel = await fetchPreferredSourceLabel(provider, mediaType, title);
-    // Give slow-but-clean sources a brief chance to arrive before committing,
-    // instead of always playing whichever responded first.
-    const arrived = [];
-    let activeSelected = false;
-    let graceTimer = null;
-
-    let committed = null;
-    let committedAutomatically = false;
-
-    function commitSelection() {
-      if (activeSelected || controller.signal.aborted || !arrived.length) return;
-      activeSelected = true;
-      window.clearTimeout(graceTimer);
-      const { source, fromPreference } = pickAutoSource(arrived, preferredLabel);
-      committed = source;
-      committedAutomatically = !fromPreference;
-      if (source) {
-        setActiveSource(source);
-        setAutoSelectedFromPreference(fromPreference);
-      }
-    }
-
-    /**
-     * The grace window commits on whatever has arrived, so on a slow link the
-     * consensus can be drawn from a handful of sources. Once the stream ends,
-     * recompute over the full set and correct an off-consensus pick — but only
-     * while it is still automatic and playback has barely begun.
-     */
-    function reconcileSelection() {
-      if (controller.signal.aborted || !committedAutomatically || !committed) return;
-      const modal = modalDuration(arrived);
-      if (!modal || committed.durationSeconds === modal) return;
-      const { source } = pickAutoSource(arrived, preferredLabel);
-      if (!source || source === committed) return;
-      if ((videoRef.current?.currentTime ?? 0) > 10) return;
-      // Functional update so a manual pick made in the meantime always wins.
-      setActiveSource((current) => (current === committed ? source : current));
-    }
+    const selector = createSourceSelector(controller, preferredLabel);
 
     try {
       await apiNdjsonStream(
@@ -2328,18 +2380,11 @@ function App() {
         { signal: controller.signal },
         (source) => {
           const normalized = normalizeSourceItem(source);
-          arrived.push(normalized);
           setSources((prev) => insertSourceSorted(prev, normalized));
-          // An exact preference hit needs no further waiting.
-          if (preferredLabel && normalized.sourceLabel === preferredLabel) {
-            commitSelection();
-            return;
-          }
-          if (!graceTimer) graceTimer = window.setTimeout(commitSelection, SOURCE_PICK_GRACE_MS);
+          selector.add(normalized);
         },
       );
-      commitSelection();
-      reconcileSelection();
+      selector.finish();
     } catch (sourceError) {
       if (sourceError.name === "AbortError") return;
       setError(sourceError.message);
@@ -2347,7 +2392,7 @@ function App() {
         retryRef.current = () => loadEpisodeSources(provider, sourceUrl, episode, title, mediaType);
       }
     } finally {
-      window.clearTimeout(graceTimer);
+      selector.cancel();
       setSourcesLoading(false);
     }
   }
