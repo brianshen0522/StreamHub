@@ -12,8 +12,9 @@
  * These providers emit no SCTE-35 / #EXT-X-CUE-OUT, so ad breaks are inferred
  * structurally, by three signals over the runs between #EXT-X-DISCONTINUITY:
  * the foreign directory (ads spliced from somewhere else than the feature),
- * the repeated run (the same URI sequence recurring — a feature never plays
- * the same segments twice, an ad break spliced into every act does), and the
+ * the repeated run (the same URI *or* the same #EXTINF sequence recurring — a
+ * feature never plays the same segments twice, an ad break spliced into every
+ * act does, and a content-hashed re-encode still repeats its cut), and the
  * sandwiched interloper (a short run wedged between two feature-length
  * blocks, for the providers that re-encode ads into the feature's own
  * directory). Discontinuity count alone is not usable — one sampled playlist
@@ -36,7 +37,25 @@ export const MAX_STRIP_SHARE = 0.35;    // never treat more than this much as ad
  */
 export const MAX_SANDWICH_RUN_SECONDS = 60;
 export const MIN_SANDWICH_NEIGHBOR_SECONDS = 300;
-export const MAX_SANDWICH_RUN_COUNT = 9;
+export const MAX_SANDWICH_RUN_COUNT = 16;
+
+/**
+ * The repeated-run signal's fences, for the duration-signature half of it.
+ * Two runs that merely happen to share one segment length prove nothing, and
+ * a feature does contain plenty of equal-length segments; a sequence of four
+ * or more matching to the millisecond does not happen by chance.
+ *
+ * Length alone is not enough, though, because an encoder cutting at a fixed
+ * cadence emits run after run of identical full-length segments, and those
+ * runs share a signature while being pure content. What distinguishes a
+ * re-encoded advertisement is that its cut is *ragged* — the observed spots
+ * run (6.633, 3.333, 4.800, 1.700) and (5.933, 3.333, 2.800, 5.300, 0.300),
+ * where an encoder run reads (10, 10, 10, 10) or at worst (10, 10, 10, 3.4)
+ * for a trailing partial. Requiring three distinct lengths keeps the cadence
+ * runs out.
+ */
+export const MIN_SIGNATURE_SEGMENTS = 4;
+export const MIN_SIGNATURE_DISTINCT = 3;
 
 /**
  * The cadence signal's fences. Some encoders cut a discontinuity every N
@@ -127,35 +146,67 @@ export function classifyRuns(runs, playlistUrl) {
 
   // ── Signal 2: the repeated run ──────────────────────────────────────────
   // A feature never plays the same segments twice; an ad break spliced into
-  // every act does, URI for URI. Every occurrence of a repeated short run is
-  // an ad — including in playlists where the ads share the feature's
-  // directory and signal 1 sees nothing.
-  const signatures = new Map();
-  runs.forEach((run, index) => {
-    const signature = run.segments.map((segment) => segment.uri).join("\n");
-    if (!signatures.has(signature)) signatures.set(signature, []);
-    signatures.get(signature).push(index);
-  });
-  for (const indexes of signatures.values()) {
-    if (indexes.length < 2) continue;
-    for (const index of indexes) {
-      if (meta[index].seconds <= MAX_AD_RUN_SECONDS) adFlags[index] = true;
+  // every act does. Every occurrence of a repeated short run is an ad —
+  // including in playlists where the ads share the feature's directory and
+  // signal 1 sees nothing.
+  //
+  // Matched two ways, because a URI is not always stable. Some CDNs name
+  // every segment by a content hash and re-encode the same advertisement per
+  // break, so the same 16 s spot arrives as four differently-named segments
+  // each time and a URI comparison sees nothing. What survives the re-encode
+  // is the *cut*: the #EXTINF sequence is identical to the millisecond
+  // (6.633, 3.333, 4.800, 1.700 recurring at 7m, 47m and 110m of one sampled
+  // playlist, and byte-for-byte the same spot in an unrelated film on another
+  // CDN). A feature does not repeat a multi-segment duration sequence
+  // exactly; MIN_SIGNATURE_SEGMENTS keeps that true by refusing to match on
+  // so few segments that a coincidence becomes plausible.
+  const matchRuns = (signatureOf, eligible) => {
+    const signatures = new Map();
+    runs.forEach((run, index) => {
+      if (!eligible(run)) return;
+      const signature = signatureOf(run);
+      if (!signatures.has(signature)) signatures.set(signature, []);
+      signatures.get(signature).push(index);
+    });
+    for (const indexes of signatures.values()) {
+      if (indexes.length < 2) continue;
+      for (const index of indexes) {
+        if (meta[index].seconds <= MAX_AD_RUN_SECONDS) adFlags[index] = true;
+      }
     }
-  }
+  };
+
+  const durations = (run) => run.segments.map((segment) => segment.duration.toFixed(3));
+
+  matchRuns((run) => run.segments.map((segment) => segment.uri).join("\n"), () => true);
+  matchRuns(
+    (run) => durations(run).join(","),
+    (run) => run.segments.length >= MIN_SIGNATURE_SEGMENTS
+      && new Set(durations(run)).size >= MIN_SIGNATURE_DISTINCT,
+  );
 
   // ── Signal 3: the sandwiched interloper ─────────────────────────────────
   // Same-directory splices with unique URIs still give themselves away by
   // shape: a playlist that is a few feature-length blocks with a short run
   // wedged between two of them. Fenced hard (see the constants) so playlists
   // that are all confetti — a discontinuity every N segments — never match.
+  //
+  // The first and last runs have only one neighbour, so the sandwich cannot
+  // be read on them; a pre-roll or a run trailing the feature is judged on
+  // its single feature-sized neighbour instead. That is a weaker test, so it
+  // is spent only on a run that is *clearly* an interloper — a break sitting
+  // at an edge is the common case (one sampled playlist ends on an 18 s spot
+  // that the two-neighbour rule could never see).
   if (runs.length >= 3 && runs.length <= MAX_SANDWICH_RUN_COUNT) {
+    const short = (index) => meta[index].seconds <= MAX_SANDWICH_RUN_SECONDS;
+    const feature = (index) => meta[index].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS;
+
     for (let index = 1; index < runs.length - 1; index += 1) {
-      if (meta[index].seconds <= MAX_SANDWICH_RUN_SECONDS
-        && meta[index - 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS
-        && meta[index + 1].seconds >= MIN_SANDWICH_NEIGHBOR_SECONDS) {
-        adFlags[index] = true;
-      }
+      if (short(index) && feature(index - 1) && feature(index + 1)) adFlags[index] = true;
     }
+    if (short(0) && feature(1)) adFlags[0] = true;
+    const last = runs.length - 1;
+    if (short(last) && feature(last - 1)) adFlags[last] = true;
   }
 
   // ── Signal 4: the broken cadence ────────────────────────────────────────
