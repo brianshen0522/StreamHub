@@ -35,7 +35,7 @@ import {
   verificationUrls,
 } from "./device-auth.js";
 import { exportEverything, importEverything } from "./backup.js";
-import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
+import { assertProviderAccess, getEnabledProvidersForUser, listProviderAccess } from "./provider-access.js";
 import {
   UNAVAILABLE_ERROR,
   UNAVAILABLE_NOT_FOUND,
@@ -1242,23 +1242,31 @@ app.patch("/api/admin/providers/:providerKey", requireAuth(), requireRole(UserRo
 }));
 
 app.get("/api/admin/users", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (_request, response) => {
-  const users = await prisma.user.findMany({
-    orderBy: { createdAt: "desc" },
-    include: {
-      providerAccess: {
-        include: { provider: true },
-      },
-    },
-  });
+  const [users, providers] = await Promise.all([
+    prisma.user.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { providerAccess: true },
+    }),
+    prisma.provider.findMany({ orderBy: [{ sortOrder: "asc" }, { key: "asc" }] }),
+  ]);
 
   response.json({
-    users: users.map((user) => ({
-      ...serializeUser(user),
-      providerAccess: user.providerAccess.map((entry) => ({
-        providerKey: entry.provider.key,
-        isEnabled: entry.isEnabled,
-      })),
-    })),
+    users: users.map((user) => {
+      const byProviderId = new Map(
+        user.providerAccess.map((entry) => [entry.providerId, entry.isEnabled]),
+      );
+      return {
+        ...serializeUser(user),
+        // Every provider, not just the ones this account has a row for. The
+        // rows are written at account creation, so listing them counted the
+        // catalogue as it stood that day and the column read "4 of 4" while
+        // five were searchable.
+        providerAccess: providers.map((provider) => ({
+          providerKey: provider.key,
+          isEnabled: byProviderId.get(provider.id) ?? true,
+        })),
+      };
+    }),
   });
 }));
 
@@ -1322,11 +1330,7 @@ app.get("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), asyn
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.userProviderPermission.findMany({
-      where: { userId: user.id },
-      include: { provider: true },
-      orderBy: { provider: { sortOrder: "asc" } },
-    }),
+    listProviderAccess(user.id),
   ]);
 
   response.json({
@@ -1335,12 +1339,7 @@ app.get("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), asyn
     history,
     progress,
     sessions,
-    providerAccess: providerAccess.map((entry) => ({
-      providerKey: entry.provider.key,
-      providerName: entry.provider.name,
-      isEnabled: entry.isEnabled,
-      globalEnabled: entry.provider.isEnabled,
-    })),
+    providerAccess,
   });
 }));
 
@@ -1406,19 +1405,7 @@ app.delete("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), a
 }));
 
 app.get("/api/admin/users/:id/providers", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (request, response) => {
-  const entries = await prisma.userProviderPermission.findMany({
-    where: { userId: request.params.id },
-    include: { provider: true },
-    orderBy: { provider: { sortOrder: "asc" } },
-  });
-  response.json({
-    providers: entries.map((entry) => ({
-      providerKey: entry.provider.key,
-      providerName: entry.provider.name,
-      isEnabled: entry.isEnabled,
-      globalEnabled: entry.provider.isEnabled,
-    })),
-  });
+  response.json({ providers: await listProviderAccess(request.params.id) });
 }));
 
 app.put("/api/admin/users/:id/providers/:providerKey", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (request, response) => {

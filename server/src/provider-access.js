@@ -49,6 +49,34 @@ export async function getEnabledProvidersForUser(user) {
   });
 }
 
+/**
+ * Every provider, with how it stands for one account — which is not the same
+ * as the permission rows that exist for them.
+ *
+ * Rows are written once, when the account is created, so an account never has
+ * a row for a provider added after it. Listing the rows therefore showed the
+ * catalogue as it was on the day the account was made, and a provider added
+ * since was simply absent from the admin console — unswitchable, while being
+ * searchable, because a missing row means allowed.
+ *
+ * Driven by the provider table instead, with the rows as an overlay.
+ */
+export async function listProviderAccess(userId) {
+  const [providers, permissions] = await Promise.all([
+    prisma.provider.findMany({ orderBy: [{ sortOrder: "asc" }, { key: "asc" }] }),
+    prisma.userProviderPermission.findMany({ where: { userId } }),
+  ]);
+  const byProviderId = new Map(permissions.map((entry) => [entry.providerId, entry.isEnabled]));
+
+  return providers.map((provider) => ({
+    providerKey: provider.key,
+    providerName: provider.name,
+    // Absent means allowed, matching what the search path already enforces.
+    isEnabled: byProviderId.get(provider.id) ?? true,
+    globalEnabled: provider.isEnabled,
+  }));
+}
+
 export async function assertProviderAccess(user, providerKey) {
   const provider = await prisma.provider.findUnique({ where: { key: providerKey } });
   if (!provider) {
