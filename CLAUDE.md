@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**StreamHub** — a self-hosted, multi-user movie/TV aggregator. It searches three
-scraped providers (`movieffm`, `777tv`, `dramasq`), validates the HLS sources it
-finds, strips spliced ad segments, and plays them back in the browser. Accounts
+**StreamHub** — a self-hosted, multi-user movie/TV aggregator. It searches four
+scraped providers (`movieffm`, `777tv`, `dramasq`, `chinaq`), validates the HLS
+sources it finds, strips spliced ad segments, and plays them back in the
+browser. Accounts
 are managed in an admin console; watch progress, favorites and history are
 per-user and sync live across a user's open tabs.
 
@@ -109,8 +110,20 @@ unversioned paths; clients pin to `/api/v1`. Route groups:
 
 **Provider pattern:** each provider exports `search`, `getItem`, `getEpisodes`,
 `getEpisodeStreams` and is registered in `src/providers/index.js`. Scraping is
-Cheerio over HTML plus JSON dug out of `<script>` tags; dramasq has a real JSON
-endpoint. Provider responses are **not uniform** — see the gotchas below.
+Cheerio over HTML plus JSON dug out of `<script>` tags; dramasq and chinaq have
+real JSON endpoints. Provider responses are **not uniform** — see the gotchas
+below.
+
+**chinaq is dramasq's sibling, not a copy of it.** The search markup is the same
+shape and the play API returns the same `{ video_plays: [{ play_data, src_site }] }`
+body, and one title compared across both sites returned byte-identical CDN URLs,
+so they share a back end. Their catalogues have drifted, though, which is the
+whole point of carrying both: chinaq has titles dramasq has dropped. Three
+differences matter when touching `src/providers/chinaq.js` — detail URLs are
+`/{category}/{showId}/` where category is `tv-tw`/`tv-jp`/`tv-cn`/`tv-kr`/`tv-th`
+and cannot be derived from the id, the episode list is `#all-ep h2 > a` rather
+than `div.eps`, and episode labels repeat the show title (`彈一場完美戀愛 第01集`)
+so the prefix is stripped or it lands in every rail row and progress record.
 
 **Caches** (`src/cache.js`): `search` 5 min, `detail` 10 min, `streamCheck`
 3 min, `streamMetadata` 10 min, `mediaType` 10 min. Keys are namespaced by

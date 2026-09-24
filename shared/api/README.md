@@ -193,7 +193,12 @@ which key is present:
 | `episodes` | a season or a single-page series | `/api/sources` per episode |
 | `streams` | a movie | `/api/check-sources` |
 
-Episodes are plain strings (`"EP1"`, `"第3集"`), not objects.
+Episodes are plain strings (`"EP1"`, `"第3集"`), not objects. Their shape is the
+provider's own and is not normalised across providers — zero padding, wording
+and completion suffixes all vary (`"第4集"`, `"第04集"`, `"第37集已完結"`), and
+sometimes within one show. Treat a label as an opaque key: it is what
+`/api/sources` matches on and what a progress record is stored under, so
+reformatting one client-side breaks resume on every other client.
 
 `GET /api/stream` and `GET /api/poster` accept the access token as an
 `?accessToken=` query parameter as well as a header. That exists because
