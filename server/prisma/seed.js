@@ -8,6 +8,7 @@ const providers = [
   { key: "777tv", name: "777TV", sortOrder: 2 },
   { key: "dramasq", name: "DramaSQ", sortOrder: 3 },
   { key: "chinaq", name: "ChinaQ", sortOrder: 4 },
+  { key: "chinaqtw", name: "ChinaQ TW", sortOrder: 5 },
 ];
 
 async function seedProviders() {

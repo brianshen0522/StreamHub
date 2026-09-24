@@ -5,6 +5,12 @@ import {
   searchChinaq,
 } from "./chinaq.js";
 import {
+  getChinaqTwEpisodeStreams,
+  getChinaqTwEpisodes,
+  getChinaqTwItem,
+  searchChinaqTw,
+} from "./chinaqtw.js";
+import {
   getDramasqEpisodeStreams,
   getDramasqEpisodes,
   getDramasqItem,
@@ -47,5 +53,11 @@ export const providers = {
     getItem: getChinaqItem,
     getEpisodes: getChinaqEpisodes,
     getEpisodeStreams: getChinaqEpisodeStreams,
+  },
+  chinaqtw: {
+    search: searchChinaqTw,
+    getItem: getChinaqTwItem,
+    getEpisodes: getChinaqTwEpisodes,
+    getEpisodeStreams: getChinaqTwEpisodeStreams,
   },
 };

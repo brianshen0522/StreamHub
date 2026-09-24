@@ -6,7 +6,9 @@ export const translations = {
     providerFilter: "平台",
     providerAll: "全部",
     noResults: "沒有結果",
-    searchHint: "輸入關鍵字後，從 movieffm、777tv、dramasq 與 chinaq 同步找片。",
+    // Deliberately does not list the providers: the filter chips directly
+    // below name them, and a hardcoded list went stale on every addition.
+    searchHint: "輸入關鍵字後，同步從所有片源找片。",
     // A title the provider has dropped. Said as "no longer" rather than "not
     // yet": these are reached from a library row, so it played before.
     itemGone: "{p} 已不再提供這部影片。",
@@ -275,7 +277,7 @@ export const translations = {
     providerFilter: "Provider",
     providerAll: "All",
     noResults: "No results",
-    searchHint: "Search movieffm, 777tv, dramasq and chinaq at the same time.",
+    searchHint: "Search every provider at the same time.",
     itemGone: "{p} no longer carries this title.",
     itemGoneShort: "Unavailable",
     itemGoneHint: "The provider removed it. Search the title to see if another provider still has it.",
