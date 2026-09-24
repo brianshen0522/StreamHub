@@ -57,8 +57,19 @@ async function fetchDetailHtml(url) {
 function stripTitlePrefix(label, title) {
   const text = label.trim().replace(/\s+/g, " ");
   if (!title) return text;
-  const prefix = title.trim().replace(/\s+/g, " ");
-  if (text.startsWith(prefix)) {
+  const full = title.trim().replace(/\s+/g, " ");
+
+  // A Japanese or Korean show's heading carries both names — "大戀愛：與將我忘
+  // 記的你 大戀愛～僕を忘れる君と" — but its episode labels use only the first,
+  // so matching the whole heading misses and the title lands in every label.
+  // Falling back to the part before the first space catches those without
+  // loosening the match into a prefix search, which would eat real labels.
+  const candidates = [full];
+  const firstWord = full.split(" ")[0];
+  if (firstWord && firstWord !== full) candidates.push(firstWord);
+
+  for (const prefix of candidates) {
+    if (!text.startsWith(prefix)) continue;
     const rest = text.slice(prefix.length).trim();
     // Only when something is left: a show whose episode is titled exactly like
     // the show keeps its label rather than becoming empty.
