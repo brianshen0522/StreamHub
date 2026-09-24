@@ -5,9 +5,6 @@ export const translations = {
     searchButton: "搜尋",
     providerFilter: "平台",
     providerAll: "全部",
-    providerMovieffm: "movieffm",
-    provider777tv: "777tv",
-    providerDramasq: "dramasq",
     noResults: "沒有結果",
     // A title the provider has dropped. Said as "no longer" rather than "not
     // yet": these are reached from a library row, so it played before.
@@ -277,9 +274,6 @@ export const translations = {
     searchButton: "Search",
     providerFilter: "Provider",
     providerAll: "All",
-    providerMovieffm: "movieffm",
-    provider777tv: "777tv",
-    providerDramasq: "dramasq",
     noResults: "No results",
     itemGone: "{p} no longer carries this title.",
     itemGoneShort: "Unavailable",

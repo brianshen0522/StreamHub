@@ -15,8 +15,6 @@ import { downloadIdentity, downloadStream, partialDownload, saveFinishedDownload
 import ImeSafeInput from "./ImeSafeInput.jsx";
 import { announceNow, consumePlayRequest, detachReceiver, useBrowserReceiver } from "./castReceiver.js";
 
-const providerOptions = ["movieffm", "777tv", "dramasq"];
-
 /**
  * `exact` is the difference between "take me to this" and "take me to this
  * title". A row of history means the first — it is a bookmark of one viewing —
@@ -2696,6 +2694,57 @@ function App() {
     }
   }
 
+  /**
+   * Mark one episode finished. Failures are swallowed per episode on purpose:
+   * this runs over a batch, and one row the server refused must not abandon
+   * the rest.
+   */
+  async function markEpisodeWatched(ep, seasonUrl, duration) {
+    try {
+      const data = await apiJson("/api/me/progress", {
+        method: "PUT",
+        body: JSON.stringify({
+          ...currentPlaybackPayload,
+          episodeLabel: ep,
+          seasonUrl,
+          durationSeconds: duration,
+          positionSeconds: duration,
+          event: "pause",
+        }),
+      });
+      const entry = data?.progress || {
+        seasonUrl: seasonUrl || "",
+        episodeLabel: ep,
+        durationSeconds: duration,
+        positionSeconds: duration,
+        progressPercent: 100,
+        isCompleted: true,
+        lastWatchedAt: new Date().toISOString(),
+      };
+      setItemProgressMap((prev) => ({ ...prev, [progressKey(seasonUrl, ep)]: entry }));
+    } catch {}
+  }
+
+  /** Forget one episode's progress. Same per-episode tolerance as above. */
+  async function clearEpisodeProgress(ep, seasonUrl) {
+    try {
+      await apiJson("/api/me/progress", {
+        method: "DELETE",
+        body: JSON.stringify({
+          providerKey: currentPlaybackPayload.providerKey,
+          itemUrl: currentPlaybackPayload.itemUrl,
+          seasonUrl: seasonUrl || "",
+          episodeLabel: ep,
+        }),
+      });
+      setItemProgressMap((prev) => {
+        const next = { ...prev };
+        delete next[progressKey(seasonUrl, ep)];
+        return next;
+      });
+    } catch {}
+  }
+
   async function handleMarkBulk() {
     if (!markBulkDialog || !currentPlaybackPayload) return;
     const { episodes: bulkEps, seasonUrl, action } = markBulkDialog;
@@ -2707,54 +2756,9 @@ function App() {
         video?.duration && !Number.isNaN(video.duration) && video.duration > 0
           ? Math.floor(video.duration)
           : 7200;
-      await Promise.all(
-        bulkEps.map(async (ep) => {
-          try {
-            const data = await apiJson("/api/me/progress", {
-              method: "PUT",
-              body: JSON.stringify({
-                ...currentPlaybackPayload,
-                episodeLabel: ep,
-                seasonUrl,
-                durationSeconds: duration,
-                positionSeconds: duration,
-                event: "pause",
-              }),
-            });
-            const entry = data?.progress || {
-              seasonUrl: seasonUrl || "",
-              episodeLabel: ep,
-              durationSeconds: duration,
-              positionSeconds: duration,
-              progressPercent: 100,
-              isCompleted: true,
-              lastWatchedAt: new Date().toISOString(),
-            };
-            setItemProgressMap((prev) => ({ ...prev, [progressKey(seasonUrl, ep)]: entry }));
-          } catch {}
-        }),
-      );
+      await Promise.all(bulkEps.map((ep) => markEpisodeWatched(ep, seasonUrl, duration)));
     } else {
-      await Promise.all(
-        bulkEps.map(async (ep) => {
-          try {
-            await apiJson("/api/me/progress", {
-              method: "DELETE",
-              body: JSON.stringify({
-                providerKey: currentPlaybackPayload.providerKey,
-                itemUrl: currentPlaybackPayload.itemUrl,
-                seasonUrl: seasonUrl || "",
-                episodeLabel: ep,
-              }),
-            });
-            setItemProgressMap((prev) => {
-              const next = { ...prev };
-              delete next[progressKey(seasonUrl, ep)];
-              return next;
-            });
-          } catch {}
-        }),
-      );
+      await Promise.all(bulkEps.map((ep) => clearEpisodeProgress(ep, seasonUrl)));
     }
   }
 
@@ -2838,7 +2842,11 @@ function App() {
               className={providerFilter === option ? "is-active" : ""}
               onClick={() => handleProviderFilter(option)}
             >
-              {option === "all" ? t.providerAll : option === "movieffm" ? t.providerMovieffm : option === "777tv" ? t.provider777tv : t.providerDramasq}
+              {/* The key is the site's own name and is not translated, so it
+                  is shown as-is. This used to be a ternary chain of per
+                  provider strings that had to be extended for every provider
+                  added, and silently fell through to the last one otherwise. */}
+              {option === "all" ? t.providerAll : option}
             </button>
           ))}
         </div>
