@@ -1882,12 +1882,23 @@ function App() {
 
   const showRail = itemDetail?.mediaType === "tv" && (episodeRows.length > 0 || seasonOptions.length > 0);
 
+  /**
+   * Which URL an episode is fetched against. Only movieffm splits a series
+   * into seasons and answers with `seasonUrl`; every other provider returns a
+   * single `detailUrl`. Naming the exceptions meant each new provider silently
+   * passed `undefined` and the request went out without a sourceUrl at all, so
+   * this asks what the detail actually carries.
+   */
+  function episodeSourceUrl() {
+    return selectedSeason?.url || itemDetail?.seasonUrl || itemDetail?.detailUrl;
+  }
+
   function handleSelectEpisodeLabel(label) {
     setCastSendState("armed");
     if (!itemDetail) return;
     loadEpisodeSources(
       itemDetail.provider,
-      itemDetail.provider === "777tv" ? itemDetail.detailUrl : (selectedSeason?.url || itemDetail.seasonUrl),
+      episodeSourceUrl(),
       label,
       itemDetail.title,
       itemDetail.mediaType,
@@ -1900,7 +1911,7 @@ function App() {
     if (target.episode) {
       await loadEpisodeSources(
         itemDetail.provider,
-        selectedSeason?.url || itemDetail.seasonUrl || itemDetail.detailUrl,
+        episodeSourceUrl(),
         target.episode,
         itemDetail.title,
         itemDetail.mediaType,
@@ -1956,7 +1967,7 @@ function App() {
     if (prompt.episode) {
       await loadEpisodeSources(
         itemDetail.provider,
-        selectedSeason?.url || itemDetail.seasonUrl,
+        episodeSourceUrl(),
         prompt.episode,
         itemDetail.title,
         itemDetail.mediaType,
