@@ -235,14 +235,28 @@ function GridSkeleton({ count = 12 }) {
  * Chinese titles can wrap without covering the poster.
  */
 function MediaCard({ item, meta, chips, progressPercent, isCompleted, onRemove, removeLabel }) {
+  const t = useT();
+  // The provider has dropped this title since it was shelved. Dimmed and
+  // badged rather than removed or disabled: the row is still the person's, and
+  // opening it still works — the Watch page explains and offers a way out.
+  const gone = Boolean(item.isUnavailable);
+  // The "unavailable" badge leads, so it is read before the provider name.
+  const allChips = gone
+    ? [{ label: t.itemGoneShort, tone: "gone" }, ...(chips || [])]
+    : (chips || []);
   return (
     <div className="usr-card">
-      <Link to={playbackHref(item)} className="usr-card" style={{ gap: 8 }} aria-label={item.title}>
+      <Link
+        to={playbackHref(item)}
+        className={`usr-card${gone ? " is-gone" : ""}`}
+        style={{ gap: 8 }}
+        aria-label={gone ? `${item.title} — ${t.itemGoneShort}` : item.title}
+      >
         <div className="usr-card-art">
           <Poster src={item.posterUrl} alt={item.title} />
-          {chips?.length ? (
+          {allChips.length ? (
             <div className="usr-card-chips">
-              {chips.map((chip) => (
+              {allChips.map((chip) => (
                 <span key={chip.label} className={`usr-chip${chip.tone ? ` usr-chip-${chip.tone}` : ""}`}>{chip.label}</span>
               ))}
             </div>
@@ -564,11 +578,17 @@ function HistoryPage({ setTopbar }) {
 
               return (
                 <div key={title.key} className="usr-hist">
-                  <Link to={playbackHref(entry, { exact: true })} className="usr-row usr-hist-main">
+                  <Link
+                    to={playbackHref(entry, { exact: true })}
+                    className={`usr-row usr-hist-main${entry.isUnavailable ? " is-gone" : ""}`}
+                  >
                     <div className="usr-row-thumb"><Thumb src={entry.posterUrl} alt={entry.title} /></div>
                     <div className="usr-row-main">
                       <div className="usr-row-title">{entry.title}</div>
                       <div className="usr-row-meta">
+                        {/* Ahead of the provider chip: that this no longer
+                            plays matters more than who used to carry it. */}
+                        {entry.isUnavailable ? <span className="usr-chip usr-chip-gone">{t.itemGoneShort}</span> : null}
                         <span className="usr-chip usr-chip-accent">{entry.providerKey}</span>
                         {entry.episodeLabel ? <span>{entry.episodeLabel}</span> : null}
                         {percent !== null ? (

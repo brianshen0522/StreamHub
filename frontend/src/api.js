@@ -25,6 +25,23 @@ export function isOfflineError(error) {
   return error?.name === "OfflineError";
 }
 
+/**
+ * An answer the server gave, carrying its status.
+ *
+ * The message is still the sentence the server wrote, so anything showing
+ * `error.message` is unaffected. `status` is for the few places that must act
+ * on *which* refusal it was — a title the provider has dropped answers 404,
+ * and that is a dead end worth offering a way out of rather than a failure to
+ * retry.
+ */
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function notifySession(session) {
   sessionListeners.forEach((listener) => {
     try {
@@ -181,7 +198,7 @@ export async function apiJson(path, options = {}) {
   const isJson = (response.headers.get("content-type") || "").includes("application/json");
   const payload = isJson ? await response.json() : null;
   if (!response.ok) {
-    throw new Error(payload?.error || "Request failed.");
+    throw new ApiError(payload?.error || "Request failed.", response.status);
   }
   return payload;
 }

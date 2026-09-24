@@ -297,6 +297,27 @@ resolve the *next* episode from the episode list on arrival.
 `/api/me/history` and `/api/me/progress` are capped at 200 rows with **no
 pagination**, so a client cannot page further back than that.
 
+**Rows can point at titles the provider has since dropped.** Providers de-list
+things: a drama that played last month answers with an empty episode list today,
+and the shelved row pointing at it is a dead end. `/api/me/favorites`,
+`/api/me/history` and `/api/me/continue-watching` therefore stamp
+`isUnavailable: true` and `unavailableReason` (`"no-episodes"` or
+`"not-found"`) on rows known to be gone. The field is **absent**, not `false`,
+on every other row — a title nobody has opened since it was shelved has no
+record either way, and absence is not a claim that it still plays.
+
+That record is written by `/api/item`, which is the only place the app learns
+what a provider still carries; a title that returns clears its own mark. A
+provider that merely failed to answer is recorded separately and never marks a
+row, so an outage cannot empty somebody's shelf. Records older than a week stop
+being believed, because providers re-list as often as they drop.
+
+Clients should **mark** these rows, not hide or disable them: the row is still
+the person's, and opening it is how they find out the title moved. `/api/item`
+answers `404` for such a title, which is a dead end worth offering a way out of
+(searching the title across providers usually finds it elsewhere) rather than an
+error worth retrying.
+
 Favorites are keyed per episode, not per title:
 `(userId, providerKey, itemUrl, seasonUrl, episodeLabel)`, with absent values
 coerced to `""`. Send those fields consistently or you will create duplicate rows.

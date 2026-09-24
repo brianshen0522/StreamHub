@@ -289,6 +289,19 @@ The instance runs on a public domain, which changes what the code has to assume.
   or single-page series), or `streams` (a movie). Episodes are plain strings.
 - **`/api/sources` is NDJSON**, written as each probe finishes. Parse
   incrementally; failing sources are simply never emitted.
+- **A library row can point at a title the provider has dropped.** dramasq
+  prints 「共28集」 on a detail page whose episode list is empty, and every
+  guessable play-API slug 404s — the title was carried once and is gone now.
+  `/api/item` answers 404 for it, records the answer in `item_availability`
+  (`src/availability.js`), and the three library endpoints stamp
+  `isUnavailable` onto the rows that match. The mark is **absent**, not `false`,
+  on everything else: a title nobody has opened since shelving it has no record,
+  and absence is not a claim that it still plays. A provider that merely failed
+  to answer is recorded apart and never marks a row, so an outage cannot empty
+  somebody's shelf, and records expire after a week because providers re-list as
+  often as they drop. Mark such rows, never hide them — opening one is how a
+  person learns the title moved, and the Watch page offers a search across the
+  other providers, which usually finds it.
 - **`/api/stream` and `/api/poster` accept `?accessToken=`** because `hls.js` and
   `<img>` cannot set headers, and the proxy bakes that token into every rewritten
   segment URL. Posters are behind auth, so they cannot be loaded unauthenticated.

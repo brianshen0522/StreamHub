@@ -474,6 +474,20 @@
 
 .usr-chip-accent { background: rgba(229, 9, 20, 0.86); border-color: transparent; }
 .usr-chip-done { background: rgba(62, 207, 126, 0.86); border-color: transparent; color: #04220f; }
+/* The provider no longer carries this title. Amber rather than red: the row is
+   not an error, it just will not play any more. */
+.usr-chip-gone { background: rgba(240, 170, 60, 0.9); border-color: transparent; color: #2a1c05; }
+
+/* A shelved row whose title the provider has dropped. Dimmed so the shelf reads
+   as "these are the live ones" at a glance, but still fully clickable — opening
+   it is how the Watch page explains and offers the way out. Artwork is dimmed
+   rather than the whole row, so the title and its badge stay legible. */
+.usr-card.is-gone .usr-card-art,
+.usr-row.is-gone .usr-row-thumb { opacity: 0.45; filter: grayscale(0.7); }
+.usr-card.is-gone .usr-card-title,
+.usr-row.is-gone .usr-row-title { opacity: 0.6; }
+.usr-card.is-gone:hover .usr-card-art,
+.usr-row.is-gone:hover .usr-row-thumb { opacity: 0.7; filter: grayscale(0.35); }
 
 /* Two-line card meta. .usr-card-meta itself is left alone: Favorites and
    History pass a plain string and rely on its nowrap/ellipsis. */

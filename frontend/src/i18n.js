@@ -9,6 +9,12 @@ export const translations = {
     provider777tv: "777tv",
     providerDramasq: "dramasq",
     noResults: "沒有結果",
+    // A title the provider has dropped. Said as "no longer" rather than "not
+    // yet": these are reached from a library row, so it played before.
+    itemGone: "{p} 已不再提供這部影片。",
+    itemGoneShort: "已下架",
+    itemGoneHint: "片源網站把它下架了。用片名重新搜尋，其他平台可能還有。",
+    searchOtherProviders: "搜尋其他平台",
     searchHint: "輸入關鍵字後，從 movieffm、777tv 與 dramasq 同步找片。",
     providers: "平台",
     typeMovie: "電影",
@@ -275,6 +281,10 @@ export const translations = {
     provider777tv: "777tv",
     providerDramasq: "dramasq",
     noResults: "No results",
+    itemGone: "{p} no longer carries this title.",
+    itemGoneShort: "Unavailable",
+    itemGoneHint: "The provider removed it. Search the title to see if another provider still has it.",
+    searchOtherProviders: "Search other providers",
     searchHint: "Search movieffm, 777tv and dramasq at the same time.",
     providers: "Provider",
     typeMovie: "Movie",

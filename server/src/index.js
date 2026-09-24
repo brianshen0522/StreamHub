@@ -37,6 +37,13 @@ import {
 import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser } from "./provider-access.js";
 import {
+  UNAVAILABLE_ERROR,
+  UNAVAILABLE_NOT_FOUND,
+  UNAVAILABLE_NO_EPISODES,
+  markUnavailable,
+  recordAvailability,
+} from "./availability.js";
+import {
   adminResetPasswordSchema,
   createUserSchema,
   favoriteSchema,
@@ -737,7 +744,9 @@ app.get("/api/me/favorites", requireAuth(), forbidAdminPlayback(), asyncHandler(
     where: { userId: request.auth.user.id },
     orderBy: { createdAt: "desc" },
   });
-  response.json({ favorites });
+  // Titles the provider has since dropped are marked, not hidden: the row is
+  // still the person's, and removing it for them would be a surprise.
+  response.json({ favorites: await markUnavailable(favorites) });
 }));
 
 app.post("/api/me/favorites", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
@@ -791,7 +800,7 @@ app.get("/api/me/history", requireAuth(), forbidAdminPlayback(), asyncHandler(as
     orderBy: { watchedAt: "desc" },
     take: 200,
   });
-  response.json({ history });
+  response.json({ history: await markUnavailable(history) });
 }));
 
 app.get("/api/me/continue-watching", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
@@ -847,7 +856,7 @@ app.get("/api/me/continue-watching", requireAuth(), forbidAdminPlayback(), async
     items.push({ ...latest, nextUp: latest.isCompleted, episodesTouched, episodesCompleted });
   }
 
-  response.json({ items });
+  response.json({ items: await markUnavailable(items) });
 }));
 
 app.get("/api/me/progress", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
@@ -1538,7 +1547,26 @@ app.get("/api/item", requireAuth(), forbidAdminPlayback(), asyncHandler(async (r
 
   const provider = getProvider(providerName);
   await assertProviderAccess(request.auth.user, providerName);
-  const item = await provider.getItem({ title, mediaType, posterUrl, url, provider: providerName });
+
+  // The answer here is the only place the app learns a title has been dropped,
+  // so it is recorded either way: the library shelves read it to mark rows that
+  // have become dead ends, and a title that comes back clears its own mark.
+  let item;
+  try {
+    item = await provider.getItem({ title, mediaType, posterUrl, url, provider: providerName });
+  } catch (error) {
+    // A provider that answered "nothing here" is a title that is gone. A
+    // provider that failed to answer is not — recorded apart so an outage
+    // cannot empty somebody's shelf.
+    let reason = UNAVAILABLE_ERROR;
+    if (error?.statusCode === 404) {
+      reason = /episode/i.test(error.message || "") ? UNAVAILABLE_NO_EPISODES : UNAVAILABLE_NOT_FOUND;
+    }
+    await recordAvailability(providerName, url, false, reason);
+    throw error;
+  }
+
+  await recordAvailability(providerName, url, true, null);
   response.json(item);
 }));
 

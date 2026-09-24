@@ -229,6 +229,33 @@ model UserSourcePreference {
   @@map("user_source_preferences")
 }
 
+/**
+ * Whether a provider still carries an item.
+ *
+ * Providers drop titles: a drama that played last month answers with an empty
+ * episode list today, and the library row pointing at it becomes a dead end
+ * that only reveals itself when somebody taps it. This is the record of what a
+ * probe found, so a shelf can mark the row instead.
+ *
+ * Keyed on provider and URL rather than on a user: what a provider carries is
+ * the same fact for everyone, so one person's probe answers for the rest and
+ * the providers get asked once instead of once per account.
+ */
+model ItemAvailability {
+  id          String   @id @default(cuid())
+  providerKey String   @map("provider_key")
+  itemUrl     String   @map("item_url")
+  isAvailable Boolean  @map("is_available")
+  // Why it is unavailable — "no-episodes", "not-found", "error". Kept so a
+  // provider being down is not mistaken for a title being gone on a later read.
+  reason      String?
+  checkedAt   DateTime @default(now()) @map("checked_at")
+
+  @@unique([providerKey, itemUrl])
+  @@index([checkedAt])
+  @@map("item_availability")
+}
+
 model ProviderHealthCheck {
   id             String               @id @default(cuid())
   providerId     String               @map("provider_id")

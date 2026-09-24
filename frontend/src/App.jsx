@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import Hls from "hls.js";
-import { resolveLanguage, translations } from "./i18n.js";
+import { fmt, resolveLanguage, translations } from "./i18n.js";
 import { apiJson, apiNdjsonStream, getAccessToken, isOfflineError } from "./api.js";
 import { isOnline, probeServer, subscribeReconnect } from "./pwa.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
@@ -490,6 +490,10 @@ function App() {
   const [searching, setSearching] = useState(false);
   const [pendingSearchProviders, setPendingSearchProviders] = useState([]);
   const [error, setError] = useState("");
+  // A title the provider answered "nothing here" for. Held apart from `error`
+  // because it is not a failure to retry but a dead end to leave: the banner it
+  // drives carries the way out.
+  const [goneItem, setGoneItem] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
   const [itemDetail, setItemDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -2415,6 +2419,7 @@ function App() {
     setItemProgressMap({});
     setDetailLoading(true);
     setError("");
+    setGoneItem(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
 
     try {
@@ -2529,10 +2534,39 @@ function App() {
     } catch (detailError) {
       setError(detailError.message);
       setDetailLoading(false);
+      // A provider that answered "nothing here" is a dead end, and retrying it
+      // can never succeed. It is reached from a library row — the title played
+      // once, and the provider has since dropped it — so the way out is the
+      // title itself: search it and see who else still carries it.
+      if (detailError.status === 404) {
+        setGoneItem({ title: item.title, provider: item.provider });
+      }
       if (isOfflineError(detailError)) {
         retryRef.current = () => handleSelectItem(item, targetSeasonUrl, targetEpisode, exact, fromUser);
       }
     }
+  }
+
+  /**
+   * Leave a dead end by searching the title across every provider the account
+   * can reach. Clears the gone state first so the banner does not outlive the
+   * screen it belongs to.
+   */
+  function handleSearchGoneTitle() {
+    const gone = goneItem;
+    if (!gone) return;
+    setGoneItem(null);
+    setSelectedItem(null);
+    setItemDetail(null);
+    setQuery(gone.title);
+    setProviderFilter("all");
+    const providerNames = availableProviders.map((provider) => provider.key);
+    if (providerNames.length === 0) {
+      setError(isOnline() ? "No providers are enabled for this account." : t.offlineFetch);
+      return;
+    }
+    history.replaceState(null, "", window.location.pathname);
+    runProviderSearch(gone.title, providerNames, { fresh: true });
   }
 
   async function handleSelectSeason(season) {
@@ -2831,7 +2865,22 @@ function App() {
           </section>
         )}
 
-        {error && <div className="error-banner">{error}</div>}
+        {/* A title the provider has dropped. Replaces the bare error, which
+            said "no episodes yet" and offered nothing to do about it: these are
+            reached from a library row, so the title played once and "yet" reads
+            as a bug in this app. The way out is the title itself. */}
+        {goneItem ? (
+          <div className="error-banner is-gone">
+            <div className="gone-text">
+              <strong>{fmt(t.itemGone, { p: goneItem.provider })}</strong>
+              <span>{t.itemGoneHint}</span>
+            </div>
+            <button type="button" className="gone-action" onClick={handleSearchGoneTitle}>
+              {t.searchOtherProviders}
+            </button>
+          </div>
+        ) : null}
+        {!goneItem && error ? <div className="error-banner">{error}</div> : null}
 
         {/* ── Detail view ────────────────────────────────────── */}
         {selectedItem && (
