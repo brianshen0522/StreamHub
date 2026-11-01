@@ -16,7 +16,7 @@ COPY frontend ./frontend
 WORKDIR /app/frontend
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.28-alpine
 
 # nginx processes files in /etc/nginx/templates/ with envsubst on startup
 COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template

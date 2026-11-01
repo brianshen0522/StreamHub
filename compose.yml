@@ -22,6 +22,12 @@ services:
       context: .
       dockerfile: server/Dockerfile
     container_name: streamhub-server
+    # Fetches and parses whatever remote hosts send, and needs no capabilities
+    # to do it: it runs as node on an unprivileged port.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - ./.env
     depends_on:
