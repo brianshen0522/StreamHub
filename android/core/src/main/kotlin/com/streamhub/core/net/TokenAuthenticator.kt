@@ -1,6 +1,7 @@
 package com.streamhub.core.net
 
 import okhttp3.Authenticator
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.Route
@@ -17,9 +18,14 @@ import okhttp3.Route
  */
 internal class TokenAuthenticator(
     private val refresher: TokenRefresher,
+    private val apiRoot: HttpUrl,
 ) : Authenticator {
 
     override fun authenticate(route: Route?, response: Response): Request? {
+        // A CDN's 401 says nothing about this session, and answering it would
+        // hand the CDN a fresh token.
+        if (!response.request.url.sameOriginAs(apiRoot)) return null
+
         // Give up rather than loop: one renewal per original request.
         if (response.priorResponse != null) return null
 

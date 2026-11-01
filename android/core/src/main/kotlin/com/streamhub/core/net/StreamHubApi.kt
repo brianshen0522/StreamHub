@@ -115,15 +115,15 @@ class StreamHubApi(
     )
 
     private val authed: OkHttpClient = baseClient.newBuilder()
-        .addInterceptor(AuthInterceptor(store, clientKind))
-        .authenticator(TokenAuthenticator(refresher))
+        .addInterceptor(AuthInterceptor(store, clientKind, root))
+        .authenticator(TokenAuthenticator(refresher, root))
         .build()
 
     /**
      * For anything that fetches from this server outside these methods — the
      * image loader in particular. `/api/poster` sits behind auth, so a plain
      * unauthenticated request for a poster answers 401 and the grid renders
-     * empty.
+     * empty. Requests to any other host go out without credentials.
      */
     val authenticatedClient: OkHttpClient get() = authed
 

@@ -146,10 +146,10 @@ fun PlayerScreen(
 
     val player = remember(request.directUrl) {
         // Media requests go through the same authenticated client the rest of the
-        // app uses, so they carry the bearer token — including the second request
-        // a master playlist causes — and a token that lapses mid-playback is
-        // renewed by the same single-flight refresher rather than ending the
-        // stream.
+        // app uses, so those to the server carry the bearer token — including the
+        // second request a master playlist causes — and a token that lapses
+        // mid-playback is renewed by the same single-flight refresher rather than
+        // ending the stream. Segments on a CDN go out without it.
         // OkHttp for the network, but wrapped: OkHttp refuses file:// URIs
         // outright, and a downloaded episode is exactly that. The default
         // factory routes each scheme to the right reader and hands http(s) to

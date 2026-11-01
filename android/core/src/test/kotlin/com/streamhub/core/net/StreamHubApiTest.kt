@@ -4,8 +4,11 @@ import com.streamhub.core.ApiConfig
 import com.streamhub.core.ClientKind
 import com.streamhub.core.model.ItemDetail
 import com.streamhub.core.model.ProgressUpdate
+import com.streamhub.core.model.Session
+import com.streamhub.core.model.User
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -38,6 +41,12 @@ class StreamHubApiTest {
 
     private fun ok(body: String) = MockResponse().setResponseCode(200).setBody(body)
 
+    private fun sessionFor(access: String) = Session(
+        user = User(id = "u1", username = "viewer", email = "v@example.com", role = "USER", status = "ACTIVE"),
+        accessToken = access,
+        refreshToken = "refresh-1",
+    )
+
     private fun sessionJson(role: String = "USER", access: String = "access-1") = """
         {
           "user": {"id":"u1","username":"viewer","email":"v@example.com","role":"$role","status":"ACTIVE"},
@@ -45,6 +54,52 @@ class StreamHubApiTest {
           "refreshToken": "refresh-1"
         }
     """.trimIndent()
+
+    // ── credentials stay on this server ─────────────────────────────────────
+
+    @Test
+    fun `the authenticated client keeps the token off other hosts`() {
+        store.save(sessionFor("secret-access"))
+        val cdn = MockWebServer().apply { start() }
+        try {
+            cdn.enqueue(ok("segment"))
+            server.enqueue(ok("manifest"))
+
+            val client = api.authenticatedClient
+            client.newCall(Request.Builder().url(cdn.url("/seg1.ts")).build()).execute().close()
+            client.newCall(Request.Builder().url(server.url("/api/v1/manifest")).build()).execute().close()
+
+            val atCdn = cdn.takeRequest()
+            assertNull(atCdn.getHeader("Authorization"))
+            assertNull(atCdn.getHeader(ApiConfig.CLIENT_HEADER))
+
+            val atServer = server.takeRequest()
+            assertEquals("Bearer secret-access", atServer.getHeader("Authorization"))
+            assertEquals(ClientKind.PHONE.header, atServer.getHeader(ApiConfig.CLIENT_HEADER))
+        } finally {
+            cdn.shutdown()
+        }
+    }
+
+    @Test
+    fun `a 401 from another host does not renew the session`() {
+        store.save(sessionFor("secret-access"))
+        val cdn = MockWebServer().apply { start() }
+        try {
+            cdn.enqueue(MockResponse().setResponseCode(401))
+
+            api.authenticatedClient
+                .newCall(Request.Builder().url(cdn.url("/seg1.ts")).build())
+                .execute()
+                .use { assertEquals(401, it.code) }
+
+            assertEquals(1, cdn.requestCount)
+            assertEquals(0, server.requestCount)
+            assertEquals("secret-access", store.load()?.accessToken)
+        } finally {
+            cdn.shutdown()
+        }
+    }
 
     // ── auth ────────────────────────────────────────────────────────────────
 
