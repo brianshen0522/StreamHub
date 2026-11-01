@@ -8,7 +8,7 @@ COPY server/package.json server/package-lock.json* ./server/
 COPY server/prisma ./server/prisma
 
 WORKDIR /app/server
-RUN npm install
+RUN npm ci
 
 WORKDIR /app
 COPY shared ./shared
@@ -17,6 +17,11 @@ COPY server/docker-entrypoint.sh ./server/docker-entrypoint.sh
 
 WORKDIR /app/server
 RUN chmod +x ./docker-entrypoint.sh
+
+# `prisma db push` regenerates the client on every boot, so the app's own
+# directory has to stay writable by the user it runs as.
+RUN chown -R node:node /app/server
+USER node
 
 EXPOSE 8787
 

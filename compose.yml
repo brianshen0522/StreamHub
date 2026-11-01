@@ -28,8 +28,12 @@ services:
       - postgres
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-streamhub}:${POSTGRES_PASSWORD:-streamhub}@postgres:5432/${POSTGRES_DB:-streamhub}?schema=public
+    # Loopback by default: nginx reaches this over the compose network. Published
+    # on every interface, a caller could skip nginx and write its own
+    # X-Forwarded-For, which is what the rate limiter keys on. Set
+    # SERVER_BIND_ADDRESS if something on another host has to reach it directly.
     ports:
-      - "8787:8787"
+      - "${SERVER_BIND_ADDRESS:-127.0.0.1}:8787:8787"
     restart: unless-stopped
 
   frontend:
@@ -37,8 +41,6 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     container_name: streamhub-frontend
-    env_file:
-      - ./.env
     depends_on:
       - server
     ports:

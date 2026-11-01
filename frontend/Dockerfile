@@ -7,7 +7,7 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./frontend/
 
 WORKDIR /app/frontend
-RUN npm install
+RUN npm ci
 
 WORKDIR /app
 COPY shared ./shared
