@@ -39,6 +39,12 @@ const CLOSE_UNAUTHORIZED = 4003;
  */
 const MIN_STATE_INTERVAL_MS = 250;
 
+/**
+ * Well past the largest frame any client sends, and enforced before a socket
+ * has authenticated, when anyone can reach it.
+ */
+const MAX_FRAME_BYTES = 64 * 1024;
+
 /** userId -> Set<WebSocket> */
 const clients = new Map();
 
@@ -53,6 +59,20 @@ export function kickSession(userId, sessionId) {
   if (!sockets) return;
   for (const socket of sockets) {
     if (socket.sessionId !== sessionId) continue;
+    try {
+      socket.close(CLOSE_UNAUTHORIZED, "Session revoked.");
+    } catch {
+      /* the heartbeat will reap it */
+    }
+  }
+}
+
+/** The same, for every session on an account, or all but one. */
+export function kickUser(userId, exceptSessionId = null) {
+  const sockets = clients.get(String(userId));
+  if (!sockets) return;
+  for (const socket of sockets) {
+    if (exceptSessionId && socket.sessionId === exceptSessionId) continue;
     try {
       socket.close(CLOSE_UNAUTHORIZED, "Session revoked.");
     } catch {
@@ -232,7 +252,7 @@ function sanitizeCommand(raw) {
 }
 
 export function attachRealtime(server) {
-  const wss = new WebSocketServer({ server, path: "/api/realtime" });
+  const wss = new WebSocketServer({ server, path: "/api/realtime", maxPayload: MAX_FRAME_BYTES });
 
   wss.on("connection", (socket) => {
     socket.isAlive = true;
@@ -277,6 +297,13 @@ export function attachRealtime(server) {
         }
         deviceName = describeDevice(session);
         clientKind = session.clientKind ?? null;
+      }
+
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { status: true } });
+      if (user?.status !== "ACTIVE") {
+        clearTimeout(authTimer);
+        socket.close(CLOSE_UNAUTHORIZED, "User not available.");
+        return;
       }
 
       clearTimeout(authTimer);

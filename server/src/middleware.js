@@ -43,9 +43,9 @@ function slideSessionExpiry(sessionId) {
   }).catch(() => {});
 }
 
-export function requireAuth() {
+export function requireAuth({ allowQueryToken = false } = {}) {
   return asyncHandler(async (request, response, next) => {
-    const token = getBearerToken(request);
+    const token = getBearerToken(request, { allowQuery: allowQueryToken });
     if (!token) {
       response.status(401).json({ error: "Authentication required." });
       return;

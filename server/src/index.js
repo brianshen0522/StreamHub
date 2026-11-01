@@ -15,12 +15,13 @@ import {
   getRefreshTokenExpiresAt,
   hashPassword,
   hashRefreshToken,
+  verifyDecoyPassword,
   verifyPassword,
 } from "./auth.js";
 import { prisma } from "./db.js";
 import { asyncHandler, forbidAdminPlayback, requireAuth, requireRole } from "./middleware.js";
 import { startMonitoring } from "./monitoring.js";
-import { attachRealtime, broadcast, kickSession } from "./realtime.js";
+import { attachRealtime, broadcast, kickSession, kickUser } from "./realtime.js";
 import { describeDevice } from "./devices.js";
 import {
   DEVICE_CODE_TTL_SECONDS,
@@ -84,6 +85,10 @@ app.use((request, _response, next) => {
   next();
 });
 
+// Media URLs carry an access token in the query string; it stays out of the log.
+morgan.token("url", (request) =>
+  (request.originalUrl || request.url).replace(/([?&]accessToken=)[^&]*/g, "$1redacted"),
+);
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
@@ -241,6 +246,18 @@ async function issueSession(user, origin) {
   return { accessToken, refreshToken };
 }
 
+/**
+ * Ends an account's sessions, keeping `keepSessionId` if given: the row stops
+ * the token at its next request, and the sockets it already holds are cut here.
+ */
+async function endSessions(userId, keepSessionId = null) {
+  await prisma.userSession.deleteMany({
+    where: { userId, ...(keepSessionId ? { id: { not: keepSessionId } } : {}) },
+  });
+  kickUser(userId, keepSessionId);
+  broadcast(userId, { type: "devices" });
+}
+
 async function ensureBootstrapped() {
   const providerSeeds = [
     { key: "movieffm", name: "MovieFFM", sortOrder: 1 },
@@ -325,6 +342,7 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response)
   });
 
   if (!user || user.status !== UserStatus.ACTIVE) {
+    await verifyDecoyPassword(payload.password);
     response.status(401).json({ error: "Invalid credentials." });
     return;
   }
@@ -678,6 +696,10 @@ app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, r
     where: { id: user.id },
     data: { passwordHash: await hashPassword(payload.nextPassword) },
   });
+
+  // A password is changed because it may be known to someone else, so every
+  // other device has to prove it knows the new one.
+  await endSessions(user.id, request.auth.sessionId);
 
   response.json({ ok: true });
 }));
@@ -1328,6 +1350,7 @@ app.get("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), asyn
     }),
     prisma.userSession.findMany({
       where: { userId: user.id },
+      omit: { refreshTokenHash: true },
       orderBy: { createdAt: "desc" },
     }),
     listProviderAccess(user.id),
@@ -1356,6 +1379,9 @@ app.patch("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), as
     data,
   });
 
+  // Requests already stop for a disabled account; open sockets do not.
+  if (payload.status === UserStatus.DISABLED) kickUser(user.id);
+
   await createAuditLog(request.auth.user.id, "user.update", payload, user.id);
   response.json({ user: serializeUser(user) });
 }));
@@ -1381,6 +1407,8 @@ app.patch("/api/admin/users/:id/password", requireAuth(), requireRole(UserRole.A
     },
   });
 
+  await endSessions(target.id);
+
   await createAuditLog(request.auth.user.id, "user.password.reset", {}, target.id);
   response.json({ ok: true });
 }));
@@ -1397,6 +1425,7 @@ app.delete("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), a
   }
 
   await prisma.user.delete({ where: { id: target.id } });
+  kickUser(target.id);
   await createAuditLog(request.auth.user.id, "user.delete", {
     username: target.username,
     email: target.email,
@@ -1468,6 +1497,7 @@ app.get("/api/admin/users/:id/progress", requireAuth(), requireRole(UserRole.ADM
 app.get("/api/admin/users/:id/sessions", requireAuth(), requireRole(UserRole.ADMIN), asyncHandler(async (request, response) => {
   const sessions = await prisma.userSession.findMany({
     where: { userId: request.params.id },
+    omit: { refreshTokenHash: true },
     orderBy: { createdAt: "desc" },
   });
   response.json({ sessions });
@@ -1624,11 +1654,11 @@ app.post("/api/check-sources", requireAuth(), forbidAdminPlayback(), asyncHandle
   response.end();
 }));
 
-app.get("/api/stream", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+app.get("/api/stream", requireAuth({ allowQueryToken: true }), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleStreamProxy(request, response);
 }));
 
-app.get("/api/manifest", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+app.get("/api/manifest", requireAuth({ allowQueryToken: true }), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handleCleanManifest(request, response);
 }));
 
@@ -1636,7 +1666,7 @@ app.get("/api/ad-cuts", requireAuth(), forbidAdminPlayback(), asyncHandler(async
   await handleAdCuts(request, response);
 }));
 
-app.get("/api/poster", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+app.get("/api/poster", requireAuth({ allowQueryToken: true }), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   await handlePosterProxy(request, response);
 }));
 
@@ -1650,6 +1680,13 @@ app.use((error, _request, response, _next) => {
       error: "Validation failed.",
       details: error.issues,
     });
+    return;
+  }
+
+  // Prisma's messages quote the query and the schema.
+  if (error?.name?.startsWith("PrismaClient")) {
+    console.error(error);
+    response.status(500).json({ error: "Internal Server Error" });
     return;
   }
 

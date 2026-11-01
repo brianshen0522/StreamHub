@@ -29,8 +29,15 @@ async function seedProviders() {
 async function seedAdmin() {
   const username = "admin";
   const email = "admin@local";
-  const adminPassword = process.env.ADMIN_PASSWORD || "admin";
-  const passwordHash = await argon2.hash(adminPassword);
+  const adminPassword = process.env.ADMIN_PASSWORD || "";
+
+  // Runs before the server on every boot, so creating the first administrator
+  // from a weak password here would get past the refusal in ensureBootstrapped.
+  // Leaving the row uncreated lets that refusal explain what to set.
+  const exists = await prisma.user.findUnique({ where: { username }, select: { id: true } });
+  if (!exists && (adminPassword === "admin" || adminPassword.length < 8)) return;
+
+  const passwordHash = await argon2.hash(adminPassword || "unused");
 
   await prisma.user.upsert({
     where: { username },

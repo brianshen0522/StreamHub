@@ -10,6 +10,9 @@
 
 const buckets = new Map();
 
+/** Requests let through but not yet answered, per key, for limiters that count outcomes. */
+const inFlight = new Map();
+
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 
 // Expired buckets would otherwise accumulate one entry per address seen.
@@ -41,8 +44,12 @@ export function rateLimit({ windowMs, max, name, countWhen }) {
     const now = Date.now();
     const bucket = buckets.get(key);
 
-    if (bucket && bucket.resetAt > now && bucket.count >= max) {
-      const seconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+    const used = bucket && bucket.resetAt > now ? bucket.count : 0;
+    // Outcomes are only known once a request finishes, so a burst sent at once
+    // would otherwise all pass while the count still read zero.
+    if (used + (inFlight.get(key) ?? 0) >= max) {
+      const resetAt = bucket && bucket.resetAt > now ? bucket.resetAt : now + 1000;
+      const seconds = Math.max(1, Math.ceil((resetAt - now) / 1000));
       response.setHeader("retry-after", String(seconds));
       response.status(429).json({
         error: `Too many attempts. Try again in ${seconds} seconds.`,
@@ -60,7 +67,12 @@ export function rateLimit({ windowMs, max, name, countWhen }) {
     };
 
     if (countWhen) {
-      response.on("finish", () => {
+      inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+      // "close" rather than "finish": it also fires for a caller that hung up.
+      response.once("close", () => {
+        const remaining = inFlight.get(key) - 1;
+        if (remaining > 0) inFlight.set(key, remaining);
+        else inFlight.delete(key);
         if (countWhen(response.statusCode)) record();
       });
     } else {

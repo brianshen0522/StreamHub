@@ -16,6 +16,16 @@ export function verifyPassword(password, passwordHash) {
   return argon2.verify(passwordHash, password);
 }
 
+const decoyHash = hashPassword(crypto.randomBytes(32).toString("base64url"));
+
+/**
+ * Spends the time a real password check would, for a login that has no usable
+ * account behind it. Answering faster would say which logins exist.
+ */
+export async function verifyDecoyPassword(password) {
+  await verifyPassword(password, await decoyHash);
+}
+
 /**
  * @param sessionId the session this token belongs to. Without it the server
  *   cannot tell which device a request or socket came from, which is what
@@ -37,7 +47,7 @@ export function createAccessToken(user, sessionId = null) {
 }
 
 export function verifyAccessToken(token) {
-  return jwt.verify(token, JWT_SECRET);
+  return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
 }
 
 export function createRefreshToken() {
@@ -56,11 +66,14 @@ export function getOnlineThresholdDate() {
   return new Date(Date.now() - HEARTBEAT_ONLINE_WINDOW_SECONDS * 1000);
 }
 
-export function getBearerToken(request) {
+/**
+ * @param allowQuery also accept `?accessToken=`. Only the media routes do, for
+ *   the requests a media element or <img> makes, which cannot carry a header.
+ */
+export function getBearerToken(request, { allowQuery = false } = {}) {
   const header = request.get("authorization") || "";
   if (!header.startsWith("Bearer ")) {
-    const queryToken = String(request.query.accessToken || "");
-    return queryToken.trim();
+    return allowQuery ? String(request.query.accessToken || "").trim() : "";
   }
   return header.slice("Bearer ".length).trim();
 }

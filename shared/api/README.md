@@ -72,6 +72,10 @@ wait. Successful sign-ins do not count towards it. Show the message — there is
 nothing for the client to retry around, and a household shares one address, so
 the person seeing it may not be the one who caused it.
 
+Changing a password ends every other session on the account, and an
+administrator resetting one ends them all, so a device can start answering
+`401` at any time. That is the same signed-out path as below.
+
 `requireAuth` cannot distinguish an expired token from a malformed one; both are
 a plain `401`. The correct client behaviour is to attempt one refresh on any
 `401` and retry the request once, then give up and sign out.
@@ -200,9 +204,9 @@ sometimes within one show. Treat a label as an opaque key: it is what
 `/api/sources` matches on and what a progress record is stored under, so
 reformatting one client-side breaks resume on every other client.
 
-`GET /api/stream` and `GET /api/poster` accept the access token as an
-`?accessToken=` query parameter as well as a header. That exists because
-`hls.js` cannot attach headers to segment requests. Native clients set a proper
+`GET /api/stream`, `GET /api/manifest` and `GET /api/poster` accept the access
+token as an `?accessToken=` query parameter as well as a header; no other route
+does. That exists because `hls.js` cannot attach headers to segment requests. Native clients set a proper
 `Authorization` header and should not use the query form — but note that when
 playback falls back to the proxy, the server rewrites every segment URL in the
 manifest to carry the token in the query string regardless.

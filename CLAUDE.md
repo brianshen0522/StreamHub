@@ -21,7 +21,7 @@ Native phone and TV clients are planned and live in this repository — see
 docker compose up --build
 # Frontend: http://localhost:8080
 # Backend:  http://localhost:8787/api/health
-# First admin: admin / $ADMIN_PASSWORD (default "admin"), seeded on boot
+# First admin: admin / $ADMIN_PASSWORD, seeded on boot; required on a new database
 ```
 Copy `.env.example` to `.env` first; compose reads it.
 
@@ -315,7 +315,8 @@ The instance runs on a public domain, which changes what the code has to assume.
   often as they drop. Mark such rows, never hide them — opening one is how a
   person learns the title moved, and the Watch page offers a search across the
   other providers, which usually finds it.
-- **`/api/stream` and `/api/poster` accept `?accessToken=`** because `hls.js` and
+- **`/api/stream`, `/api/manifest` and `/api/poster` accept `?accessToken=`**,
+  and no other route does, because `hls.js` and
   `<img>` cannot set headers, and the proxy bakes that token into every rewritten
   segment URL. Posters are behind auth, so they cannot be loaded unauthenticated.
 - **WebSocket close code 4002 means the access token expired.** Refresh first,
