@@ -6,7 +6,7 @@ import cookieParser from "cookie-parser";
 import { DeviceAuthStatus, Prisma, UserRole, UserStatus } from "../generated/prisma/index.js";
 import { ADMIN_PASSWORD, CONTINUE_SCAN_LIMIT, PORT } from "./config.js";
 import { rateLimit } from "./rate-limit.js";
-import { providers } from "./providers/index.js";
+import { isProviderUrl, providers } from "./providers/index.js";
 import { streamCheckedSources, handleAdCuts, handleCleanManifest, handlePosterProxy, handleStreamProxy } from "./stream.js";
 import {
   createAccessToken,
@@ -58,6 +58,7 @@ import {
 } from "./validators.js";
 
 const app = express();
+app.disable("x-powered-by");
 
 // One hop: nginx in front of this container. Without it every request appears
 // to come from the proxy, which makes the recorded session IP useless and would
@@ -114,6 +115,15 @@ function getProvider(name) {
     throw error;
   }
   return provider;
+}
+
+/** The URL a scraper is about to fetch has to be on that provider's own site. */
+function assertProviderUrl(provider, url) {
+  if (!isProviderUrl(provider, url)) {
+    const error = new Error("That URL does not belong to this provider.");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 function sanitizeNullable(value) {
@@ -249,10 +259,15 @@ async function issueSession(user, origin) {
 /**
  * Ends an account's sessions, keeping `keepSessionId` if given: the row stops
  * the token at its next request, and the sockets it already holds are cut here.
+ * A pairing approved but not yet collected is a session waiting to happen, so
+ * it goes too.
  */
 async function endSessions(userId, keepSessionId = null) {
   await prisma.userSession.deleteMany({
     where: { userId, ...(keepSessionId ? { id: { not: keepSessionId } } : {}) },
+  });
+  await prisma.deviceAuthRequest.deleteMany({
+    where: { userId, status: DeviceAuthStatus.APPROVED },
   });
   kickUser(userId, keepSessionId);
   broadcast(userId, { type: "devices" });
@@ -327,13 +342,24 @@ app.get("/api/health", (_request, response) => {
 const failed = (status) => status === 401 || status === 403;
 const loginLimiter = rateLimit({ name: "login", windowMs: 15 * 60_000, max: 20, countWhen: failed });
 const refreshLimiter = rateLimit({ name: "refresh", windowMs: 15 * 60_000, max: 20, countWhen: failed });
+// A stolen access token should not be a way to guess the password behind it.
+const passwordChangeLimiter = rateLimit({
+  name: "password-change",
+  windowMs: 15 * 60_000,
+  max: 10,
+  countWhen: (status) => status === 400,
+});
 
 app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response) => {
   const payload = loginSchema.parse(request.body || {});
   const login = payload.login.trim();
 
-  const user = await prisma.user.findFirst({
+  // Usernames are free text, so one account's username can be spelled like
+  // another's email. Both are tried: which row a single lookup finds first is
+  // up to the database, and it must not decide who gets to sign in.
+  const candidates = await prisma.user.findMany({
     where: {
+      status: UserStatus.ACTIVE,
       OR: [
         { username: login },
         { email: login.toLowerCase() },
@@ -341,14 +367,16 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (request, response)
     },
   });
 
-  if (!user || user.status !== UserStatus.ACTIVE) {
-    await verifyDecoyPassword(payload.password);
-    response.status(401).json({ error: "Invalid credentials." });
-    return;
+  let user = null;
+  for (const candidate of candidates) {
+    if (await verifyPassword(payload.password, candidate.passwordHash)) {
+      user = candidate;
+      break;
+    }
   }
 
-  const valid = await verifyPassword(payload.password, user.passwordHash);
-  if (!valid) {
+  if (!user) {
+    if (candidates.length === 0) await verifyDecoyPassword(payload.password);
     response.status(401).json({ error: "Invalid credentials." });
     return;
   }
@@ -683,7 +711,7 @@ app.patch("/api/auth/me/profile", requireAuth(), asyncHandler(async (request, re
   response.json({ user: serializeUser(updated) });
 }));
 
-app.patch("/api/auth/me/password", requireAuth(), asyncHandler(async (request, response) => {
+app.patch("/api/auth/me/password", requireAuth(), passwordChangeLimiter, asyncHandler(async (request, response) => {
   const payload = updateMyPasswordSchema.parse(request.body || {});
   const user = await prisma.user.findUnique({ where: { id: request.auth.user.id } });
   const valid = await verifyPassword(payload.currentPassword, user.passwordHash);
@@ -1374,6 +1402,18 @@ app.patch("/api/admin/users/:id", requireAuth(), requireRole(UserRole.ADMIN), as
   if (payload.displayName !== undefined) data.displayName = payload.displayName.trim();
   if (payload.status !== undefined) data.status = payload.status;
 
+  // There is no way back in without an administrator, so the last one stays.
+  if (payload.status === UserStatus.DISABLED) {
+    const otherAdmins = await prisma.user.count({
+      where: { role: UserRole.ADMIN, status: UserStatus.ACTIVE, id: { not: request.params.id } },
+    });
+    const target = await prisma.user.findUnique({ where: { id: request.params.id }, select: { role: true } });
+    if (target?.role === UserRole.ADMIN && otherAdmins === 0) {
+      response.status(400).json({ error: "The last administrator cannot be disabled." });
+      return;
+    }
+  }
+
   const user = await prisma.user.update({
     where: { id: request.params.id },
     data,
@@ -1566,6 +1606,7 @@ app.get("/api/item", requireAuth(), forbidAdminPlayback(), asyncHandler(async (r
 
   const provider = getProvider(providerName);
   await assertProviderAccess(request.auth.user, providerName);
+  assertProviderUrl(provider, url);
 
   // The answer here is the only place the app learns a title has been dropped,
   // so it is recorded either way: the library shelves read it to mark rows that
@@ -1599,6 +1640,7 @@ app.get("/api/episodes", requireAuth(), forbidAdminPlayback(), asyncHandler(asyn
 
   await assertProviderAccess(request.auth.user, providerName);
   const provider = getProvider(providerName);
+  assertProviderUrl(provider, sourceUrl);
   const episodes = await provider.getEpisodes(sourceUrl);
   response.json({ provider: providerName, sourceUrl, episodes });
 }));
@@ -1616,6 +1658,7 @@ app.get("/api/sources", requireAuth(), forbidAdminPlayback(), asyncHandler(async
 
   await assertProviderAccess(request.auth.user, providerName);
   const provider = getProvider(providerName);
+  assertProviderUrl(provider, sourceUrl);
   const rawStreams = episode
     ? await provider.getEpisodeStreams(sourceUrl, episode)
     : [];
@@ -1631,9 +1674,14 @@ app.get("/api/sources", requireAuth(), forbidAdminPlayback(), asyncHandler(async
   response.end();
 }));
 
+/** Far past any title's source list. Each entry costs up to three outbound fetches. */
+const MAX_CHECKED_STREAMS = 100;
+
 app.post("/api/check-sources", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
   const providerName = String(request.body?.provider || "");
-  const streams = Array.isArray(request.body?.streams) ? request.body.streams : null;
+  const streams = Array.isArray(request.body?.streams)
+    ? request.body.streams.filter((stream) => typeof stream?.url === "string").slice(0, MAX_CHECKED_STREAMS)
+    : null;
   const preferredLabel = String(request.body?.preferredLabel || "");
   if (!streams) {
     response.status(400).json({ error: "Missing streams array." });

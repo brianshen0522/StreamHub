@@ -18,7 +18,7 @@ const SAFE_MEDIA_TYPE =
   /^(?:video\/|audio\/|image\/(?!svg)|application\/(?:octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)\b|binary\/octet-stream\b)/i;
 
 /** A playlist is text and small. Past this it is not a playlist worth holding in memory. */
-const MAX_PLAYLIST_BYTES = 32 * 1024 * 1024;
+const MAX_PLAYLIST_BYTES = 8 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BYTES = 64 * 1024;
 
 /**
@@ -535,6 +535,7 @@ export async function handleCleanManifest(request, response) {
   }
 
   response.type("application/vnd.apple.mpegurl");
+  response.setHeader("x-content-type-options", "nosniff");
   // No credentials in the body, but the route is per-user gated, so keep it out
   // of shared caches all the same.
   response.setHeader("cache-control", "private, max-age=30");

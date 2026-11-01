@@ -1,5 +1,9 @@
 import { LRUCache } from "lru-cache";
 
+// Entry counts alone do not bound these: one entry can be a response of up to
+// 32 MiB, and the URLs that fill them are chosen by the caller.
+const MAX_CACHED_TEXT_CHARS = 64 * 1024 * 1024;
+
 export const caches = {
   search: new LRUCache({
     max: 200,
@@ -7,6 +11,8 @@ export const caches = {
   }),
   detail: new LRUCache({
     max: 500,
+    maxSize: MAX_CACHED_TEXT_CHARS,
+    sizeCalculation: (html) => html.length || 1,
     ttl: 1000 * 60 * 10,
   }),
   streamCheck: new LRUCache({
@@ -26,6 +32,8 @@ export const caches = {
   // Content only, no credentials, so it is safe across users.
   cleanedManifest: new LRUCache({
     max: 200,
+    maxSize: MAX_CACHED_TEXT_CHARS,
+    sizeCalculation: (manifest) => manifest.body.length || 1,
     ttl: 1000 * 60 * 5,
   }),
 };

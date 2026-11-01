@@ -38,8 +38,6 @@ export function createAccessToken(user, sessionId = null) {
       sub: user.id,
       sid: sessionId,
       role: user.role,
-      username: user.username,
-      email: user.email,
     },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_TTL_SECONDS },

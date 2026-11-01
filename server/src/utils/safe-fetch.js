@@ -12,15 +12,15 @@
  * Redirects are followed by hand for the same reason: a target that passes the
  * check and then 302s to 127.0.0.1 would otherwise walk straight through.
  *
- * Known limit: between the check and the fetch, DNS could answer differently
- * (rebinding). Closing that needs the connection pinned to the address that was
- * checked, which Node's fetch does not expose. The window is small and the
- * caller is authenticated, so it is left open deliberately rather than
- * overlooked.
+ * The answer is checked again when the socket opens. A hostname can answer
+ * differently between the check and the connection (rebinding), so the lookup
+ * the connection actually uses goes through the same rule.
  */
 
+import dnsCallback from "node:dns";
 import dns from "node:dns/promises";
 import net from "node:net";
+import { Agent, fetch } from "undici";
 
 export class BlockedTargetError extends Error {
   constructor(message) {
@@ -38,9 +38,11 @@ function isPrivateIpv4(ip) {
   if (a === 10) return true;                       // private
   if (a === 127) return true;                      // loopback
   if (a === 169 && b === 254) return true;         // link-local, incl. cloud metadata
+  if (a === 168 && b === 63 && parts[2] === 129 && parts[3] === 16) return true; // Azure host services
   if (a === 172 && b >= 16 && b <= 31) return true; // private
   if (a === 192 && b === 168) return true;         // private
   if (a === 192 && b === 0) return true;           // protocol assignments, documentation
+  if (a === 192 && b === 88 && parts[2] === 99) return true; // 6to4 relay
   if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
   if (a === 198 && b === 51 && parts[2] === 100) return true; // documentation
   if (a === 203 && b === 0 && parts[2] === 113) return true;  // documentation
@@ -62,14 +64,13 @@ function isPrivateIpv6(ip) {
     return isPrivateIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
   }
 
-  if (/^fe[89ab]/.test(address)) return true;               // link-local
-  if (/^fe[c-f]/.test(address)) return true;                // site-local
-  if (/^f[cd]/.test(address)) return true;                  // unique local
-  if (address.startsWith("ff")) return true;                // multicast
   if (/^2002:/.test(address)) return true;                  // 6to4
   if (/^2001:0?:/.test(address)) return true;               // Teredo
   if (/^2001:0?db8:/.test(address)) return true;            // documentation
-  return false;
+
+  // Global unicast is 2000::/3. Everything outside it (link-local, unique local,
+  // multicast, translation prefixes) is refused rather than listed.
+  return !/^[23][0-9a-f]{3}:/.test(address);
 }
 
 /** Anything not clearly a public unicast address is treated as private. */
@@ -110,6 +111,24 @@ export async function assertPublicUrl(rawUrl) {
 
   return url;
 }
+
+/** The lookup a connection uses: `assertPublicUrl`'s rule, at the moment that counts. */
+export function publicOnlyLookup(hostname, options, callback) {
+  dnsCallback.lookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) {
+      callback(error);
+      return;
+    }
+    if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) {
+      callback(new BlockedTargetError("Target address is not permitted."));
+      return;
+    }
+    if (options?.all) callback(null, addresses);
+    else callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+
+const publicOnlyAgent = new Agent({ connect: { lookup: publicOnlyLookup } });
 
 /**
  * Reads at most `maxBytes` of a response body and decodes it. Bodies come from
@@ -154,7 +173,12 @@ export async function safeFetch(rawUrl, options = {}, maxRedirects = 5) {
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     await assertPublicUrl(current);
 
-    const response = await fetch(current, { ...options, redirect: "manual" });
+    let response;
+    try {
+      response = await fetch(current, { ...options, redirect: "manual", dispatcher: publicOnlyAgent });
+    } catch (error) {
+      throw error?.cause instanceof BlockedTargetError ? error.cause : error;
+    }
 
     if (![301, 302, 303, 307, 308].includes(response.status)) {
       return { response, finalUrl: current };

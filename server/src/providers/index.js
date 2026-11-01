@@ -31,33 +31,56 @@ import {
 
 export const providers = {
   movieffm: {
+    domain: "movieffm.net",
     search: searchMovieffm,
     getItem: getMovieffmItem,
     getEpisodes: getMovieffmSeasonEpisodes,
     getEpisodeStreams: getMovieffmEpisodeStreams,
   },
   "777tv": {
+    domain: "777tv.ai",
     search: search777tv,
     getItem: get777tvItem,
     getEpisodes: get777tvEpisodes,
     getEpisodeStreams: get777tvEpisodeStreams,
   },
   dramasq: {
+    domain: "dramasq.io",
     search: searchDramasq,
     getItem: getDramasqItem,
     getEpisodes: getDramasqEpisodes,
     getEpisodeStreams: getDramasqEpisodeStreams,
   },
   chinaq: {
+    domain: "chinaq.fun",
     search: searchChinaq,
     getItem: getChinaqItem,
     getEpisodes: getChinaqEpisodes,
     getEpisodeStreams: getChinaqEpisodeStreams,
   },
   chinaqtw: {
+    domain: "chinaq.net.tw",
     search: searchChinaqTw,
     getItem: getChinaqTwItem,
     getEpisodes: getChinaqTwEpisodes,
     getEpisodeStreams: getChinaqTwEpisodeStreams,
   },
 };
+
+/**
+ * Whether a URL belongs to the provider it was sent with.
+ *
+ * Every item and season URL a client holds came out of that provider's own
+ * pages. The scrapers run regular expressions over what comes back and hand
+ * what they find to players, so they are only pointed at the provider's site.
+ */
+export function isProviderUrl(provider, rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return url.hostname === provider.domain || url.hostname.endsWith(`.${provider.domain}`);
+}

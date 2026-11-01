@@ -8,6 +8,8 @@
  * protects against.
  */
 
+import net from "node:net";
+
 const buckets = new Map();
 
 /** Requests let through but not yet answered, per key, for limiters that count outcomes. */
@@ -25,6 +27,19 @@ const sweeper = setInterval(() => {
 sweeper.unref?.();
 
 /**
+ * One subscriber is handed a whole IPv6 /64, so counting by full address would
+ * give a single caller more buckets than it could ever use up.
+ */
+function clientKey(ip) {
+  if (!net.isIPv6(ip) || ip.toLowerCase().startsWith("::ffff:")) return ip;
+  const [head, tail = ""] = ip.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const zeros = Array(Math.max(0, 8 - front.length - back.length)).fill("0");
+  return [...front, ...zeros, ...back].slice(0, 4).join(":");
+}
+
+/**
  * @param {object} options
  * @param {number} options.windowMs
  * @param {number} options.max
@@ -40,7 +55,7 @@ export function rateLimit({ windowMs, max, name, countWhen }) {
     // request.ip is only meaningful because the app trusts its reverse proxy;
     // without that every caller would share the proxy's address and one noisy
     // client would lock out everyone.
-    const key = `${name}:${request.ip}`;
+    const key = `${name}:${clientKey(request.ip)}`;
     const now = Date.now();
     const bucket = buckets.get(key);
 

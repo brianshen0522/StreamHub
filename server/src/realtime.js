@@ -307,6 +307,10 @@ export function attachRealtime(server) {
       }
 
       clearTimeout(authTimer);
+      // Closed while the lookups above ran: its close handler has been and gone,
+      // so nothing would ever take it back out of `clients`.
+      if (socket.readyState !== socket.OPEN) return;
+
       socket.userId = userId;
       socket.sessionId = sessionId;
       socket.deviceName = deviceName ?? "Unknown device";
