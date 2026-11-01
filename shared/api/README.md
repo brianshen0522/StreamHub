@@ -179,11 +179,13 @@ Point AVPlayer or ExoPlayer at it and the rest is ordinary HLS.
 
 Two things follow from that. A master playlist comes back with each variant and
 rendition pointed at `/api/manifest` again, so the player will make a second
-authenticated request to this server when it picks a variant — the auth header
-has to be set for every request on the asset, not just the first
-(`AVURLAssetHTTPHeaderFieldsKey` on iOS, `setDefaultRequestProperties` on
-Media3). And the response body deliberately contains **no access token**, unlike
-`/api/stream`, so nothing sensitive lands in a cache.
+authenticated request to this server when it picks a variant, and the token has
+to reach that request too — without going to the CDN, which is a stranger. On
+Android the HTTP client attaches it per request, to this server's host only. On
+iOS `AVURLAssetHTTPHeaderFieldsKey` applies to every host the asset touches, so
+the token goes in `?accessToken=` instead and the server carries it onto variant
+URLs. The response body written to the cache deliberately contains **no access
+token**, unlike `/api/stream`, so nothing sensitive lands in a cache.
 
 The response carries `x-adfilter-removed-seconds`, and `x-adfilter-reason` when
 nothing was removed — useful when a source's runtime looks wrong.
@@ -206,10 +208,14 @@ reformatting one client-side breaks resume on every other client.
 
 `GET /api/stream`, `GET /api/manifest` and `GET /api/poster` accept the access
 token as an `?accessToken=` query parameter as well as a header; no other route
-does. That exists because `hls.js` cannot attach headers to segment requests. Native clients set a proper
-`Authorization` header and should not use the query form — but note that when
+does. That exists because `hls.js` cannot attach headers to segment requests.
+Native clients set a proper `Authorization` header on requests to this server,
+except AVPlayer, which cannot scope one to a host and uses the query form. When
 playback falls back to the proxy, the server rewrites every segment URL in the
 manifest to carry the token in the query string regardless.
+
+`/api/item`, `/api/episodes` and `/api/sources` answer 400 for a URL that is not
+on the named provider's own site.
 
 Posters sit behind auth, so a plain unauthenticated image load will fail. The
 image loader needs the bearer header (Coil and Kingfisher both support this) or

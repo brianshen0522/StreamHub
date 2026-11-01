@@ -9,7 +9,8 @@ import Security
 ///
 /// `afterFirstUnlock` rather than the default: playback continues with the
 /// screen locked, and a token the app cannot read while locked would end the
-/// stream the moment it needed renewing.
+/// stream the moment it needed renewing. This device only, so a session does
+/// not travel to another phone inside a backup.
 final class SessionStore: @unchecked Sendable {
 
     private let service = "com.streamhub.ios.session"
@@ -36,7 +37,7 @@ final class SessionStore: @unchecked Sendable {
         var query = baseQuery()
         SecItemDelete(query as CFDictionary)
         query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(query as CFDictionary, nil)
     }
 

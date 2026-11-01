@@ -58,6 +58,23 @@ actor APIClient {
         return request
     }
 
+    /// What AVPlayer is handed. Asset header options apply to every request the
+    /// asset makes, CDN segments included, and a bearer token must not go there:
+    /// it rides in the query string of URLs on this server instead, the way the
+    /// web player's does. The server carries it onto variant playlist URLs.
+    nonisolated func playerURL(_ url: URL) -> URL {
+        guard let token = store.load()?.accessToken, !token.isEmpty,
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        let existing = parts.percentEncodedQuery.map { $0 + "&" } ?? ""
+        parts.percentEncodedQuery = existing + "accessToken=" + token
+        return parts.url ?? url
+    }
+
+    /// The headers an asset may carry to any host.
+    nonisolated var playerHeaders: [String: String] {
+        [ApiConfig.clientHeader: ApiConfig.clientKind, "User-Agent": ApiConfig.userAgent]
+    }
+
     // MARK: - URL building
 
     nonisolated func url(_ segments: [String], query: [URLQueryItem] = []) -> URL {

@@ -117,7 +117,7 @@ struct PlayerView: View {
         // segment filter, so this endpoint is what keeps native playback
         // ad-free.
         let url = model.api.manifestURL(target: request.directUrl)
-        let asset = AVURLAsset(asset: url, headers: model.api.authorizedRequest(url).allHTTPHeaderFields ?? [:])
+        let asset = AVURLAsset(asset: model.api.playerURL(url), headers: model.api.playerHeaders)
         let item = AVPlayerItem(asset: asset)
         // Ahead of the default (AVPlayer's own judgement, usually well under a
         // minute): these CDNs go quiet for stretches, and two minutes of
@@ -226,7 +226,7 @@ struct PlayerView: View {
         let url = tier == 0
             ? model.api.manifestURL(target: request.directUrl)
             : model.api.streamURL(target: request.directUrl)
-        let asset = AVURLAsset(asset: url, headers: model.api.authorizedRequest(url).allHTTPHeaderFields ?? [:])
+        let asset = AVURLAsset(asset: model.api.playerURL(url), headers: model.api.playerHeaders)
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 120
         player.replaceCurrentItem(with: item)
@@ -418,9 +418,8 @@ private struct PlayerContainer: UIViewControllerRepresentable {
 }
 
 private extension AVURLAsset {
-    /// AVPlayer has no header API of its own; options are the only way to put a
-    /// bearer token on the manifest request, and the second request a master
-    /// playlist causes carries them too.
+    /// AVPlayer has no header API of its own, and what is set here goes on every
+    /// request the asset makes, whichever host it is for.
     convenience init(asset url: URL, headers: [String: String]) {
         self.init(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
     }
