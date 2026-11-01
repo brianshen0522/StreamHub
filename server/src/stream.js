@@ -1,32 +1,57 @@
+import { Readable, pipeline } from "node:stream";
 import { getBearerToken } from "./auth.js";
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 import { analyzePlaylist, stripAds } from "./utils/adfilter.js";
-import { BlockedTargetError, assertPublicUrl, safeFetch } from "./utils/safe-fetch.js";
+import { BlockedTargetError, assertPublicUrl, readLimited, safeFetch } from "./utils/safe-fetch.js";
 
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailers",
-  "transfer-encoding",
-  "upgrade",
-  "host",
-  "content-length",
-  "content-encoding",
-]);
+/**
+ * What a proxied response may carry over from upstream. An allowlist because
+ * these responses are served from the app's own origin: anything else a remote
+ * host sets, cookies and security policy included, would apply to it.
+ */
+const FORWARDED_HEADERS = ["accept-ranges", "content-range", "etag", "last-modified"];
 
 const POSTER_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"];
 
-function copyHeaders(upstreamHeaders, response) {
-  upstreamHeaders.forEach((value, key) => {
-    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      return;
-    }
-    response.setHeader(key, value);
-  });
+const SAFE_MEDIA_TYPE =
+  /^(?:video\/|audio\/|image\/(?!svg)|application\/(?:octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)\b|binary\/octet-stream\b)/i;
+
+/** A playlist is text and small. Past this it is not a playlist worth holding in memory. */
+const MAX_PLAYLIST_BYTES = 32 * 1024 * 1024;
+const MAX_UPSTREAM_ERROR_BYTES = 64 * 1024;
+
+/**
+ * Proxied bytes are chosen by whoever runs the upstream host and arrive on the
+ * same origin as the app and its stored session. They are media, never a
+ * document: the sandbox stops one from running if it is opened directly.
+ */
+function applyProxyHeaders(upstreamHeaders, response) {
+  for (const name of FORWARDED_HEADERS) {
+    const value = upstreamHeaders.get(name);
+    if (value !== null) response.setHeader(name, value);
+  }
+  response.setHeader("x-content-type-options", "nosniff");
+  response.setHeader("content-security-policy", "sandbox; default-src 'none'");
+}
+
+function safeMediaType(contentType) {
+  return SAFE_MEDIA_TYPE.test(contentType) ? contentType : "application/octet-stream";
+}
+
+async function sendUpstreamError(upstream, response) {
+  const text = await readLimited(upstream.body, MAX_UPSTREAM_ERROR_BYTES);
+  applyProxyHeaders(new Headers(), response);
+  response.status(upstream.status).type("text/plain").send(text);
+}
+
+/**
+ * pipeline rather than pipe: a stream that errors with no listener takes the
+ * whole process down, and an upstream connection can drop at any moment. It also
+ * releases the upstream fetch when the client goes away.
+ */
+function relayBody(upstream, response) {
+  pipeline(Readable.fromWeb(upstream.body), response, () => {});
 }
 
 /**
@@ -38,7 +63,7 @@ function copyHeaders(upstreamHeaders, response) {
  */
 function buildProxyUrl(request, targetUrl) {
   const url = `/api/stream?target=${encodeURIComponent(targetUrl)}`;
-  const token = getBearerToken(request);
+  const token = getBearerToken(request, { allowQuery: true });
   return token ? `${url}&accessToken=${encodeURIComponent(token)}` : url;
 }
 
@@ -64,32 +89,6 @@ function rewritePlaylist(request, sourceUrl, content) {
 
 const UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-async function readLimited(body, maxBytes) {
-  if (!body) return "";
-  const reader = body.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    while (total < maxBytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      total += value.byteLength;
-    }
-  } finally {
-    reader.cancel().catch(() => {});
-  }
-  const buf = new Uint8Array(Math.min(total, maxBytes));
-  let offset = 0;
-  for (const chunk of chunks) {
-    const n = Math.min(chunk.byteLength, maxBytes - offset);
-    buf.set(chunk.subarray(0, n), offset);
-    offset += n;
-    if (offset >= maxBytes) break;
-  }
-  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
-}
 
 function isValidM3u8Content(text) {
   const t = text.trimStart();
@@ -137,8 +136,9 @@ function extractVariantPlaylistUrls(sourceUrl, text) {
 }
 
 async function fetchTextSnippet(url, maxBytes = 256_000) {
-  const response = await fetch(url, {
-    redirect: "follow",
+  // Variant URLs come out of the playlist body, so every one of these is
+  // checked here rather than by the caller.
+  const { response } = await safeFetch(url, {
     headers: {
       "user-agent": UA,
       range: `bytes=0-${Math.max(1024, maxBytes - 1)}`,
@@ -228,14 +228,13 @@ export async function getStreamMetadata(stream) {
 async function checkM3u8(url) {
   let response;
   try {
-    response = await fetch(url, {
-      redirect: "follow",
+    ({ response } = await safeFetch(url, {
       headers: {
         "user-agent": UA,
         range: "bytes=0-4095",
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    }));
     if (response.status !== 200 && response.status !== 206) {
       return { ok: false, statusCode: response.status };
     }
@@ -249,19 +248,17 @@ async function checkM3u8(url) {
 async function checkGeneric(url) {
   let response;
   try {
-    response = await fetch(url, {
+    ({ response } = await safeFetch(url, {
       method: "HEAD",
-      redirect: "follow",
       headers: { "user-agent": UA },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    }));
     if ([403, 405, 500, 501].includes(response.status)) {
-      response = await fetch(url, {
+      ({ response } = await safeFetch(url, {
         method: "GET",
-        redirect: "follow",
         headers: { range: "bytes=0-0", "user-agent": UA },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      }));
     }
     return {
       ok: response.status >= 200 && response.status < 300,
@@ -350,12 +347,12 @@ export async function handleStreamProxy(request, response) {
   }
 
   if (!upstream.ok && upstream.status !== 206) {
-    response.status(upstream.status).send(await upstream.text());
+    await sendUpstreamError(upstream, response);
     return;
   }
 
   const contentType = upstream.headers.get("content-type") || "";
-  copyHeaders(upstream.headers, response);
+  applyProxyHeaders(upstream.headers, response);
   response.status(upstream.status);
   response.setHeader("access-control-allow-origin", "*");
   // Private, not public: rewritePlaylist writes this user's access token into
@@ -364,31 +361,20 @@ export async function handleStreamProxy(request, response) {
   response.setHeader("cache-control", "private, max-age=60");
 
   if (contentType.includes("mpegurl") || target.toLowerCase().includes(".m3u8")) {
-    const content = await upstream.text();
+    const content = await readLimited(upstream.body, MAX_PLAYLIST_BYTES);
     response.type("application/vnd.apple.mpegurl");
     response.send(rewritePlaylist(request, target, content));
     return;
   }
+
+  response.setHeader("content-type", safeMediaType(contentType));
 
   if (!upstream.body) {
     response.end();
     return;
   }
 
-  const reader = upstream.body.getReader();
-  const stream = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(value);
-    },
-  });
-  const webStream = stream;
-  const nodeStream = await import("node:stream");
-  nodeStream.Readable.fromWeb(webStream).pipe(response);
+  relayBody(upstream, response);
 }
 
 function resolveAgainst(baseUrl, uri) {
@@ -494,7 +480,7 @@ async function cleanedManifestFor(target) {
     throw failure;
   }
 
-  const text = await upstream.text();
+  const text = await readLimited(upstream.body, MAX_PLAYLIST_BYTES);
   if (!isValidM3u8Content(text)) {
     const failure = new Error("Target is not an HLS playlist.");
     failure.statusCode = 415;
@@ -567,9 +553,11 @@ export async function handleCleanManifest(request, response) {
   let body = result.body;
   const queryToken = String(request.query.accessToken || "").trim();
   if (queryToken && result.isMaster) {
+    // Only where this server wrote the URI: at the start of a line or of a URI
+    // attribute. A tag it leaves alone may name another host entirely.
     body = body.replace(
-      /\/api\/manifest\?target=[^"\s,]+/g,
-      (uri) => `${uri}&accessToken=${encodeURIComponent(queryToken)}`,
+      /(^|URI=")(\/api\/manifest\?target=[^"\s,]+)/gm,
+      (_, prefix, uri) => `${prefix}${uri}&accessToken=${encodeURIComponent(queryToken)}`,
     );
   }
   response.send(body);
@@ -651,22 +639,24 @@ export async function handlePosterProxy(request, response) {
   }
 
   if (!upstream.ok) {
-    response.status(upstream.status).send(await upstream.text());
+    await sendUpstreamError(upstream, response);
     return;
   }
 
   const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-  copyHeaders(upstream.headers, response);
+  applyProxyHeaders(upstream.headers, response);
   response.status(upstream.status);
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("cache-control", "public, max-age=600");
-  response.type(POSTER_CONTENT_TYPES.find((type) => contentType.includes(type)) || contentType);
+  response.setHeader(
+    "content-type",
+    POSTER_CONTENT_TYPES.find((type) => contentType.includes(type)) || safeMediaType(contentType),
+  );
 
   if (!upstream.body) {
     response.end();
     return;
   }
 
-  const nodeStream = await import("node:stream");
-  nodeStream.Readable.fromWeb(upstream.body).pipe(response);
+  relayBody(upstream, response);
 }

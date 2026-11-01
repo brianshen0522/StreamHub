@@ -1,10 +1,13 @@
 import { REQUEST_TIMEOUT_MS } from "../config.js";
-import { safeFetch } from "./safe-fetch.js";
+import { readLimited, safeFetch } from "./safe-fetch.js";
 
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export const DEFAULT_TIMEOUT = REQUEST_TIMEOUT_MS;
+
+// A provider page or API answer is well under this; the URL may not be a provider's.
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 /**
  * Every provider fetch goes through here, and several of the URLs come straight
@@ -26,7 +29,7 @@ export async function fetchText(url, options = {}) {
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}) for ${url}`);
   }
-  return response.text();
+  return readLimited(response.body, MAX_RESPONSE_BYTES);
 }
 
 export async function fetchJson(url, options = {}) {

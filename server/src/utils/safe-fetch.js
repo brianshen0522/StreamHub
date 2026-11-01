@@ -40,6 +40,10 @@ function isPrivateIpv4(ip) {
   if (a === 169 && b === 254) return true;         // link-local, incl. cloud metadata
   if (a === 172 && b >= 16 && b <= 31) return true; // private
   if (a === 192 && b === 168) return true;         // private
+  if (a === 192 && b === 0) return true;           // protocol assignments, documentation
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+  if (a === 198 && b === 51 && parts[2] === 100) return true; // documentation
+  if (a === 203 && b === 0 && parts[2] === 113) return true;  // documentation
   if (a === 100 && b >= 64 && b <= 127) return true; // carrier NAT
   if (a >= 224) return true;                       // multicast and reserved
   return false;
@@ -49,12 +53,22 @@ function isPrivateIpv6(ip) {
   const address = ip.toLowerCase().split("%")[0];
   if (address === "::" || address === "::1") return true;
 
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
-  if (mapped) return isPrivateIpv4(mapped[1]);
+  // IPv4 carried inside IPv6 (mapped, compatible, NAT64) goes wherever the
+  // embedded address goes, in either spelling.
+  const embedded = /^(?:::ffff:|::|64:ff9b::)(?:(\d{1,3}(?:\.\d{1,3}){3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(address);
+  if (embedded) {
+    if (embedded[1]) return isPrivateIpv4(embedded[1]);
+    const [high, low] = [Number.parseInt(embedded[2], 16), Number.parseInt(embedded[3], 16)];
+    return isPrivateIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
 
-  if (address.startsWith("fe80")) return true;              // link-local
+  if (/^fe[89ab]/.test(address)) return true;               // link-local
+  if (/^fe[c-f]/.test(address)) return true;                // site-local
   if (/^f[cd]/.test(address)) return true;                  // unique local
   if (address.startsWith("ff")) return true;                // multicast
+  if (/^2002:/.test(address)) return true;                  // 6to4
+  if (/^2001:0?:/.test(address)) return true;               // Teredo
+  if (/^2001:0?db8:/.test(address)) return true;            // documentation
   return false;
 }
 
@@ -95,6 +109,36 @@ export async function assertPublicUrl(rawUrl) {
   }
 
   return url;
+}
+
+/**
+ * Reads at most `maxBytes` of a response body and decodes it. Bodies come from
+ * hosts a caller can choose, so none is read without a ceiling.
+ */
+export async function readLimited(body, maxBytes) {
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const buf = new Uint8Array(Math.min(total, maxBytes));
+  let offset = 0;
+  for (const chunk of chunks) {
+    const n = Math.min(chunk.byteLength, maxBytes - offset);
+    buf.set(chunk.subarray(0, n), offset);
+    offset += n;
+    if (offset >= maxBytes) break;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
 }
 
 /**
