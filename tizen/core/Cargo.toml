@@ -1,0 +1,10 @@
+[package]
+name = "streamhub-core"
+edition.workspace = true
+version.workspace = true
+
+# Pure logic, no browser APIs: everything here runs under plain `cargo test`
+# on the build machine, which is how it is kept in step with android/core.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
