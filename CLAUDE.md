@@ -51,6 +51,15 @@ is the exception and does have JVM unit tests:
 cd android && ./gradlew :core:testDebugUnitTest
 ```
 
+The Tizen client builds in Docker (the host has no C linker) and has Rust unit
+tests plus a Playwright suite that drives it with remote key codes:
+
+```bash
+cd tizen && ./build.sh test          # core + resume rules
+cd tizen/qa && npm install && STREAMHUB_QA_ENV=<qa.env> ./run.sh
+cd tizen && ./package.sh             # signed StreamHub.wgt
+```
+
 ## Repository layout
 
 | Directory | Contents |
@@ -60,13 +69,14 @@ cd android && ./gradlew :core:testDebugUnitTest
 | `shared/` | Code and contract notes used by more than one client |
 | `android/` | Gradle project: `:core` data layer (API client, session, models — unit-tested), `:mobile` phone app, `:tv` Android TV app. Both play video; the phone can drive the television — see `android/CASTING.md` |
 | `ios/` | Native client — README only so far |
+| `tizen/` | Samsung Tizen client (Smart Monitor M7 / TVs): Rust → Wasm, Leptos UI, AVPlay player, packaged as a signed `.wgt`. See `tizen/README.md` |
 | `PoC/` | Standalone Python scrapers used for provider spelunking; not part of the app |
 
 `shared/` is why both Dockerfiles build with the **repository root** as their
 context and mirror the repo layout inside the image, and why
 `frontend/vite.config.js` sets `fs: { allow: [".."] }`. Keep that arrangement in
-mind before moving files around. `android/` and `ios/` are excluded from the
-Docker build context in `.dockerignore`.
+mind before moving files around. `android/`, `ios/` and `tizen/` are excluded
+from the Docker build context in `.dockerignore`.
 
 ## Backend (`server/`)
 
@@ -323,13 +333,14 @@ The instance runs on a public domain, which changes what the code has to assume.
   then reconnect, or the client reconnect-loops.
 - **`encodeViewState` is duplicated** in `App.jsx` and `UserPortal.jsx` with
   different parameter names but an identical wire format. Change both.
-- **Resume semantics now exist three times**: `getResumeSeason`,
+- **Resume semantics now exist four times**: `getResumeSeason`,
   `getResumeEpisode` and friends in `frontend/src/App.jsx`, `ResumeRules` in
-  `android/core` (the only one with tests), and `ResumeRules` in
-  `ios/StreamHub/Core`. Which season and episode resume, when a season rolls
-  over and what counts as finished have to agree across clients, so changing
-  one means changing all three. They cannot share code — one is JS in a
-  browser, one Kotlin, one Swift.
+  `android/core`, `ResumeRules` in `ios/StreamHub/Core`, and
+  `tizen/core/src/resume.rs` (a line-for-line port of the Kotlin, with its
+  tests ported too — Android and Tizen are the two with tests). Which season
+  and episode resume, when a season rolls over and what counts as finished
+  have to agree across clients, so changing one means changing all four. They
+  cannot share code — JS in a browser, Kotlin, Swift and Rust.
 - **Where a title opens is decided by progress, not by the link.** A row in the
   library carries the season and episode it was recorded with, and only a row of
   *history* means "take me to that viewing" — it sets `x: 1` in the encoded view

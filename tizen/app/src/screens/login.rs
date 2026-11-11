@@ -250,7 +250,16 @@ pub fn LoginScreen() -> impl IntoView {
                     data-action="pair"
                     data-focus-id="login-pair"
                     tabindex="-1"
-                    on:click=move |_| renew_click.store(true, Ordering::Relaxed)
+                    // OK asks for a new code only when none is showing (start
+                    // failed). A live code is never replaced by a press: someone
+                    // may be scanning it, and the replaced code would then be
+                    // approved on the phone while this screen waits on the new
+                    // one forever. Expiry renews by itself.
+                    on:click=move |_| {
+                        if pairing.with_untracked(|p| p.is_none()) {
+                            renew_click.store(true, Ordering::Relaxed);
+                        }
+                    }
                 >
                     <h2 class="tv-pair-title">"用手機登入"</h2>
                     <div class="tv-qr">

@@ -1,0 +1,26 @@
+# Tizen Studio web CLI, headless. Used by ../package.sh (sign + package a .wgt)
+# and ../install.sh (sdb / tizen install / run). Built separately from the Rust
+# toolchain image so neither rebuild invalidates the other.
+FROM ubuntu:22.04
+ARG TIZEN_CLI_URL=https://download.tizen.org/sdk/Installer/tizen-studio_6.1/web-cli_Tizen_Studio_6.1_ubuntu-64.bin
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl wget zip unzip pciutils procps sudo python3 \
+      openjdk-17-jre-headless libncurses5 gettext rpm2cpio cpio \
+      libpython2.7 expect \
+ && rm -rf /var/lib/apt/lists/*
+# The installer refuses to run as root. uid 1000 matches the usual host user
+# so files written into the bind-mounted repo stay owned by them.
+RUN useradd -m -u 1000 -s /bin/bash tizen
+USER tizen
+WORKDIR /home/tizen
+RUN wget -q -O cli.bin "$TIZEN_CLI_URL" && chmod +x cli.bin \
+ && ./cli.bin --accept-license /home/tizen/tizen-studio \
+ && rm cli.bin
+ENV PATH=/home/tizen/tizen-studio/tools:/home/tizen/tizen-studio/tools/ide/bin:/home/tizen/tizen-studio/package-manager:$PATH
+# Samsung's certificate extension (for distributor certs tied to a DUID) and
+# TV tools. Best effort: they live on Samsung's extension server, which needs
+# no account to download from but is sometimes unreachable.
+RUN (package-manager-cli.bin install --accept-license cert-add-on || true) \
+ && (package-manager-cli.bin install --accept-license TV-SAMSUNG-Public || true)
+WORKDIR /work

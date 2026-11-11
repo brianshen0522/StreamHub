@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tizen TV web-app manifest for StreamHub. package.sh copies this next to the
+  built dist/ and signs the lot into StreamHub.wgt.
+
+  Package id: exactly 10 alphanumerics (Tizen's rule). Application id is
+  <package>.<name>. Changing either makes the monitor treat it as a different
+  app (new install, saved session lost).
+
+  required_version is the lowest platform the manifest may claim, not the
+  target: 6.0 keeps Tizen Studio 6.x's validator happy while the monitor runs
+  Tizen 9. Every API used exists there.
+-->
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://streamhub.gugulu.tw/tizen"
+        version="0.1.0"
+        viewmodes="maximized">
+  <tizen:application id="StrmHubTV1.StreamHub" package="StrmHubTV1" required_version="6.0"/>
+  <tizen:profile name="tv-samsung"/>
+
+  <name>StreamHub</name>
+  <description>StreamHub on Samsung Tizen</description>
+  <author href="https://streamhub.gugulu.tw">StreamHub</author>
+  <icon src="icon.png"/>
+  <content src="index.html"/>
+  <feature name="http://tizen.org/feature/screen.size.all"/>
+
+  <!-- Network; remote keys beyond arrows/Enter/Back (tizen.tvinputdevice);
+       webapis.productinfo for the model/firmware line on the About screen.
+       AVPlay itself needs no privilege unless DRM is used (drmplay). -->
+  <tizen:privilege name="http://tizen.org/privilege/internet"/>
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+  <tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/>
+
+  <!-- The server is configurable at run time and AVPlay / hls.js stream
+       straight from provider CDNs, so no origin list can be complete. -->
+  <access origin="*" subdomains="true"/>
+
+  <!-- Without an explicit policy Tizen applies a default whose script-src is
+       'self' only, which blocks WebAssembly compilation (M120 needs
+       'wasm-unsafe-eval') and the inline classic loader in index.html. file: lets
+       $WEBAPIS/webapis/webapis.js load from the platform directory. -->
+  <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src 'none'</tizen:content-security-policy>
+
+  <tizen:setting screen-orientation="landscape"
+                 context-menu="disable"
+                 background-support="disable"
+                 encryption="disable"
+                 install-location="auto"/>
+</widget>

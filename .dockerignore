@@ -10,6 +10,7 @@ __pycache__
 # to hundreds of megabytes.
 android
 ios
+tizen
 
 # Not part of any image. .claude holds agent worktrees, each a full checkout.
 PoC
