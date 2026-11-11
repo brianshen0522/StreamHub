@@ -51,7 +51,15 @@ async function sendUpstreamError(upstream, response) {
  * releases the upstream fetch when the client goes away.
  */
 function relayBody(upstream, response) {
-  pipeline(Readable.fromWeb(upstream.body), response, () => {});
+  const source = Readable.fromWeb(upstream.body);
+  // pipeline listens for errors only until it settles. The fetch's
+  // AbortSignal.timeout can still fire after that — the client already gone,
+  // fromWeb's destroy waiting on the body's cancel() — and Readable.fromWeb
+  // then emits the TimeoutError with nobody listening, which took the whole
+  // server down (four restarts in an afternoon of poster bursts). By then
+  // the request is over; there is nothing left to do with the error.
+  source.on("error", () => {});
+  pipeline(source, response, () => {});
 }
 
 /**
