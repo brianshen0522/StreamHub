@@ -31,35 +31,39 @@ import {
 
 export const providers = {
   movieffm: {
-    domain: "movieffm.net",
+    // Moved to mvffm.net; links saved under the old host 301 there, path intact.
+    domains: ["mvffm.net", "movieffm.net"],
     search: searchMovieffm,
     getItem: getMovieffmItem,
     getEpisodes: getMovieffmSeasonEpisodes,
     getEpisodeStreams: getMovieffmEpisodeStreams,
   },
   "777tv": {
-    domain: "777tv.ai",
+    domains: ["777tv.ai"],
     search: search777tv,
     getItem: get777tvItem,
     getEpisodes: get777tvEpisodes,
     getEpisodeStreams: get777tvEpisodeStreams,
   },
   dramasq: {
-    domain: "dramasq.io",
+    domains: ["dramasq.io"],
     search: searchDramasq,
     getItem: getDramasqItem,
     getEpisodes: getDramasqEpisodes,
     getEpisodeStreams: getDramasqEpisodeStreams,
   },
   chinaq: {
-    domain: "chinaq.fun",
+    domains: ["chinaq.fun"],
     search: searchChinaq,
     getItem: getChinaqItem,
     getEpisodes: getChinaqEpisodes,
     getEpisodeStreams: getChinaqEpisodeStreams,
   },
   chinaqtw: {
-    domain: "chinaq.net.tw",
+    // Moved to chinaq.net. The old host is kept because library rows saved
+    // under it are still the provider's own URLs; chinaqtw.js rewrites them
+    // to the new host before fetching.
+    domains: ["chinaq.net", "chinaq.net.tw"],
     search: searchChinaqTw,
     getItem: getChinaqTwItem,
     getEpisodes: getChinaqTwEpisodes,
@@ -82,5 +86,8 @@ export function isProviderUrl(provider, rawUrl) {
     return false;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  return url.hostname === provider.domain || url.hostname.endsWith(`.${provider.domain}`);
+  // A list, because providers move: each still answers for links saved under
+  // the host it used to have. Matching is exact per label, so adding
+  // "chinaq.net" does not admit "chinaq.net.tw" or the other way round.
+  return provider.domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
 }
