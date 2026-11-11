@@ -3,7 +3,9 @@ import { caches } from "../cache.js";
 import { SEARCH_TIMEOUT_MS } from "../config.js";
 import { fetchText, normalizeUrl } from "../utils/http.js";
 
-const BASE_URL = "https://www.movieffm.net";
+// The site moved from www.movieffm.net, which now only 301s here. Fetching the
+// old host still works but costs a redirect hop on every request.
+const BASE_URL = "https://www.mvffm.net";
 const SEARCH_PATH = "/xssearch";
 
 function normalizeMediaType(raw) {
@@ -48,32 +50,36 @@ export async function searchMovieffm(keyword) {
     return cached;
   }
 
+  const pageUrl = (page) => {
+    const base = `${BASE_URL}${SEARCH_PATH}?q=${encodeURIComponent(keyword)}`;
+    return page > 1 ? `${base}&f=_all&p=${page}` : base;
+  };
+  const fetchPage = (page) => fetchText(pageUrl(page), {
+    headers: { referer: `${BASE_URL}/` },
+    timeout: SEARCH_TIMEOUT_MS,
+  }).then(parseSearchResults);
+
+  // Page one decides whether there is anything at all; pages two and three
+  // are then fetched together rather than one after another. Sequentially,
+  // three pages at up to SEARCH_TIMEOUT_MS each outlasted the web client's
+  // 12 s per-provider deadline, so a slow afternoon on this site meant the
+  // whole provider showed nothing. A later page that fails costs only its own
+  // rows — the site's ranking puts the real matches on page one.
+  const pages = [await fetchPage(1)];
+  if (pages[0].length > 0) {
+    const rest = await Promise.allSettled([fetchPage(2), fetchPage(3)]);
+    for (const result of rest) {
+      if (result.status === "fulfilled") pages.push(result.value);
+    }
+  }
+
   const results = [];
   const seen = new Set();
-  for (let page = 1; page <= 3; page += 1) {
-    let url = `${BASE_URL}${SEARCH_PATH}?q=${encodeURIComponent(keyword)}`;
-    if (page > 1) {
-      url += `&f=_all&p=${page}`;
-    }
-    const html = await fetchText(url, {
-      headers: { referer: `${BASE_URL}/` },
-      timeout: SEARCH_TIMEOUT_MS,
-    });
-    const pageResults = parseSearchResults(html);
-    if (pageResults.length === 0) {
-      break;
-    }
-    let newCount = 0;
+  for (const pageResults of pages) {
     for (const item of pageResults) {
-      if (seen.has(item.url)) {
-        continue;
-      }
+      if (seen.has(item.url)) continue;
       seen.add(item.url);
       results.push(item);
-      newCount += 1;
-    }
-    if (newCount === 0) {
-      break;
     }
   }
 
@@ -106,19 +112,36 @@ function extractTableLabels(pageHtml) {
   });
 }
 
+// videourls entries are no longer plain URLs but base64 — of the URL itself on
+// drama pages, of its percent-encoded form on movie pages. The site's player
+// undoes both with `decodeURIComponent(atob(raw))` and falls back to the raw
+// value when that throws, so this does the same: an older page that still
+// carries a plain URL passes through unchanged.
+function decodeVideoUrl(raw) {
+  if (typeof raw !== "string") return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  try {
+    const decoded = decodeURIComponent(Buffer.from(raw, "base64").toString("utf8"));
+    return /^https?:\/\//i.test(decoded) ? decoded : raw;
+  } catch {
+    return raw;
+  }
+}
+
 function buildDramaStreams(groups, tableLabels) {
   const streams = [];
   groups.forEach((group, sourceIndex) => {
     const sourceLabel = tableLabels[sourceIndex] || `Source ${sourceIndex + 1}`;
     const episodes = Array.isArray(group) ? group : Object.values(group);
     episodes.forEach((episode) => {
-      if (typeof episode.url !== "string" || !episode.url.includes(".m3u8")) {
+      const url = decodeVideoUrl(episode.url);
+      if (typeof url !== "string" || !url.includes(".m3u8")) {
         return;
       }
       streams.push({
         sourceLabel,
         episodeLabel: String(episode.name || `EP${streams.length + 1}`),
-        url: episode.url,
+        url,
       });
     });
   });
@@ -131,7 +154,7 @@ function buildMovieStreams(sources) {
     .map((item, index) => ({
       sourceLabel: `Source ${Number(item.source ?? index) + 1}`,
       episodeLabel: "Movie",
-      url: item.url,
+      url: decodeVideoUrl(item.url),
     }));
 }
 

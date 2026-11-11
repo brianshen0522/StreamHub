@@ -9,7 +9,7 @@ A self-hosted streaming aggregator that searches **movieffm**, **777tv**, and **
 
 ## Features
 
-- **Unified search** across movieffm.net, 777tv.ai, and dramasq.io in one query
+- **Unified search** across mvffm.net (movieffm), 777tv.ai, dramasq.io, chinaq.fun and chinaq.net in one query
 - **Three providers** — movieffm & 777tv (movies + TV), dramasq (TV dramas, multiple CDN sources per episode)
 - **Strict stream validation** — checks HTTP status *and* reads m3u8 content (`#EXTM3U` + segment tags); HTML error pages no longer pass as valid
 - **In-browser HLS playback** via hls.js, with automatic fallback to the server proxy if direct play fails
@@ -76,7 +76,7 @@ browser
 | `src/index.js` | Express routes |
 | `src/stream.js` | Stream checker, HLS proxy, poster proxy |
 | `src/cache.js` | Four LRU caches (search 5 min, detail 10 min, streamCheck 3 min, mediaType 10 min) |
-| `src/providers/movieffm.js` | Scraper for movieffm.net |
+| `src/providers/movieffm.js` | Scraper for movieffm (now www.mvffm.net) |
 | `src/providers/seventv.js` | Scraper for 777tv.ai |
 | `src/providers/dramasq.js` | Scraper for dramasq.io (TV only, uses `/drq/` JSON API for streams) |
 | `src/providers/index.js` | Provider registry |

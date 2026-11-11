@@ -1,5 +1,5 @@
 /**
- * ChinaQ TW (chinaq.net.tw).
+ * ChinaQ TW (chinaq.net, formerly chinaq.net.tw).
  *
  * Shares a name with chinaq.fun and nothing else: this one runs MacCMS, and
  * the two catalogues overlap far less than the names suggest. Each carries
@@ -28,7 +28,28 @@ import { caches } from "../cache.js";
 import { SEARCH_TIMEOUT_MS } from "../config.js";
 import { fetchText, normalizeUrl } from "../utils/http.js";
 
-const BASE_URL = "https://chinaq.net.tw";
+/**
+ * The site moved from chinaq.net.tw to chinaq.net. The old host answers every
+ * path with a 301 to the new site's *root*, so a search or detail request sent
+ * there comes back as the homepage — a full page of unrelated "latest" titles
+ * that parses as 63 search hits for any query, and a detail page with no
+ * episodes that would be recorded as the title being gone. Markup and ids are
+ * unchanged, so a URL saved under the old host is the same page on the new one.
+ */
+const BASE_URL = "https://chinaq.net";
+const LEGACY_HOSTS = new Set(["chinaq.net.tw", "www.chinaq.net.tw"]);
+
+/** A URL saved before the move, pointed at where that page lives now. */
+function canonicalUrl(input) {
+  try {
+    const url = new URL(input);
+    if (!LEGACY_HOSTS.has(url.hostname)) return input;
+    url.hostname = new URL(BASE_URL).hostname;
+    return url.toString();
+  } catch {
+    return input;
+  }
+}
 
 /**
  * The site's own section names, mapped to what this app calls them. Anything
@@ -43,7 +64,8 @@ function detailIdFrom(url) {
   return match ? match[1] : null;
 }
 
-async function fetchDetailHtml(url) {
+async function fetchDetailHtml(rawUrl) {
+  const url = canonicalUrl(rawUrl);
   const cacheKey = `chinaqtw:detail:${url}`;
   const cached = caches.detail.get(cacheKey);
   if (cached) return cached;
@@ -114,6 +136,14 @@ export async function searchChinaqTw(keyword) {
   );
 
   const $ = cheerio.load(html);
+  // A results page heads itself 「与 “…” 相关的搜索结果」. Anything else is a
+  // redirect that landed somewhere else — the homepage, the last time the site
+  // moved — and its tiles are not answers to the query. Failing loudly puts
+  // the provider in the health poller's DOWN column instead of handing every
+  // search the same unrelated list.
+  if (!/搜索结果|搜索結果/.test($(".catleader").text() + $("title").text())) {
+    throw new Error("chinaqtw search did not return a results page.");
+  }
   const results = [];
   const seen = new Set();
   $(".content .drama").each((_, el) => {
@@ -156,7 +186,7 @@ export async function getChinaqTwItem(item) {
     // Same hole as the other providers': the page renders but lists nothing
     // playable. Said as a 404 so the library records the title as gone and the
     // Watch page offers the other providers.
-    const error = new Error("chinaq.net.tw lists nothing playable for this title yet.");
+    const error = new Error("chinaq.net lists nothing playable for this title yet.");
     error.statusCode = 404;
     throw error;
   }
@@ -168,8 +198,8 @@ export async function getChinaqTwItem(item) {
     provider: "chinaqtw",
     mediaType: isMovie ? "movie" : "tv",
     title: parseTitle($) || item.title,
-    posterUrl: item.posterUrl || "",
-    detailUrl: item.url,
+    posterUrl: canonicalUrl(item.posterUrl || ""),
+    detailUrl: canonicalUrl(item.url),
     episodes: entries.map((entry) => entry.label),
   };
 }
@@ -203,7 +233,7 @@ export async function getChinaqTwEpisodeStreams(detailUrl, episodeLabel) {
 
   const settled = await Promise.allSettled(sources.map(async (source) => {
     const page = await fetchText(entry.episodeUrl, {
-      headers: { referer: detailUrl, cookie: `sid=${source.sid}` },
+      headers: { referer: canonicalUrl(detailUrl), cookie: `sid=${source.sid}` },
     });
     const match = page.match(/var\s+player_\w+\s*=\s*(\{.*?\})\s*<\/script>/s);
     if (!match) return null;
