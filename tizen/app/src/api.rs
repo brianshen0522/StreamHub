@@ -168,22 +168,37 @@ async fn do_refresh() -> Result<(), ApiError> {
         return Err(ApiError { status: 401, message: "signed out".into() });
     };
     let body = serde_json::json!({ "refreshToken": current.refresh_token });
-    match send_json("POST", "/auth/refresh", Some(&body), None).await {
+    let result = send_json("POST", "/auth/refresh", Some(&body), None).await;
+    // Somebody signed out (or another refresh landed) while this one was in
+    // flight: writing its answer would sign the set back in behind their back.
+    let still_ours = session::current().is_some_and(|s| s.refresh_token == current.refresh_token);
+    match result {
         Ok(json) => match Session::from_body(&json, Some(&current.user)) {
-            Some(next) => {
+            Some(next) if still_ours => {
                 session::set(Some(next));
                 Ok(())
             }
+            Some(_) => Err(ApiError { status: 401, message: "session changed".into() }),
             None => Err(ApiError { status: 500, message: "bad refresh body".into() }),
         },
-        // A refresh that got no answer is not a rejection: keep the session
-        // and let the caller report offline.
-        Err(e) if e.is_offline() => Err(e),
-        Err(e) => {
-            session::set(None);
+        // Only a rejection of the refresh token itself ends the session. No
+        // answer, a rate limit (429 — one person's typos on the web app share
+        // this household's address) or a server error during a deploy (5xx)
+        // say nothing about it, and signing out on them meant pairing the TV
+        // again after every hiccup.
+        Err(e) if is_rejection(&e) => {
+            if still_ours {
+                session::set(None);
+            }
             Err(e)
         }
+        Err(e) => Err(e),
     }
+}
+
+/// The server refused the credentials themselves, as opposed to failing to answer.
+fn is_rejection(e: &ApiError) -> bool {
+    matches!(e.status, 400 | 401 | 403)
 }
 
 /// Single-flight token refresh. Every concurrent caller awaits the same request.
@@ -214,7 +229,12 @@ pub async fn request(method: &str, path: &str, body: Option<&Value>) -> Result<V
     };
     match send_json(method, path, body, Some(&token)).await {
         Err(e) if e.status == 401 => {
-            refresh().await?;
+            // A refresh may have finished while this request was in flight;
+            // retry with its token instead of rotating a second time.
+            let current = session::current().map(|s| s.access_token);
+            if current.as_deref() == Some(token.as_str()) {
+                refresh().await?;
+            }
             let token = session::current().map(|s| s.access_token).unwrap_or_default();
             let result = send_json(method, path, body, Some(&token)).await;
             if matches!(&result, Err(e) if e.status == 401) {
@@ -233,19 +253,49 @@ pub async fn get(path: &str) -> Result<Value, ApiError> {
 /// NDJSON (`/api/sources`): calls `on_line` with each object as it arrives.
 /// Lines are split with `streamhub_core::ndjson::LineBuffer`. Pass an
 /// AbortSignal to stop early (e.g. the person left the screen).
+/// Decode one network chunk *as part of a stream*: a CJK character is three
+/// UTF-8 bytes and a chunk can end in the middle of one. Without `stream:
+/// true` those bytes became U+FFFD, so a source label like 線路1 arrived
+/// garbled, never matched the saved preference, and was then saved garbled.
+pub fn decode_chunk(decoder: &web_sys::TextDecoder, bytes: &JsValue) -> String {
+    let options = web_sys::TextDecodeOptions::new();
+    options.set_stream(true);
+    let mut data = js_sys::Uint8Array::new(bytes).to_vec();
+    decoder
+        .decode_with_u8_array_and_options(&mut data, &options)
+        .unwrap_or_default()
+}
+
 pub async fn ndjson(
     path: &str,
+    signal: Option<&web_sys::AbortSignal>,
+    on_line: impl FnMut(Value),
+) -> Result<(), ApiError> {
+    ndjson_with("GET", path, None, signal, on_line).await
+}
+
+/// `ndjson` for any method — `/api/check-sources` is a POST with a body.
+pub async fn ndjson_with(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
     signal: Option<&web_sys::AbortSignal>,
     mut on_line: impl FnMut(Value),
 ) -> Result<(), ApiError> {
     let mut attempt = 0;
     let response = loop {
         let token = session::current().map(|s| s.access_token).unwrap_or_default();
-        let response = send(build_request("GET", path, None, Some(&token), signal)?).await?;
-        if response.status() == 401 && attempt == 0 {
-            attempt += 1;
-            refresh().await?;
-            continue;
+        let response = send(build_request(method, path, body, Some(&token), signal)?).await?;
+        if response.status() == 401 {
+            if attempt == 0 {
+                attempt += 1;
+                if session::current().map(|s| s.access_token).as_deref() == Some(token.as_str()) {
+                    refresh().await?;
+                }
+                continue;
+            }
+            // Refreshed and still refused: the same end as request().
+            session::set(None);
         }
         if !(200..300).contains(&response.status()) {
             let json = body_json(&response).await;
@@ -269,15 +319,15 @@ pub async fn ndjson(
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         if done {
+            // Flush whatever the streaming decoder still holds.
+            buffer.push(&decoder.decode().unwrap_or_default());
             for value in buffer.finish() {
                 on_line(value);
             }
             return Ok(());
         }
         let bytes = js_sys::Reflect::get(&chunk, &"value".into()).unwrap_or(JsValue::NULL);
-        let text = decoder
-            .decode_with_js_u8_array(&bytes.unchecked_into())
-            .unwrap_or_default();
+        let text = decode_chunk(&decoder, &bytes);
         for value in buffer.push(&text) {
             on_line(value);
         }

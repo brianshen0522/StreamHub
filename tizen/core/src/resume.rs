@@ -21,10 +21,11 @@ pub fn progress_key(season_url: Option<&str>, episode_label: Option<&str>) -> St
 pub fn progress_map(entries: &[WatchProgress]) -> HashMap<String, WatchProgress> {
     entries
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(seq, p)| {
             (
                 progress_key(p.season_url.as_deref(), p.episode_label.as_deref()),
-                p.clone(),
+                WatchProgress { seq, ..p.clone() },
             )
         })
         .collect()
@@ -47,10 +48,14 @@ pub fn resume_season<'a>(
     if seasons.is_empty() {
         return None;
     }
+    // Kotlin's maxByOrNull keeps the *first* maximum in the map's insertion
+    // order (the server's list order); a HashMap has no order, so ties are
+    // broken on `seq` explicitly — otherwise two clients could resume the
+    // same title differently.
     let latest = progress
         .values()
         .filter(|p| p.season_url.as_deref().is_some_and(|s| !s.trim().is_empty()))
-        .max_by(|a, b| when(a).cmp(when(b)));
+        .max_by(|a, b| when(a).cmp(when(b)).then(b.seq.cmp(&a.seq)));
     latest
         .and_then(|row| seasons.iter().find(|s| Some(s.url.as_str()) == row.season_url.as_deref()))
         .or_else(|| fallback_season_url.and_then(|url| seasons.iter().find(|s| s.url == url)))
@@ -67,8 +72,12 @@ pub fn resume_episode(
     if episodes.is_empty() {
         return None;
     }
+    // Kotlin sorts descending (stable) and takes the first: among equal
+    // timestamps that is the earliest in episode order. `max_by` keeps the
+    // last maximum, so iterate in reverse.
     let latest = episodes
         .iter()
+        .rev()
         .filter_map(|e| progress.get(&progress_key(season_url, Some(e))))
         .max_by(|a, b| when(a).cmp(when(b)));
     let Some(latest) = latest else {
@@ -432,5 +441,33 @@ mod tests {
         assert_eq!(previous_episode(&episodes(), Some("EP1")), None);
         assert_eq!(previous_episode(&episodes(), Some("EP9")), None);
         assert_eq!(previous_episode(&episodes(), None), None);
+    }
+
+    #[test]
+    fn tie_on_last_watched_resumes_earliest_episode_like_kotlin() {
+        let at = Some("2026-11-11T07:00:00.000Z".to_string());
+        let rows = vec![
+            WatchProgress { season_url: Some("s".into()), episode_label: Some("EP3".into()), last_watched_at: at.clone(), ..Default::default() },
+            WatchProgress { season_url: Some("s".into()), episode_label: Some("EP1".into()), last_watched_at: at.clone(), ..Default::default() },
+        ];
+        let map = progress_map(&rows);
+        let eps: Vec<String> = ["EP1", "EP2", "EP3"].iter().map(|s| s.to_string()).collect();
+        for _ in 0..20 {
+            assert_eq!(resume_episode(&eps, Some("s"), &map).as_deref(), Some("EP1"));
+        }
+    }
+
+    #[test]
+    fn tie_on_last_watched_resumes_first_listed_season_like_kotlin() {
+        let at = Some("2026-11-11T07:00:00.000Z".to_string());
+        let rows = vec![
+            WatchProgress { season_url: Some("s2".into()), episode_label: Some("a".into()), last_watched_at: at.clone(), ..Default::default() },
+            WatchProgress { season_url: Some("s1".into()), episode_label: Some("b".into()), last_watched_at: at.clone(), ..Default::default() },
+        ];
+        let seasons = vec![SeasonRef { label: "1".into(), url: "s1".into() }, SeasonRef { label: "2".into(), url: "s2".into() }];
+        for _ in 0..20 {
+            let map = progress_map(&rows);
+            assert_eq!(resume_season(&seasons, &map, None).map(|s| s.url.as_str()), Some("s2"));
+        }
     }
 }

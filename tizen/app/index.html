@@ -27,11 +27,6 @@
 </head>
 <body>
   <script src="streamhub-tizen.js"></script>
-  <script>
-    wasm_bindgen({ module_or_path: "streamhub-tizen_bg.wasm" }).catch(function (error) {
-      document.body.textContent = "StreamHub failed to start: " + error;
-      console.error(error);
-    });
-  </script>
+  <script src="js/start.js"></script>
 </body>
 </html>

@@ -39,9 +39,9 @@
 
   <!-- Without an explicit policy Tizen applies a default whose script-src is
        'self' only, which blocks WebAssembly compilation (M120 needs
-       'wasm-unsafe-eval') and the inline classic loader in index.html. file: lets
+       'wasm-unsafe-eval'). No 'unsafe-inline' for scripts: the loader is js/start.js. file: lets
        $WEBAPIS/webapis/webapis.js load from the platform directory. -->
-  <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src 'none'</tizen:content-security-policy>
+  <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src 'none'</tizen:content-security-policy>
 
   <tizen:setting screen-orientation="landscape"
                  context-menu="disable"

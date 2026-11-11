@@ -25,6 +25,10 @@ pub struct WatchProgress {
     pub is_completed: bool,
     /// ISO-8601 UTC as the server writes it (`2026-11-11T07:00:00.000Z`).
     pub last_watched_at: Option<String>,
+    /// Position in the list the server returned, set by `progress_map`. Not on
+    /// the wire: it breaks ties the way Kotlin's insertion-ordered map does.
+    #[serde(skip)]
+    pub seq: usize,
 }
 
 /// A season of a movieffm TV hub: `/api/item` `seasons[]`.

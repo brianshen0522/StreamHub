@@ -18,7 +18,7 @@ web-sys = { version = "0.3", features = [
   "Window", "Document", "Element", "HtmlElement", "DomRect", "Storage",
   "KeyboardEvent", "Event", "EventTarget", "Location", "Navigator",
   "Request", "RequestInit", "RequestMode", "Response", "Headers",
-  "ReadableStream", "ReadableStreamDefaultReader", "TextDecoder",
+  "ReadableStream", "ReadableStreamDefaultReader", "TextDecoder", "TextDecodeOptions",
   "WebSocket", "MessageEvent", "CloseEvent", "BinaryType",
   "HtmlInputElement", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
   "AbortController", "AbortSignal", "console",
