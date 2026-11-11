@@ -306,7 +306,9 @@ Progress positions are **integer seconds** — round before sending.
 
 `DELETE /api/me/progress` takes a **JSON body**, which some native HTTP stacks
 discourage on DELETE. Confirm your client actually sends it. Its `scope: "title"`
-mode deletes by `(providerKey, title)` and deliberately ignores `itemUrl`, which
+mode deletes by `(providerKey, title)` and deliberately ignores `itemUrl` — but
+`itemUrl` is still validated as a required URL, so send one anyway (the
+card's own will do) or the request is a `400`. The title scope
 is what dismissing a continue-watching card needs, because a card stands for a
 whole title while providers like dramasq give every episode its own `itemUrl`.
 
