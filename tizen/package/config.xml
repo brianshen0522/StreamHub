@@ -43,12 +43,17 @@
        only 'unsafe-eval' for that, so both are listed: each engine ignores the
        one it does not understand... except M85, which honours 'unsafe-eval'.
        No 'unsafe-inline' for scripts: the loader is js/start.js. file: lets
-       $WEBAPIS/webapis/webapis.js load from the platform directory. -->
-  <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src 'none'</tizen:content-security-policy>
+       $WEBAPIS/webapis/webapis.js load from the platform directory.
+       object-src must allow the <object type="application/avplayer"> AVPlay
+       renders through: with 'none' the engine blocks it and paints its
+       blocked-plugin placeholder, a faint glyph centred on the 1920×1080
+       element (the dot in the middle of every video), while the hardware
+       plane underneath keeps playing as if nothing were wrong. -->
+  <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src * 'self' file: data: blob:</tizen:content-security-policy>
 
   <!-- pointing-device-support="disable": the app is D-pad only. With a mouse or
        the remote's pointer mode the platform otherwise draws a cursor, which
-       showed as a faint dot over the middle of the video. -->
+       could draw a cursor. -->
   <tizen:setting pointing-device-support="disable"
                  screen-orientation="landscape"
                  context-menu="disable"

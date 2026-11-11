@@ -94,7 +94,10 @@
         var o = document.createElement("object");
         o.type = "application/avplayer";
         o.id = "vp-avplayer";
-        o.style.cssText = "position:fixed;left:0;top:0;width:1920px;height:1080px;z-index:0;";
+        o.setAttribute("tabindex", "-1");
+        o.setAttribute("aria-hidden", "true");
+        o.style.cssText = "position:fixed;left:0;top:0;width:1920px;height:1080px;z-index:0;" +
+          "background:transparent;border:0;outline:none;pointer-events:none;";
         document.body.insertBefore(o, document.body.firstChild);
         this.el = o;
       }
