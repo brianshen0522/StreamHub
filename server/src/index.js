@@ -37,6 +37,7 @@ import {
 } from "./device-auth.js";
 import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser, listProviderAccess } from "./provider-access.js";
+import { rankSearchResults } from "./search-rank.js";
 import {
   UNAVAILABLE_ERROR,
   UNAVAILABLE_NOT_FOUND,
@@ -1573,7 +1574,7 @@ app.get("/api/search", requireAuth(), forbidAdminPlayback(), asyncHandler(async 
   const settled = await Promise.allSettled(
     providerNames.map(async (providerName) => ({
       provider: providerName,
-      items: await getProvider(providerName).search(q),
+      items: rankSearchResults(q, await getProvider(providerName).search(q)),
     })),
   );
   const results = settled.map((result, index) => {

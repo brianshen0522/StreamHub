@@ -158,6 +158,12 @@ providers with per-provider failure isolation and **returns 200 even when a
 provider fails**. Check the `error` field on each entry of `results`, not the
 HTTP status.
 
+Each provider's `items` arrive **already ranked** by how well the title matches
+`q` — exact, then prefix (seasons, dubbings), then substring, then partial
+overlap — with the site's own order kept among equals. Nothing is filtered out,
+because a row with no overlap may be a cast or alias match. Show them in the
+order given; re-sorting on the client undoes it.
+
 ## Media
 
 `GET /api/sources` streams **NDJSON** — one JSON object per line, written as each

@@ -2160,7 +2160,10 @@ function App() {
 
     providerNames.forEach(async (providerName) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12_000);
+      // The server gives each site 8 s per request and movieffm makes two
+      // rounds of them, so a deadline under ~17 s cut off answers that were
+      // on their way. Past this the site is not coming back.
+      const timeoutId = setTimeout(() => controller.abort(), 20_000);
       try {
         const data = await apiJson(`/api/search?${toQuery({ q: searchQuery, provider: providerName })}`, { signal: controller.signal });
         if (searchRequestIdRef.current !== requestId) return;
@@ -2173,7 +2176,9 @@ function App() {
         )));
       } catch (searchError) {
         if (searchRequestIdRef.current !== requestId) return;
-        errors.push(searchError.message);
+        // Our own deadline surfaces as a bare AbortError ("signal is aborted
+        // without reason"), which tells nobody anything.
+        errors.push(controller.signal.aborted ? t.searchTimedOut : searchError.message);
         if (isOfflineError(searchError)) diedOffline = true;
         setResults((current) => current.map((group) => (
           group.provider === providerName ? { provider: providerName, items: [] } : group

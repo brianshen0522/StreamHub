@@ -31,26 +31,8 @@ async function fetchDetailHtml(url) {
   return html;
 }
 
-export async function search777tv(keyword) {
-  const cacheKey = `777tv:search:${keyword}`;
-  const cached = caches.search.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const responseHtml = await fetchText(`${BASE_URL}${SEARCH_PATH}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      referer: `${BASE_URL}/`,
-    },
-    body: new URLSearchParams({ wd: keyword, submit: "" }).toString(),
-    timeout: SEARCH_TIMEOUT_MS,
-  });
-
+function parseSearchPage(responseHtml, results, seen) {
   const $ = cheerio.load(responseHtml);
-  const results = [];
-  const seen = new Set();
   $("li.stui-vodlist__item").each((_, element) => {
     const titleLink = $(element).find("h4.stui-vodlist__title a[href*='/vod/detail/id/']").first();
     const thumb = $(element).find("a.stui-vodlist__thumb[href*='/vod/detail/id/']").first();
@@ -73,6 +55,47 @@ export async function search777tv(keyword) {
       mediaType: normalizeMediaType($(element).find(".pic-text").text().trim() || "Unknown"),
     });
   });
+}
+
+export async function search777tv(keyword) {
+  const cacheKey = `777tv:search:${keyword}`;
+  const cached = caches.search.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // Two searches, side by side. `wd` is what the site's own box sends and
+  // matches cast and synopsis as well as titles, ordered by last update — so
+  // 「瑞克」 returns 23 pages of shows with an actor called 瑞克 and only one
+  // season of 「瑞克和莫蒂」 among the first 36. `name` matches titles only,
+  // which is what someone typing a show's name wants, so its rows come first;
+  // the `wd` page follows so a search for an actor still finds their work.
+  const [byName, byKeyword] = await Promise.allSettled([
+    fetchText(`${BASE_URL}${SEARCH_PATH}?name=${encodeURIComponent(keyword)}`, {
+      headers: { referer: `${BASE_URL}/` },
+      timeout: SEARCH_TIMEOUT_MS,
+    }),
+    fetchText(`${BASE_URL}${SEARCH_PATH}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        referer: `${BASE_URL}/`,
+      },
+      body: new URLSearchParams({ wd: keyword, submit: "" }).toString(),
+      timeout: SEARCH_TIMEOUT_MS,
+    }),
+  ]);
+  if (byName.status === "rejected" && byKeyword.status === "rejected") {
+    throw byKeyword.reason;
+  }
+
+  const results = [];
+  const seen = new Set();
+  for (const settled of [byName, byKeyword]) {
+    if (settled.status === "fulfilled") {
+      parseSearchPage(settled.value, results, seen);
+    }
+  }
 
   caches.search.set(cacheKey, results);
   return results;
