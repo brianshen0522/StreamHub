@@ -64,13 +64,17 @@ pub fn clear() {
     }
 }
 
+// An Arc signal, not RwSignal: a RwSignal belongs to whichever reactive Owner
+// is current when it is created, and this thread_local is created lazily on
+// first access — inside some component — so it was disposed with that
+// component and every later read panicked. Arc signals have no owner.
 thread_local! {
-    static SESSION: RwSignal<Option<Session>> = RwSignal::new(load());
+    static SESSION: ArcRwSignal<Option<Session>> = ArcRwSignal::new(load());
 }
 
 /// The reactive session. `None` means signed out; the router shows Login.
-pub fn signal() -> RwSignal<Option<Session>> {
-    SESSION.with(|s| *s)
+pub fn signal() -> ArcRwSignal<Option<Session>> {
+    SESSION.with(|s| s.clone())
 }
 
 pub fn current() -> Option<Session> {

@@ -35,5 +35,8 @@ pub fn realtime_url() -> String {
     } else {
         base
     };
-    format!("{ws}/api/v1/realtime")
+    // Unversioned on purpose: the /api/v1 rewrite is HTTP middleware and never
+    // sees an upgrade, so the socket only answers at /api/realtime (as the
+    // Android and iOS clients use it).
+    format!("{ws}/api/realtime")
 }

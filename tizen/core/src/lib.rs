@@ -4,7 +4,7 @@
 //! that file's tests. Change one and the others must follow (see CLAUDE.md,
 //! "Resume semantics now exist three times").
 
+pub mod entry;
 pub mod models;
 pub mod ndjson;
 pub mod resume;
-pub mod user_code;

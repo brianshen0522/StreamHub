@@ -1,6 +1,7 @@
 //! OWNED BY THE UI AGENT: login (credentials + pairing QR), home rails,
 //! search, detail, and the exit prompt.
 
+mod common;
 mod detail;
 mod exit;
 mod home;

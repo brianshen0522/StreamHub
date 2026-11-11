@@ -33,6 +33,12 @@ pub struct PlayTarget {
     pub season_url: String,
     pub title: String,
     pub poster_url: String,
+    /// "movie" / "tv" as Detail resolved it, or "" when unknown (a cast
+    /// `play`), in which case the player infers it. Stored on the progress
+    /// row, so every other client reads it back.
+    pub media_type: String,
+    /// The season's display label (movieffm hubs), "" otherwise.
+    pub season_label: String,
     /// "" for a movie.
     pub episode_label: String,
     /// Every episode label of the season in order, for next/previous. Empty for a movie.
@@ -54,16 +60,19 @@ pub enum Route {
     Player(PlayTarget),
 }
 
+// Arc for the same reason as session.rs: a lazily created RwSignal would be
+// owned, and disposed, by whichever component touched it first.
 thread_local! {
-    static STACK: RwSignal<Vec<Route>> = RwSignal::new(vec![Route::Home]);
+    static STACK: ArcRwSignal<Vec<Route>> = ArcRwSignal::new(vec![Route::Home]);
 }
 
-pub fn stack() -> RwSignal<Vec<Route>> {
-    STACK.with(|s| *s)
+pub fn stack() -> ArcRwSignal<Vec<Route>> {
+    STACK.with(|s| s.clone())
 }
 
 pub fn current() -> Memo<Route> {
-    Memo::new(move |_| stack().with(|s| s.last().cloned().unwrap_or(Route::Home)))
+    let stack = stack();
+    Memo::new(move |_| stack.with(|s| s.last().cloned().unwrap_or(Route::Home)))
 }
 
 pub fn push(route: Route) {

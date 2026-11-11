@@ -9,7 +9,8 @@ use crate::session;
 
 #[component]
 pub fn App() -> impl IntoView {
-    let signed_in = Memo::new(move |_| session::signal().with(|s| s.is_some()));
+    let session = session::signal();
+    let signed_in = Memo::new(move |_| session.with(|s| s.is_some()));
     let route = nav::current();
 
     // Signing out (or a dead refresh) drops back to Login with a clean stack.

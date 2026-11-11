@@ -4,17 +4,34 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=1920, height=1080">
   <title>StreamHub</title>
-  <link data-trunk rel="css" href="assets/styles.css">
-  <link data-trunk rel="css" href="assets/player.css">
+  <link data-trunk rel="css" href="assets/styles.css" data-integrity="none">
+  <link data-trunk rel="css" href="assets/player.css" data-integrity="none">
   <link data-trunk rel="copy-dir" href="js">
   <!-- Classic scripts, loaded before the module: Tizen's ES-module support is
        only "partial", and the player shim must exist before Rust calls it. -->
+  <!-- Samsung's product APIs (webapis.avplay, productinfo). Resolved by the
+       TV's web runtime; a desktop browser 404s it, and every caller guards on
+       `typeof webapis`. Must come before player-shim.js. -->
+  <script src="$WEBAPIS/webapis/webapis.js"></script>
+  <script src="js/boot.js"></script>
   <script src="js/tizen-keys.js"></script>
   <script src="js/player-shim.js"></script>
   <!-- The monitor (S32FM703UC, 2025, Tizen 9 / Chromium M120) has every
        post-MVP feature Rust emits by default; wasm-opt must be told so. -->
-  <link data-trunk rel="rust" data-wasm-opt="z" data-bin="streamhub-tizen"
+  <!-- no-modules + our own loader below, instead of trunk's injected
+       module script: Chromium refuses module scripts from file://
+       (their origin is "null"), which is where a packaged widget runs. -->
+  <link data-trunk rel="rust" data-wasm-opt="z" data-bin="streamhub-tizen" data-integrity="none"
+        data-bindgen-target="no-modules" data-wasm-no-import
         data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-multivalue --enable-mutable-globals">
 </head>
-<body></body>
+<body>
+  <script src="streamhub-tizen.js"></script>
+  <script>
+    wasm_bindgen({ module_or_path: "streamhub-tizen_bg.wasm" }).catch(function (error) {
+      document.body.textContent = "StreamHub failed to start: " + error;
+      console.error(error);
+    });
+  </script>
+</body>
 </html>

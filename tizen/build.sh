@@ -16,10 +16,31 @@ run() {
     -v "$repo":/src -w /src/tizen \
     streamhub-tizen-build bash -c "mkdir -p /cargo-cache && ln -sfn /cargo-cache /tmp/c; export CARGO_HOME=/cargo-cache; export RUSTUP_HOME=/usr/local/rustup; export PATH=/usr/local/cargo/bin:\$PATH; $*"
 }
+# Trunk 0.21 injects a <script type="module"> loader (and modulepreload /
+# preload links) even with data-wasm-no-import. Chromium refuses module
+# scripts from file://, where a packaged widget runs, and with the no-modules
+# bindgen target that loader is wrong anyway (no default export). index.html
+# carries its own classic loader, so the injected one is removed here.
+strip_module_loader() {
+  python3 - "$here/dist/index.html" <<'PY'
+import re, sys
+path = sys.argv[1]
+html = open(path, encoding="utf-8").read()
+# Anchored on "import init" so only trunk's loader matches: a looser pattern
+# once started inside a comment that mentioned a module script, ate its "-->"
+# and blanked the page.
+html = re.sub(r'<script type="module">\s*import init\b.*?</script>\s*', "", html, flags=re.S)
+html = re.sub(r'<link rel="(?:modulepreload|preload)"[^>]*>', "", html)
+if 'type="module"' in html:
+    sys.exit("index.html still contains a module script")
+open(path, "w", encoding="utf-8").write(html)
+PY
+}
+
 case "${1:-release}" in
   test)    run "cargo test -p streamhub-core" ;;
   check)   run "cargo check -p streamhub-tizen --target wasm32-unknown-unknown" ;;
-  dev)     run "cd app && trunk build --dist ../dist" ;;
-  release) run "cd app && trunk build --release --dist ../dist" ;;
+  dev)     run "cd app && trunk build --dist ../dist" && strip_module_loader ;;
+  release) run "cd app && trunk build --release --dist ../dist" && strip_module_loader ;;
   *) echo "unknown: $1"; exit 2 ;;
 esac

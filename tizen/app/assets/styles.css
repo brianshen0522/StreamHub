@@ -1,1 +1,396 @@
-/* OWNED BY THE UI AGENT */
+/* OWNED BY THE UI AGENT — login, home, search, detail, exit prompt.
+ *
+ * Designed at 1920×1080 (the web layer's size on the 4K panel), read from
+ * ten feet: body text ≥28px, titles ≥40px, 5% title-safe margins (96px / 54px).
+ * Focus is where the remote is: scale(1.08) + a 4px white ring + one shadow,
+ * never the brand red (red means "selected / primary"). Only transform and
+ * opacity animate, ≤150ms — the monitor's GPU is weak; no backdrop-filter, and
+ * heavy shadows only on the one focused element. Classes are tv-*; the
+ * player's are vp-*.
+ */
+
+:root {
+  --tv-bg: #0a0a0a;
+  --tv-s1: #141414;
+  --tv-s2: #1e1e1e;
+  --tv-s3: #2a2a2a;
+  --tv-accent: #e50914;
+  --tv-t1: #ffffff;
+  --tv-t2: #b4b4b4;
+  --tv-t3: #7a7a7a;
+  --tv-green: #46d369;
+  --tv-orange: #f5a623;
+  --tv-danger: #ff7070;
+  --tv-safe-x: 96px;
+  --tv-safe-y: 54px;
+  --tv-ring: 0 0 0 4px #fff, 0 12px 32px rgba(0, 0, 0, 0.6);
+  --tv-ease: 120ms ease-out;
+}
+
+html {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--tv-bg);
+  color: var(--tv-t1);
+  font-family: "SamsungOneUI", "SamsungOne", "TizenSans", "Noto Sans CJK TC", "Noto Sans TC",
+    "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: 30px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+:focus { outline: none; }
+button, input { font: inherit; color: inherit; }
+h1, h2, p { margin: 0; }
+
+.app { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+
+.tv-screen {
+  position: absolute;
+  inset: 0;
+  padding: var(--tv-safe-y) var(--tv-safe-x);
+  overflow: hidden;
+}
+
+.tv-brand { font-size: 44px; font-weight: 800; letter-spacing: 0.5px; color: var(--tv-accent); }
+.tv-brand-large { font-size: 72px; }
+.tv-muted { color: var(--tv-t2); }
+.tv-error { color: var(--tv-danger); min-height: 1.35em; }
+.tv-center { display: flex; align-items: center; justify-content: center; height: 200px; font-size: 36px; }
+.tv-empty { color: var(--tv-t2); font-size: 34px; padding: 40px var(--tv-safe-x); }
+
+/* ---------- Focus ---------- */
+
+[data-focusable] {
+  transition: transform var(--tv-ease);
+  will-change: transform;
+}
+[data-focusable].is-focused {
+  transform: scale(1.08);
+  box-shadow: var(--tv-ring);
+  z-index: 2;
+  position: relative;
+}
+[aria-disabled="true"] { opacity: 0.55; }
+
+/* ---------- Buttons & fields ---------- */
+
+.tv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 0 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--tv-s3);
+  color: var(--tv-t1);
+  font-size: 32px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tv-btn-primary { background: var(--tv-accent); }
+.tv-btn-danger { background: #5a1a1a; }
+.tv-btn-wide { width: 100%; }
+.tv-btn-chip { min-height: 64px; padding: 0 30px; font-size: 30px; border-radius: 32px; }
+.tv-btn.is-selected { background: var(--tv-accent); }
+.tv-btn.is-active { background: #3a2a10; color: var(--tv-orange); }
+
+.tv-field { display: flex; flex-direction: column; gap: 10px; }
+.tv-field-label { color: var(--tv-t2); font-size: 28px; }
+.tv-input {
+  width: 100%;
+  height: 80px;
+  padding: 0 24px;
+  border: 2px solid #444;
+  border-radius: 12px;
+  background: var(--tv-s2);
+  font-size: 34px;
+}
+.tv-input.is-focused { border-color: #fff; transform: none; box-shadow: 0 0 0 4px #fff; }
+.tv-input::placeholder { color: var(--tv-t3); }
+
+.tv-badge {
+  display: inline-block;
+  margin-left: 16px;
+  padding: 4px 14px;
+  border-radius: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.tv-badge-warn { background: var(--tv-orange); color: #111; }
+
+/* ---------- Login ---------- */
+
+.tv-login { display: flex; align-items: center; justify-content: center; }
+.tv-login-panels { display: flex; align-items: center; gap: 120px; }
+.tv-login-form { width: 640px; display: flex; flex-direction: column; gap: 28px; }
+.tv-login-form .tv-muted { font-size: 32px; margin-top: -12px; }
+
+.tv-pair {
+  width: 640px;
+  padding: 40px 48px;
+  border-radius: 24px;
+  background: var(--tv-s1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  text-align: center;
+}
+.tv-pair-title { font-size: 40px; font-weight: 700; }
+/* Fixed height, never width-derived (CLAUDE.md QR gotcha). */
+.tv-qr {
+  width: 440px;
+  height: 440px;
+  flex: 0 0 440px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 16px;
+}
+.tv-qr-code, .tv-qr-code svg { width: 420px; height: 420px; display: block; }
+.tv-qr-wait { color: #333; font-size: 30px; padding: 24px; }
+.tv-user-code {
+  font-family: "DejaVu Sans Mono", "Roboto Mono", monospace;
+  font-size: 76px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  white-space: nowrap;
+  min-height: 1.2em;
+}
+.tv-pair-hint { color: var(--tv-t2); font-size: 28px; }
+
+/* ---------- Home ---------- */
+
+.tv-home { padding: 0; }
+.tv-hero-art { position: absolute; top: 0; right: 0; width: 1200px; height: 680px; overflow: hidden; }
+.tv-hero-img { position: absolute; right: 0; top: 0; width: 1200px; height: 680px; object-fit: cover; opacity: 0.55; }
+.tv-hero-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--tv-bg) 0%, rgba(10, 10, 10, 0.6) 45%, rgba(10, 10, 10, 0) 100%),
+    linear-gradient(0deg, var(--tv-bg) 0%, rgba(10, 10, 10, 0) 40%);
+}
+
+.tv-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  height: 96px;
+  margin: var(--tv-safe-y) var(--tv-safe-x) 0;
+}
+.tv-topbar-user { color: var(--tv-t2); font-size: 30px; }
+.tv-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 24px; }
+.tv-confirm-text { font-size: 32px; color: var(--tv-t1); }
+
+.tv-hero { position: relative; height: 250px; margin: 16px var(--tv-safe-x) 0; max-width: 1100px; }
+.tv-hero-title {
+  font-size: 64px;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tv-hero-line { margin-top: 14px; font-size: 34px; color: var(--tv-t1); }
+.tv-hero-meta { margin-top: 10px; font-size: 30px; color: var(--tv-t2); }
+
+.tv-rails {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 430px;
+  bottom: 0;
+  overflow: hidden;
+  padding: 0 0 var(--tv-safe-y);
+}
+
+/* ---------- Rails & cards ---------- */
+
+.tv-rail { margin-bottom: 18px; }
+.tv-rail-title {
+  margin: 0 var(--tv-safe-x) 4px;
+  font-size: 40px;
+  font-weight: 700;
+}
+.tv-rail-note { margin-left: 16px; font-size: 28px; font-weight: 400; color: var(--tv-t3); }
+.tv-rail-track {
+  display: flex;
+  gap: 28px;
+  overflow: hidden;
+  /* Room for the focused card to grow without being clipped. */
+  padding: 22px var(--tv-safe-x) 22px;
+}
+.tv-rail-empty { color: var(--tv-t2); font-size: 30px; padding: 12px 0; }
+
+.tv-card { flex: 0 0 200px; width: 200px; border-radius: 12px; }
+.tv-card-art {
+  position: relative;
+  width: 200px;
+  height: 300px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--tv-s2);
+}
+.tv-card-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 88px;
+  font-weight: 800;
+  color: var(--tv-t3);
+}
+.tv-card-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tv-card.is-focused { box-shadow: none; }
+.tv-card.is-focused .tv-card-art { box-shadow: var(--tv-ring); }
+.tv-card.is-unavailable .tv-card-img { opacity: 0.45; }
+.tv-card .tv-badge { position: absolute; top: 10px; left: 10px; margin: 0; font-size: 24px; }
+.tv-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 2px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--tv-green);
+  font-size: 24px;
+  font-weight: 700;
+}
+.tv-card-title {
+  margin-top: 12px;
+  font-size: 28px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-card-sub {
+  font-size: 24px;
+  color: var(--tv-t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 1.35em;
+}
+.tv-progress {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+}
+.tv-progress-fill { display: block; height: 100%; background: var(--tv-accent); border-radius: 4px; }
+
+/* ---------- Search ---------- */
+
+.tv-search { padding: 0; }
+.tv-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  margin: var(--tv-safe-y) var(--tv-safe-x) 0;
+  height: 110px;
+}
+.tv-search-input { flex: 0 0 1100px; width: 1100px; }
+.tv-results { position: absolute; left: 0; right: 0; top: 190px; bottom: 0; overflow: hidden; padding-bottom: var(--tv-safe-y); }
+.tv-notice { margin: 0 var(--tv-safe-x) 16px; font-size: 32px; }
+.tv-chips { display: flex; gap: 20px; flex-wrap: nowrap; overflow: hidden; padding: 20px var(--tv-safe-x); }
+
+/* ---------- Detail ---------- */
+
+.tv-detail { padding: 0; }
+.tv-detail-top { display: flex; gap: 56px; margin: var(--tv-safe-y) var(--tv-safe-x) 0; height: 470px; }
+.tv-detail-poster {
+  position: relative;
+  flex: 0 0 300px;
+  width: 300px;
+  height: 450px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--tv-s2);
+}
+.tv-detail-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
+.tv-detail-title {
+  font-size: 60px;
+  font-weight: 800;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tv-detail-meta { font-size: 32px; color: var(--tv-t2); }
+.tv-detail-desc {
+  font-size: 28px;
+  color: var(--tv-t2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 1300px;
+}
+.tv-detail-actions { display: flex; gap: 28px; margin-top: 18px; padding: 8px 0; }
+.tv-btn-play { min-width: 300px; font-size: 36px; min-height: 88px; }
+
+.tv-rail-compact { margin-bottom: 0; }
+.tv-rail-compact .tv-rail-title { font-size: 34px; }
+.tv-rail-compact .tv-rail-track { gap: 20px; padding: 18px var(--tv-safe-x); }
+.tv-ep { position: relative; flex: 0 0 auto; min-width: 150px; min-height: 76px; padding: 0 28px; }
+.tv-ep.is-watched { color: var(--tv-t2); }
+.tv-ep-mark { color: var(--tv-green); font-weight: 800; }
+.tv-ep.is-selected .tv-ep-mark { color: #fff; }
+.tv-ep-progress {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+
+.tv-gone { display: flex; flex-direction: column; align-items: flex-start; gap: 24px; margin-top: 12px; }
+.tv-gone-title { font-size: 48px; font-weight: 800; color: var(--tv-orange); }
+
+/* ---------- Exit prompt ---------- */
+
+.tv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.78);
+}
+.tv-modal {
+  width: 820px;
+  padding: 64px 72px;
+  border-radius: 24px;
+  background: var(--tv-s2);
+  text-align: center;
+}
+.tv-modal-title { font-size: 52px; font-weight: 800; margin-bottom: 48px; }
+.tv-modal-actions { display: flex; gap: 32px; justify-content: center; }
+.tv-modal-actions .tv-btn { min-width: 240px; }

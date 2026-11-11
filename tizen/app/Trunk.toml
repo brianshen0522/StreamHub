@@ -1,0 +1,8 @@
+[build]
+# A packaged widget loads from file://…/res/wgt/, so every URL trunk writes
+# must be relative; root-absolute "/x.js" resolves to the filesystem root.
+public_url = "./"
+# Stable names, so index.html can load the module with a classic <script>
+# (see the loader there). The package is replaced whole on every install, so
+# cache-busting hashes buy nothing.
+filehash = false
