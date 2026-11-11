@@ -93,6 +93,18 @@ button { cursor: pointer; }
 
 .tv-brand { font-size: 40px; font-weight: 800; letter-spacing: -0.5px; color: var(--accent); }
 .tv-brand-large { font-size: 64px; line-height: 1.05; }
+/* The web app's mark (frontend/public/favicon.svg) ahead of the wordmark.
+   Sized in em so it follows .tv-brand-large too. */
+.tv-brand::before,
+.tv-login-brand::before {
+  content: "";
+  display: inline-block;
+  width: 1.15em;
+  height: 1.15em;
+  margin: -0.12em 0.3em 0 0;
+  vertical-align: middle;
+  background: url(img/logo.svg) center / contain no-repeat;
+}
 .tv-error { color: var(--danger); font-size: 24px; min-height: 1.3em; }
 .tv-num { font-variant-numeric: tabular-nums; }
 .tv-empty { padding: 8px var(--safe-x); font-size: 28px; color: var(--text-2); }
