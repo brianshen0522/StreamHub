@@ -3,9 +3,13 @@
 //! may be overridden at run time by `localStorage["streamhub.apiBase"]`, which
 //! is how the QA harness points a build at a local server.
 
+// An empty value counts as unset: build.sh always forwards the variable into
+// its container, so an unset one arrives as "" — and an empty base made every
+// request relative, i.e. file:///api/… inside a packaged widget, which no test
+// noticed because the harness overrides the base at run time.
 const COMPILED_BASE: &str = match option_env!("STREAMHUB_API_BASE") {
-    Some(base) => base,
-    None => "https://streamhub.gugulu.tw",
+    Some(base) if !base.is_empty() => base,
+    _ => "https://streamhub.gugulu.tw",
 };
 
 pub fn api_base() -> String {

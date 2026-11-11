@@ -16,14 +16,15 @@
   <script src="js/boot.js"></script>
   <script src="js/tizen-keys.js"></script>
   <script src="js/player-shim.js"></script>
-  <!-- The monitor (S32FM703UC, 2025, Tizen 9 / Chromium M120) has every
-       post-MVP feature Rust emits by default; wasm-opt must be told so. -->
+  <!-- Must match build.sh's wasm32 target features: the oldest supported set
+       is Chromium 85 (LS32BM703UC, 2022, Tizen 6.5), which has no
+       reference-types or multivalue. -->
   <!-- no-modules + our own loader below, instead of trunk's injected
        module script: Chromium refuses module scripts from file://
        (their origin is "null"), which is where a packaged widget runs. -->
   <link data-trunk rel="rust" data-wasm-opt="z" data-bin="streamhub-tizen" data-integrity="none"
         data-bindgen-target="no-modules" data-wasm-no-import
-        data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-multivalue --enable-mutable-globals">
+        data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals">
 </head>
 <body>
   <script src="streamhub-tizen.js"></script>

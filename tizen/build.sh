@@ -37,10 +37,19 @@ open(path, "w", encoding="utf-8").write(html)
 PY
 }
 
+# The Wasm the app ships must load on Chromium 85 (2022 sets, Tizen 6.5): no
+# reference-types (Chrome 96), and no multivalue to stay clear of ABI changes.
+# What M85 does have — sign-ext, bulk-memory, saturating float-to-int,
+# mutable globals — stays on, because std otherwise pulls in slow polyfills.
+# std must be rebuilt with the same features (it ships compiled for stable's
+# defaults), hence the pinned nightly and build-std. Host builds (proc-macros,
+# `cargo test`) are untouched: the flags are scoped to the wasm32 target.
+wasm_env='export RUSTUP_TOOLCHAIN=$STREAMHUB_NIGHTLY CARGO_UNSTABLE_BUILD_STD=std,panic_abort CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-cpu=mvp -C target-feature=+sign-ext,+bulk-memory,+nontrapping-fptoint,+mutable-globals";'
+
 case "${1:-release}" in
   test)    run "cargo test -p streamhub-core" ;;
-  check)   run "cargo check -p streamhub-tizen --target wasm32-unknown-unknown" ;;
-  dev)     run "cd app && trunk build --dist ../dist" && strip_module_loader ;;
-  release) run "cd app && trunk build --release --dist ../dist" && strip_module_loader ;;
+  check)   run "$wasm_env cargo check -p streamhub-tizen --target wasm32-unknown-unknown" ;;
+  dev)     run "$wasm_env cd app && trunk build --dist ../dist" && strip_module_loader ;;
+  release) run "$wasm_env cd app && trunk build --release --dist ../dist" && strip_module_loader ;;
   *) echo "unknown: $1"; exit 2 ;;
 esac

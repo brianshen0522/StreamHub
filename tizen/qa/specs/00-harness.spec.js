@@ -14,8 +14,12 @@ test("harness: server, credentials, dist and CORS are usable", async ({ qaApi, r
   const index = await request.get(`${APP_URL}/`);
   expect(index.ok()).toBeTruthy();
   const html = await index.text();
-  const wasm = html.match(/['"]([^'"]+_bg\.wasm)['"]/)?.[1];
-  expect(wasm, "dist/index.html references a .wasm").toBeTruthy();
+  // The loader lives in js/start.js (the widget CSP forbids inline scripts),
+  // so the .wasm is named there, not in index.html.
+  expect(html, "index.html loads the start script").toContain('src="js/start.js"');
+  const start = await (await request.get(`${APP_URL}/js/start.js`)).text();
+  const wasm = start.match(/['"]([^'"]+_bg\.wasm)['"]/)?.[1];
+  expect(wasm, "js/start.js references a .wasm").toBeTruthy();
   const w = await request.get(new URL(wasm, APP_URL).toString());
   expect(w.headers()["content-type"]).toBe("application/wasm");
 
