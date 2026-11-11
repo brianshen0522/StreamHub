@@ -6,7 +6,7 @@
 //! - Elements sharing `data-focus-group="<name>"` form a rail/grid that
 //!   remembers its last focused child: entering the group returns there.
 //! - The focused element gets the `is-focused` class and real DOM focus
-//!   (text inputs need it for the IME), and is scrolled into view.
+//!   (text inputs need it for the IME), and is brought into view (below).
 //! - `set_screen_handler` lets a screen take keys first (the Player does,
 //!   for seek/play-pause); returning true consumes the key.
 //! - Back: screen handler first, then close the exit prompt if it is open,
@@ -21,6 +21,17 @@
 //! - `data-autofocus` marks where focus goes when nothing valid is focused.
 //! - `data-focus-scope` marks a modal: while one is in the DOM, focus is kept
 //!   inside the last one, and returns to where it was once it closes.
+//! - Bringing into view is by transform, not scrolling (DESIGN.md "Rails"):
+//!   inside `[data-rail-track]` the track is moved by translateX so the
+//!   focused element sits at the track's `data-rail-start` x (default 96, the
+//!   left safe edge), clamped so the rail's end stays put; inside
+//!   `[data-row-column]` the column is moved by translateY so the focused
+//!   `[data-row]`'s top sits at `data-row-anchor` (px within the column,
+//!   default 0; rows already above it never move down). Rows get
+//!   `is-current` / `is-past`, the column `has-focus`; a column that loses
+//!   focus returns to rest. Tracks and columns carry a CSS transition, so a
+//!   new target mid-flight restarts from where it is rather than queueing.
+//!   Anything outside both falls back to `scrollIntoView` (nearest, instant).
 //! - Text inputs: Left/Right move the caret (they leave the field only from
 //!   its first/last position), Up/Down leave it, Backspace edits, Enter
 //!   submits the enclosing `<form>` (a `submit` event is dispatched on it).
@@ -196,8 +207,125 @@ fn scroll_into_view(el: &Element) {
     el.scroll_into_view_with_scroll_into_view_options(&opts);
 }
 
+fn num_attr(el: &Element, name: &str, default: f64) -> f64 {
+    el.get_attribute(name).and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+}
+
+/// `el`'s offset (left, top) inside `ancestor`, by walking offsetParent.
+/// Transforms don't count, which is what makes this stable mid-animation.
+fn offset_within(el: &HtmlElement, ancestor: &Element) -> (f64, f64) {
+    let (mut x, mut y) = (0.0, 0.0);
+    let mut cur = Some(el.clone());
+    while let Some(e) = cur {
+        if e.unchecked_ref::<Element>() == ancestor {
+            break;
+        }
+        x += e.offset_left() as f64;
+        y += e.offset_top() as f64;
+        cur = e.offset_parent().and_then(|p| p.dyn_into::<HtmlElement>().ok());
+    }
+    (x, y)
+}
+
+fn set_transform(el: &Element, value: &str) {
+    if let Some(h) = el.dyn_ref::<HtmlElement>() {
+        let _ = h.style().set_property("transform", value);
+    }
+}
+
+/// Slide the rail track so `el` lands in the focus column.
+fn reveal_in_track(el: &HtmlElement, track: &Element) {
+    let Some(track_h) = track.dyn_ref::<HtmlElement>() else { return };
+    let start = num_attr(track, "data-rail-start", 96.0);
+    let (left, _) = offset_within(el, track);
+    let viewport = track.parent_element().map(|p| p.client_width() as f64).unwrap_or(1920.0);
+    let max_shift = (track_h.offset_width() as f64 - viewport).max(0.0);
+    let shift = (left - start).clamp(0.0, max_shift);
+    set_transform(track, &format!("translate3d({}px,0,0)", -shift.round()));
+}
+
+/// Slide the column so the focused row's top sits on the anchor line.
+fn reveal_in_column(el: &Element, column: &Element) {
+    let Some(row) = el.closest("[data-row]").ok().flatten() else { return };
+    let Some(row_h) = row.dyn_ref::<HtmlElement>() else { return };
+    let anchor = num_attr(column, "data-row-anchor", 0.0);
+    let (_, top) = offset_within(row_h, column);
+    let shift = (anchor - top).min(0.0);
+    set_transform(column, &format!("translate3d(0,{}px,0)", shift.round()));
+    let _ = column.class_list().add_1("has-focus");
+    let root: JsValue = column.clone().into();
+    let mut past = true;
+    for r in query_all(&root, "[data-row]") {
+        if r.parent_element().and_then(|p| p.closest("[data-row-column]").ok().flatten()).as_ref() != Some(column) {
+            continue;
+        }
+        let is_current = r == row;
+        if is_current {
+            past = false;
+        }
+        let _ = r.class_list().toggle_with_force("is-current", is_current);
+        let _ = r.class_list().toggle_with_force("is-past", past && !is_current);
+    }
+}
+
+fn rest_column(column: &Element) {
+    set_transform(column, "translate3d(0,0,0)");
+    let _ = column.class_list().remove_1("has-focus");
+    let root: JsValue = column.clone().into();
+    for r in query_all(&root, "[data-row]") {
+        let _ = r.class_list().remove_2("is-current", "is-past");
+    }
+}
+
+/// Bring `el` into view: rail track and row column by transform, anything
+/// else by an instant scroll.
+fn reveal(el: &Element) {
+    let mut handled = false;
+    if let (Ok(Some(track)), Some(h)) = (el.closest("[data-rail-track]"), el.dyn_ref::<HtmlElement>()) {
+        reveal_in_track(h, &track);
+        handled = true;
+    }
+    let column = el.closest("[data-row-column]").ok().flatten();
+    if let Some(doc) = document() {
+        for other in query_all(&doc, "[data-row-column].has-focus") {
+            if Some(&other) != column.as_ref() {
+                rest_column(&other);
+            }
+        }
+    }
+    if let Some(column) = &column {
+        reveal_in_column(el, column);
+        handled = true;
+    }
+    if !handled && el.closest("[data-no-scroll]").ok().flatten().is_none() {
+        scroll_into_view(el);
+    }
+}
+
 /// Move focus to `el`: class, DOM focus, scroll, and the memories.
 pub fn focus_element(el: &Element) {
+    focus_element_with(el, true);
+}
+
+/// Record `el` as where this navigation entry was left.
+fn remember_route(el: &Element) {
+    // Inside a modal, the screen's memory is left alone.
+    if el.closest("[data-focus-scope]").ok().flatten().is_some() {
+        return;
+    }
+    if let Some(id) = el.get_attribute("data-focus-id") {
+        let (depth, key) = route_key();
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            prune_deeper(&mut s.routes, depth);
+            s.routes.insert(key, id);
+        });
+    }
+}
+
+/// `remember` is false for the watchdog's fallbacks: landing somewhere by
+/// default (before a screen's data arrived) is not a choice worth restoring.
+fn focus_element_with(el: &Element, remember: bool) {
     let previous = STATE.with(|s| s.borrow().focused.clone());
     if let Some(prev) = &previous {
         if prev != el {
@@ -219,18 +347,12 @@ pub fn focus_element(el: &Element) {
         if let Some(g) = group_of(el) {
             s.groups.insert(g, el.clone());
         }
-        // Inside a modal, the screen's memory is left alone.
-        let in_scope = el.closest("[data-focus-scope]").ok().flatten().is_some();
-        if !in_scope {
-            if let Some(id) = el.get_attribute("data-focus-id") {
-                let (depth, key) = route_key();
-                prune_deeper(&mut s.routes, depth);
-                s.routes.insert(key, id);
-            }
-        }
     });
+    if remember {
+        remember_route(el);
+    }
     dom_focus(el);
-    scroll_into_view(el);
+    reveal(el);
 }
 
 /// Focus the first element matching a CSS selector (e.g. "[data-autofocus]").
@@ -494,8 +616,13 @@ pub fn ensure_valid() {
             if restore() {
                 return;
             }
-            if !focus_selector("[data-autofocus]") {
-                focus_selector(FOCUSABLE);
+            let Some(doc) = document() else { return };
+            let pick = query_all(&doc, "[data-autofocus]")
+                .into_iter()
+                .find(is_usable)
+                .or_else(|| query_all(&doc, FOCUSABLE).into_iter().find(is_usable));
+            if let Some(el) = pick {
+                focus_element_with(&el, false);
             }
         }
     }
@@ -612,7 +739,11 @@ fn on_keydown(event: KeyboardEvent) {
         Key::Enter => {
             event.prevent_default();
             match focused().filter(is_usable) {
-                Some(el) => click(&el),
+                Some(el) => {
+                    // Pressing OK is a choice even where focus only landed by default.
+                    remember_route(&el);
+                    click(&el)
+                }
                 None => ensure_valid(),
             }
         }

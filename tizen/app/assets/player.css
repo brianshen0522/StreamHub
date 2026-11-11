@@ -1,12 +1,56 @@
 /* OWNED BY THE PLAYER AGENT — the player screen. Classes are vp-*.
  *
- * Designed at 1920×1080 (the web layer's size even on a 4K panel), read from
- * ten feet: nothing under 28px. The video is a plane *under* the page (AVPlay)
- * or a fixed <video> at z-index 0 (desktop), so while playing the page itself
- * must be transparent — `vp-playing` on <body> does that.
- * Only transform/opacity animate, and the bar is toggled by a class rather
- * than re-rendered.
+ * DESIGN.md "Player": video is everything. Chrome is a bottom gradient with
+ * the title above a scrubber; pills only after Up; buffering is a thin line
+ * on the bar; up-next is a card from the right with a countdown ring.
+ *
+ * Rules held here (the M7's GPU is weak):
+ * - only transform and opacity animate — the fill scales, the thumb and the
+ *   seek pill translate; nothing transitions width/left/height;
+ * - no blur, no backdrop-filter: depth is gradients and pre-dimmed layers;
+ * - updates arrive at most once a second (data-position), so transitions on
+ *   the scrubber are short and never queue.
+ *
+ * Tokens mirror DESIGN.md with local fallbacks, so this sheet does not depend
+ * on styles.css having loaded its :root first.
+ *
+ * Layout is 1920×1080 (the web layer's size even on a 4K panel). AVPlay draws
+ * on a plane *under* the page, so while playing the page is transparent —
+ * `vp-playing` on <body> does that.
  */
+
+.vp-root {
+  --vp-bg: var(--bg, #08090c);
+  --vp-surface: var(--surface, #15171c);
+  --vp-surface-2: var(--surface-2, #1f222a);
+  --vp-text: var(--text, #f5f5f7);
+  --vp-text-2: var(--text-2, rgba(245, 245, 247, 0.68));
+  --vp-text-3: var(--text-3, rgba(245, 245, 247, 0.44));
+  --vp-accent: var(--accent, #e5383b);
+  --vp-focus: var(--focus, #ffffff);
+  --vp-ease: var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+  --vp-ease-io: var(--ease-in-out, cubic-bezier(0.45, 0, 0.2, 1));
+  --vp-t-fast: var(--t-fast, 140ms);
+  --vp-t: var(--t, 240ms);
+  --vp-t-slow: var(--t-slow, 420ms);
+  --vp-safe-x: 96px;
+  --vp-safe-y: 64px;
+  --vp-font: "SamsungOneUI", "TizenSans", "Noto Sans CJK TC", "Noto Sans TC", "PingFang TC", sans-serif;
+
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  /* clip, not hidden: focus.rs scrolls the focused pill into view, and a
+     hidden-overflow box can still be scrolled programmatically. */
+  overflow: hidden;
+  overflow: clip;
+  color: var(--vp-text);
+  font-family: var(--vp-font);
+  font-size: 28px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.vp-root button { pointer-events: auto; }
 
 html:has(body.vp-playing),
 body.vp-playing,
@@ -16,198 +60,407 @@ body.vp-playing .screen {
   background-image: none !important;
 }
 
-.vp-root {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  overflow: hidden;
-  color: #fff;
-  font-size: 30px;
-  line-height: 1.3;
-  pointer-events: none;
-}
-.vp-root button { pointer-events: auto; }
-
-/* ── loading / notice ───────────────────────────────────────────────── */
-.vp-center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
-}
-.vp-spinner {
-  width: 88px;
-  height: 88px;
-  border-radius: 50%;
-  border: 8px solid rgba(255, 255, 255, 0.25);
-  border-top-color: #fff;
-  animation: vp-spin 0.9s linear infinite;
-  will-change: transform;
-}
-@keyframes vp-spin { to { transform: rotate(360deg); } }
-.vp-notice { font-size: 32px; }
-
-/* ── controlled-by badge ────────────────────────────────────────────── */
-.vp-driver {
-  position: absolute;
-  top: 48px;
-  right: 80px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 28px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.72);
-  font-size: 28px;
-}
-.vp-driver-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4fc3f7;
-  animation: vp-pulse 1.4s ease-in-out infinite alternate;
-}
-@keyframes vp-pulse { from { opacity: 1; } to { opacity: 0.35; } }
-
-/* ── up next ────────────────────────────────────────────────────────── */
-.vp-upnext {
-  position: absolute;
-  right: 80px;
-  bottom: 300px;
-  padding: 28px 40px;
-  border-radius: 20px;
-  background: rgba(0, 0, 0, 0.82);
-  border: 3px solid rgba(255, 255, 255, 0.85);
-  max-width: 900px;
-}
-.vp-upnext-title { font-size: 44px; font-weight: 700; margin-bottom: 8px; }
-.vp-upnext-hint { font-size: 28px; color: rgba(255, 255, 255, 0.8); }
-
-/* ── bottom bar ─────────────────────────────────────────────────────── */
-.vp-bar {
+/* ── chrome: gradient + head + scrubber + times ─────────────────────── */
+.vp-chrome {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 120px 80px 56px; /* overscan-safe sides */
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.6) 65%, rgba(0, 0, 0, 0) 100%);
+  padding: 300px var(--vp-safe-x) var(--vp-safe-y);
+  /* The scrim is the chrome's own background, so it fades with it. */
+  background: linear-gradient(
+    to top,
+    rgba(8, 9, 12, 0.94) 0%,
+    rgba(8, 9, 12, 0.78) 30%,
+    rgba(8, 9, 12, 0.38) 62%,
+    rgba(8, 9, 12, 0) 100%
+  );
   opacity: 0;
-  transform: translateY(24px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: translateY(20px);
+  transition: opacity var(--vp-t) var(--vp-ease), transform var(--vp-t) var(--vp-ease);
 }
-.vp-bar.vp-show { opacity: 1; transform: none; }
+.vp-chrome.vp-show { opacity: 1; transform: none; }
 
-.vp-meta { margin-bottom: 20px; }
+.vp-head { margin-bottom: 28px; max-width: 1300px; }
+.vp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 6px 20px 6px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--vp-text);
+  animation: vp-fade-in var(--vp-t) var(--vp-ease);
+}
+.vp-status::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vp-text);
+  animation: vp-pulse 1.1s var(--vp-ease-io) infinite alternate;
+}
+.vp-kicker {
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--vp-text-2);
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
 .vp-title {
-  font-size: 48px;
+  font-size: 44px;
+  line-height: 1.15;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.vp-sub { font-size: 30px; color: rgba(255, 255, 255, 0.75); margin-top: 4px; }
 
-.vp-progress {
-  position: relative;
-  height: 10px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.28);
-}
-.vp-progress-fill {
+/* Scrubber: a 10px track drawn at 6px (scaleY .6) that opens to full height
+   while seeking. The fill is scaleX of a full-width layer; the thumb and the
+   seek pill ride a full-width rail moved by translateX(%) of its own width. */
+.vp-scrub { position: relative; height: 34px; }
+.vp-track {
   position: absolute;
   left: 0;
+  right: 0;
+  top: 12px;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.22);
+  transform: scaleY(0.6);
+  transition: transform var(--vp-t) var(--vp-ease);
+}
+.vp-seeking .vp-track { transform: scaleY(1); }
+.vp-track-fill,
+.vp-track-target {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+}
+.vp-track-target { z-index: 1; background: rgba(255, 255, 255, 0.5); }
+.vp-track-fill {
+  z-index: 2;
+  background: var(--vp-accent);
+  transition: transform var(--vp-t) linear;
+}
+.vp-track-busy {
+  position: absolute;
+  z-index: 3;
   top: 0;
   bottom: 0;
-  border-radius: 5px;
-  background: #4fc3f7;
+  left: 0;
+  width: 26%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0));
+  animation: vp-indeterminate 1.25s var(--vp-ease-io) infinite;
+  will-change: transform;
 }
-.vp-progress-target {
+.vp-rail {
   position: absolute;
-  top: -10px;
-  width: 6px;
-  height: 30px;
-  margin-left: -3px;
-  border-radius: 3px;
-  background: #fff;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 34px;
+  transition: transform var(--vp-t) var(--vp-ease);
 }
-
-.vp-row {
-  display: flex;
-  align-items: center;
-  gap: 32px;
-  margin-top: 18px;
+.vp-thumb {
+  position: absolute;
+  left: -11px;
+  top: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--vp-focus);
+  transform: scale(0.64);
+  transition: transform var(--vp-t) var(--vp-ease);
 }
-.vp-time { font-size: 32px; font-variant-numeric: tabular-nums; }
-.vp-seek-target {
-  font-size: 32px;
-  font-weight: 700;
-  color: #4fc3f7;
-  font-variant-numeric: tabular-nums;
-}
-.vp-hints { margin-left: auto; font-size: 28px; color: rgba(255, 255, 255, 0.75); }
-.vp-key {
-  display: inline-block;
-  margin: 0 10px 0 26px;
-  padding: 2px 12px;
-  border: 2px solid rgba(255, 255, 255, 0.6);
-  border-radius: 8px;
-  font-size: 24px;
-  color: #fff;
-}
-
-/* ── buttons ────────────────────────────────────────────────────────── */
-.vp-buttons { display: flex; gap: 24px; margin-top: 28px; }
-.vp-btn {
-  min-width: 160px;
-  padding: 16px 36px;
-  border: 3px solid transparent;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
-  font: inherit;
+.vp-seeking .vp-thumb { transform: scale(1); }
+.vp-no-duration .vp-thumb { opacity: 0; }
+.vp-seek-pill {
+  position: absolute;
+  left: 0;
+  bottom: 44px;
+  transform: translateX(-50%);
+  padding: 6px 22px;
+  border-radius: 999px;
+  background: var(--vp-focus);
+  color: var(--vp-bg);
   font-size: 30px;
-  cursor: pointer;
-  transition: transform 0.12s ease;
+  line-height: 1.3;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  animation: vp-pill-in var(--vp-t-fast) var(--vp-ease);
 }
-.vp-btn.is-focused,
-.vp-btn:focus {
-  outline: none;
-  background: #fff;
-  color: #000;
-  border-color: #fff;
-  transform: scale(1.06);
-}
-.vp-btn.vp-primary { background: rgba(79, 195, 247, 0.35); }
-.vp-btn.vp-primary.is-focused,
-.vp-btn.vp-primary:focus { background: #fff; }
-.vp-btn.is-current { border-color: #4fc3f7; }
-
-/* ── panels: error, sources ─────────────────────────────────────────── */
-.vp-panel {
+/* The pill's tail, pointing at the thumb. */
+.vp-seek-pill::after {
+  content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  min-width: 720px;
-  max-width: 1200px;
-  padding: 48px 64px;
-  border-radius: 24px;
-  background: rgba(16, 16, 20, 0.94);
-  text-align: center;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  background: var(--vp-focus);
+  transform: rotate(45deg);
+  border-radius: 2px;
 }
-.vp-panel-title { font-size: 44px; font-weight: 700; margin-bottom: 16px; }
-.vp-panel-msg { font-size: 28px; color: rgba(255, 255, 255, 0.7); margin-bottom: 36px; word-break: break-all; }
-.vp-panel-actions { display: flex; justify-content: center; gap: 28px; }
+
+.vp-times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.vp-time { color: var(--vp-text); }
+.vp-remaining { color: var(--vp-text-2); }
+
+/* ── control pills (only after Up) ──────────────────────────────────── */
+.vp-buttons {
+  display: flex;
+  gap: 20px;
+  margin-top: 36px;
+  animation: vp-rise-in var(--vp-t) var(--vp-ease);
+}
+.vp-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 72px;
+  padding: 0 34px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--vp-surface-2);
+  color: var(--vp-text);
+  font: inherit;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transform: scale(1);
+  transition: transform var(--vp-t-fast) var(--vp-ease);
+}
+.vp-pill.vp-primary { background: var(--vp-accent); }
+/* Focus never relies on colour alone: white fill, near-black text, larger. */
+.vp-pill.is-focused,
+.vp-pill:focus-visible {
+  background: var(--vp-focus);
+  color: var(--vp-bg);
+  transform: scale(1.06);
+}
+.vp-ico { width: 30px; height: 30px; fill: currentColor; flex: none; }
+
+/* ── paused glyph ───────────────────────────────────────────────────── */
+.vp-paused {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 136px;
+  height: 136px;
+  margin: -68px 0 0 -68px;
+  border-radius: 50%;
+  background: rgba(8, 9, 12, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: vp-pop-in var(--vp-t) var(--vp-ease);
+}
+.vp-paused svg { width: 64px; height: 64px; fill: var(--vp-text); }
+
+/* ── controlled-by badge ────────────────────────────────────────────── */
+.vp-driver {
+  position: absolute;
+  top: var(--vp-safe-y);
+  right: var(--vp-safe-x);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 26px 10px 20px;
+  border-radius: 999px;
+  background: rgba(21, 23, 28, 0.86);
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 500;
+  animation: vp-fade-in var(--vp-t) var(--vp-ease);
+}
+.vp-driver-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--vp-accent);
+  animation: vp-pulse 1.4s var(--vp-ease-io) infinite alternate;
+}
+
+/* ── up next ────────────────────────────────────────────────────────── */
+.vp-upnext {
+  position: absolute;
+  right: var(--vp-safe-x);
+  bottom: 300px;
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  width: 640px;
+  padding: 28px 40px 28px 28px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #23262f 0%, #15171c 100%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  animation: vp-slide-in var(--vp-t-slow) var(--vp-ease);
+}
+.vp-ring { width: 112px; height: 112px; flex: none; }
+.vp-ring-bg,
+.vp-ring-fg { fill: none; stroke-width: 6; }
+.vp-ring-bg { stroke: rgba(255, 255, 255, 0.16); }
+.vp-ring-fg {
+  stroke: var(--vp-focus);
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 40px 40px;
+  /* One step a second; linear so the ring drains continuously. */
+  transition: stroke-dashoffset 1s linear;
+}
+.vp-ring-num {
+  fill: var(--vp-text);
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.vp-upnext-body { min-width: 0; }
+.vp-upnext-kicker {
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--vp-text-3);
+}
+.vp-upnext-title {
+  font-size: 36px;
+  line-height: 1.2;
+  font-weight: 700;
+  margin: 4px 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vp-upnext-hint { font-size: 22px; line-height: 1.3; color: var(--vp-text-2); }
+.vp-key {
+  display: inline-block;
+  margin: 0 8px 0 0;
+  padding: 1px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--vp-text);
+  font-size: 20px;
+  font-weight: 600;
+}
+.vp-key ~ .vp-key { margin-left: 22px; }
+
+/* ── modals: error, source picker ───────────────────────────────────── */
+.vp-modal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  animation: vp-fade-in var(--vp-t) var(--vp-ease);
+}
+.vp-panel {
+  min-width: 760px;
+  max-width: 1000px;
+  padding: 56px 64px 60px;
+  border-radius: 20px;
+  background: linear-gradient(160deg, #1f222a 0%, #15171c 70%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  animation: vp-rise-in var(--vp-t-slow) var(--vp-ease);
+}
+.vp-panel-icon {
+  width: 84px;
+  height: 84px;
+  margin: 0 auto 24px;
+  border-radius: 50%;
+  border: 4px solid var(--vp-accent);
+  color: var(--vp-accent);
+  font-size: 48px;
+  line-height: 76px;
+  font-weight: 800;
+}
+.vp-panel-title { font-size: 44px; line-height: 1.15; font-weight: 700; }
+.vp-panel-msg { margin-top: 14px; font-size: 28px; color: var(--vp-text-2); }
+.vp-panel-code {
+  margin-top: 10px;
+  font-size: 20px;
+  color: var(--vp-text-3);
+  font-family: ui-monospace, "Noto Sans Mono", monospace;
+  word-break: break-all;
+}
+.vp-panel-actions { display: flex; justify-content: center; gap: 24px; margin-top: 44px; }
+.vp-panel-actions .vp-pill { min-width: 200px; }
+
+.vp-sources { text-align: left; min-width: 820px; }
 .vp-source-list {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-height: 640px;
+  /* Room for the focused pill's scale, which overflow would otherwise cut. */
+  margin: 28px -28px 0;
+  padding: 8px 28px;
+  max-height: 616px;
   overflow: hidden;
+  overflow: clip;
 }
-.vp-source { text-align: left; }
+.vp-source {
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 32px 0 36px;
+  transform-origin: 50% 50%;
+}
+.vp-source.is-focused,
+.vp-source:focus-visible { transform: scale(1.03); }
+.vp-source-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--vp-text-2);
+}
+.vp-source-now::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vp-accent);
+}
+.vp-source.is-focused .vp-source-now,
+.vp-source:focus-visible .vp-source-now { color: rgba(8, 9, 12, 0.7); }
+
+/* ── motion ─────────────────────────────────────────────────────────── */
+@keyframes vp-fade-in { from { opacity: 0; } }
+@keyframes vp-rise-in { from { opacity: 0; transform: translateY(24px); } }
+@keyframes vp-slide-in { from { opacity: 0; transform: translateX(80px); } }
+@keyframes vp-pop-in { from { opacity: 0; transform: scale(0.85); } }
+@keyframes vp-pill-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
+@keyframes vp-pulse { from { opacity: 1; } to { opacity: 0.3; } }
+@keyframes vp-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(385%); }
+}

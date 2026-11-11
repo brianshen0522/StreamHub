@@ -192,6 +192,10 @@ pub fn LoginScreen() -> impl IntoView {
     let renew_click = renew.clone();
     view! {
         <div class="tv-screen tv-login" data-screen="login">
+            <div class="tv-blobs" aria-hidden="true">
+                <div class="tv-blob tv-blob-a"></div>
+                <div class="tv-blob tv-blob-b"></div>
+            </div>
             <div class="tv-login-panels">
                 <form
                     class="tv-login-form"
@@ -202,7 +206,7 @@ pub fn LoginScreen() -> impl IntoView {
                     }
                 >
                     <h1 class="tv-brand tv-brand-large">"StreamHub"</h1>
-                    <p class="tv-muted">"使用觀眾帳號登入"</p>
+                    <p class="tv-login-lede">"或用觀眾帳號與密碼登入"</p>
                     <label class="tv-field">
                         <span class="tv-field-label">"帳號"</span>
                         <input
@@ -261,7 +265,6 @@ pub fn LoginScreen() -> impl IntoView {
                         }
                     }
                 >
-                    <h2 class="tv-pair-title">"用手機登入"</h2>
                     <div class="tv-qr">
                         {move || match pairing.get() {
                             Some(p) if !p.qr_svg.is_empty() => {
@@ -275,20 +278,26 @@ pub fn LoginScreen() -> impl IntoView {
                             .into_any(),
                         }}
                     </div>
-                    // Shown exactly as the server formats it; `nowrap` in CSS keeps
-                    // the two halves from wrapping apart.
-                    <div class="tv-user-code" data-user-code="">
-                        {move || pairing.get().map(|p| p.user_code).unwrap_or_default()}
+                    <div class="tv-pair-body">
+                        <p class="tv-eyebrow">"不用打字"</p>
+                        <h2 class="tv-pair-title">"用手機登入"</h2>
+                        <p class="tv-pair-step">"用手機相機掃描 QR 碼"</p>
+                        <p class="tv-pair-step">
+                            {move || {
+                                pairing
+                                    .get()
+                                    .map(|p| format!("或在 {} 輸入代碼", p.verification_url))
+                                    .unwrap_or_else(|| "或在手機上輸入這組代碼".into())
+                            }}
+                        </p>
+                        // Shown exactly as the server formats it; `nowrap` in
+                        // CSS keeps the two halves from wrapping apart.
+                        <div class="tv-user-code" data-user-code="">
+                            {move || pairing.get().map(|p| p.user_code).unwrap_or_default()}
+                        </div>
+                        <p class="tv-pair-hint">"在手機上核准後，這台電視就會登入。"</p>
+                        {move || pair_message.get().filter(|_| pairing.get().is_some()).map(|m| view! { <p class="tv-error">{m}</p> })}
                     </div>
-                    <div class="tv-pair-hint">
-                        {move || {
-                            pairing
-                                .get()
-                                .map(|p| format!("掃描 QR 碼，或前往 {} 輸入代碼", p.verification_url))
-                                .unwrap_or_default()
-                        }}
-                    </div>
-                    {move || pair_message.get().filter(|_| pairing.get().is_some()).map(|m| view! { <p class="tv-error">{m}</p> })}
                 </div>
             </div>
         </div>

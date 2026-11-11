@@ -19,7 +19,7 @@ use streamhub_core::resume::{progress_key, progress_map, resume_position_seconds
 use crate::api;
 use crate::focus;
 use crate::nav::{self, DetailTarget, PlayTarget, Route};
-use crate::screens::common::{array, clock, media_type, opt, s, unavailable_label, Load};
+use crate::screens::common::{array, clock, media_type, opt, s, unavailable_label, Heart, Load};
 use crate::screens::search;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -387,19 +387,24 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
     let gone_title = target.title.clone();
     let poster_src = move || api::poster_url(&st.poster.get());
 
-    let meta = move || {
-        let mut parts = vec![target.provider.clone()];
+    let provider_label = target.provider.clone();
+    let chips = move || {
+        let mut parts = vec![provider_label.clone()];
         parts.push(match st.kind.get() {
             Kind::Movie => "電影".into(),
             Kind::Series => "影集".into(),
         });
+        if st.kind.get() == Kind::Series {
+            if let Load::Ready(e) = st.episodes.get() {
+                if !e.is_empty() {
+                    parts.push(format!("{} 集", e.len()));
+                }
+            }
+        }
         if let Some(season) = st.season.get().filter(|s| !s.label.is_empty()) {
             parts.push(season.label);
         }
-        if let Some(ep) = st.episode.get() {
-            parts.push(ep);
-        }
-        parts.join(" · ")
+        parts.into_iter().map(|p| view! { <span class="tv-chip-plain">{p}</span> }).collect_view()
     };
 
     let play_label = move || {
@@ -413,9 +418,9 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
         let ep = st.episode.get();
         let _ = st.progress.get();
         let pos = st.position_for(ep.as_deref());
-        let ep_text = ep.map(|e| format!(" {e}")).unwrap_or_default();
+        let ep_text = ep.map(|e| format!(" · {e}")).unwrap_or_default();
         if pos > 0.0 {
-            format!("繼續播放{ep_text}（{}）", clock(pos))
+            format!("繼續播放{ep_text} · {}", clock(pos))
         } else {
             format!("播放{ep_text}")
         }
@@ -426,13 +431,13 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
     };
 
     let body = move || match st.phase.get() {
-        Phase::Loading => view! { <div class="tv-center tv-muted">"載入中…"</div> }.into_any(),
+        Phase::Loading => view! { <div class="tv-detail-loading"><span class="tv-loading-bar"></span></div> }.into_any(),
         Phase::Gone => {
             let title = gone_title.clone();
             view! {
                 <div class="tv-gone">
                     <h2 class="tv-gone-title">"已下架"</h2>
-                    <p class="tv-muted">"這個來源已經不再提供這部片。到其他來源搜尋看看？"</p>
+                    <p class="tv-gone-text">"這個來源已經不再提供這部片。到其他來源搜尋看看？"</p>
                     <button
                         class="tv-btn tv-btn-primary"
                         data-focusable=""
@@ -469,20 +474,22 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
         Phase::Ready => ().into_any(),
     };
 
+    let is_fav = Signal::derive(move || !st.favorites.get().is_empty());
+
     view! {
         <div class="tv-screen tv-detail" data-screen="detail">
-            <div class="tv-detail-top">
-                <div class="tv-detail-poster">
-                    <div class="tv-card-fallback">{move || st.title.get().chars().next().map(String::from).unwrap_or_default()}</div>
-                    {move || {
-                        let src = poster_src();
-                        (!src.is_empty()).then(|| view! { <img class="tv-card-img" src=src alt=""/> })
-                    }}
-                </div>
-                <div class="tv-detail-info">
+            <div class="tv-backdrop tv-backdrop-detail" aria-hidden="true">
+                {move || {
+                    let src = poster_src();
+                    (!src.is_empty()).then(|| view! { <img class="tv-backdrop-img is-shown" src=src alt=""/> })
+                }}
+                <div class="tv-scrim"></div>
+            </div>
+            <div class="tv-detail-col" data-row-column="" data-row-anchor="720">
+                <section class="tv-detail-info" data-row="">
                     <h1 class="tv-detail-title">{move || st.title.get()}</h1>
-                    <p class="tv-detail-meta">
-                        {meta}
+                    <p class="tv-detail-chips">
+                        {chips}
                         {badge.map(|b| view! { <span class="tv-badge tv-badge-warn">{b}</span> })}
                     </p>
                     {move || {
@@ -504,7 +511,8 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                     }
                                 }
                             >
-                                {play_label}
+                                <svg class="tv-icon tv-icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>
+                                <span class="tv-num">{play_label}</span>
                             </button>
                             <Show when=can_restart>
                                 <button
@@ -514,115 +522,133 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                     data-focus-id="detail-restart"
                                     on:click=move |_| play(st, &tv.get_value(), st.episode.get_untracked(), true)
                                 >
+                                    <svg class="tv-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg>
                                     "從頭播放"
                                 </button>
                             </Show>
                             <button
                                 class="tv-btn"
-                                class:is-active=move || !st.favorites.get().is_empty()
+                                class:is-active=move || is_fav.get()
                                 data-focusable=""
                                 data-action="favorite"
                                 data-focus-id="detail-favorite"
                                 on:click=move |_| toggle_favorite(st, tv.get_value())
                             >
-                                {move || if st.favorites.get().is_empty() { "加入收藏" } else { "已收藏 ✓" }}
+                                <Heart filled=is_fav/>
+                                {move || if is_fav.get() { "已收藏" } else { "加入收藏" }}
                             </button>
                         </div>
                         <p class="tv-error">{move || st.fav_error.get().unwrap_or_default()}</p>
                     </Show>
-                </div>
-            </div>
-
-            <Show when=move || { st.seasons.get().len() > 1 }>
-                <section class="tv-rail tv-rail-compact">
-                    <h2 class="tv-rail-title">"季"</h2>
-                    <div class="tv-rail-track" data-focus-group="detail-seasons">
-                        {move || {
-                            let current = st.season.get().map(|s| s.url);
-                            st.seasons
-                                .get()
-                                .into_iter()
-                                .map(|season| {
-                                    let selected = current.as_deref() == Some(season.url.as_str());
-                                    let label = if season.label.is_empty() { "季".to_string() } else { season.label.clone() };
-                                    let id = format!("season:{}", season.url);
-                                    view! {
-                                        <button
-                                            class="tv-btn tv-btn-chip"
-                                            class:is-selected=selected
-                                            data-focusable=""
-                                            data-focus-id=id
-                                            on:click=move |_| {
-                                                if st.season.get_untracked().map(|s| s.url) != Some(season.url.clone()) {
-                                                    spawn_local(open_season(st, tv.get_value(), season.clone(), false));
-                                                }
-                                            }
-                                        >
-                                            {label}
-                                        </button>
-                                    }
-                                })
-                                .collect_view()
-                        }}
-                    </div>
                 </section>
-            </Show>
 
-            <Show when=move || st.phase.get() == Phase::Ready && st.kind.get() == Kind::Series>
-                <section class="tv-rail tv-rail-compact">
-                    <h2 class="tv-rail-title">
-                        "集數"
-                        {move || match st.episodes.get() {
-                            Load::Ready(e) => Some(view! { <span class="tv-rail-note">{e.len().to_string()}</span> }),
-                            _ => None,
-                        }}
-                    </h2>
-                    <div class="tv-rail-track tv-episodes" data-focus-group="detail-episodes">
-                        {
-                            move || match st.episodes.get() {
-                                Load::Loading => view! { <div class="tv-rail-empty">"載入中…"</div> }.into_any(),
-                                Load::Failed(e) => view! { <div class="tv-rail-empty tv-error">{e}</div> }.into_any(),
-                                Load::Ready(eps) => {
-                                    let current = st.episode.get();
-                                    let season = st.season_key();
-                                    let progress = st.progress.get();
-                                    eps.into_iter()
-                                        .map(|ep| {
-                                            let p = progress.get(&progress_key(season.as_deref(), Some(&ep)));
-                                            let done = p.is_some_and(|p| p.is_completed);
-                                            let pct = p.filter(|p| !p.is_completed).map(|p| p.progress_percent).unwrap_or(0.0);
-                                            let selected = current.as_deref() == Some(ep.as_str());
-                                            let id = format!("ep:{ep}");
-                                            let label = ep.clone();
+                <Show when=move || { st.seasons.get().len() > 1 }>
+                    <section class="tv-row tv-row-compact" data-row="">
+                        <h2 class="tv-row-title">"季"</h2>
+                        <div class="tv-rail">
+                            <div class="tv-track tv-segmented" data-rail-track="" data-focus-group="detail-seasons">
+                                {move || {
+                                    let current = st.season.get().map(|s| s.url);
+                                    st.seasons
+                                        .get()
+                                        .into_iter()
+                                        .map(|season| {
+                                            let selected = current.as_deref() == Some(season.url.as_str());
+                                            let label = if season.label.is_empty() { "季".to_string() } else { season.label.clone() };
+                                            let id = format!("season:{}", season.url);
                                             view! {
                                                 <button
-                                                    class="tv-btn tv-ep"
+                                                    class="tv-btn tv-btn-seg"
                                                     class:is-selected=selected
-                                                    class:is-watched=done
                                                     data-focusable=""
                                                     data-focus-id=id
                                                     on:click=move |_| {
-                                                        st.episode.set(Some(ep.clone()));
-                                                        play(st, &tv.get_value(), Some(ep.clone()), false);
+                                                        if st.season.get_untracked().map(|s| s.url) != Some(season.url.clone()) {
+                                                            spawn_local(open_season(st, tv.get_value(), season.clone(), false));
+                                                        }
                                                     }
                                                 >
-                                                    <span class="tv-ep-label">{label}</span>
-                                                    {done.then(|| view! { <span class="tv-ep-mark">"✓"</span> })}
-                                                    {(pct > 0.0).then(|| {
-                                                        let w = format!("width:{:.0}%", pct.clamp(4.0, 100.0));
-                                                        view! { <span class="tv-ep-progress"><span class="tv-progress-fill" style=w></span></span> }
-                                                    })}
+                                                    {label}
                                                 </button>
                                             }
                                         })
                                         .collect_view()
-                                        .into_any()
-                                }
-                            }
-                        }
-                    </div>
-                </section>
-            </Show>
+                                }}
+                            </div>
+                        </div>
+                    </section>
+                </Show>
+
+                <Show when=move || st.phase.get() == Phase::Ready && st.kind.get() == Kind::Series>
+                    <section class="tv-row tv-row-compact" data-row="">
+                        <h2 class="tv-row-title">
+                            "集數"
+                            {move || match st.episodes.get() {
+                                Load::Ready(e) => Some(view! { <span class="tv-row-note">{e.len().to_string()}</span> }),
+                                _ => None,
+                            }}
+                        </h2>
+                        <div class="tv-rail">
+                            <div class="tv-track tv-episodes" data-rail-track="" data-focus-group="detail-episodes">
+                                {move || match st.episodes.get() {
+                                    Load::Loading => view! {
+                                        {(0..7).map(|_| view! { <div class="tv-ep tv-skeleton" aria-hidden="true"></div> }).collect_view()}
+                                    }
+                                    .into_any(),
+                                    Load::Failed(e) => view! { <div class="tv-row-caption is-error">{e}</div> }.into_any(),
+                                    Load::Ready(eps) => {
+                                        let current = st.episode.get();
+                                        let season = st.season_key();
+                                        let progress = st.progress.get();
+                                        eps.into_iter()
+                                            .map(|ep| {
+                                                let p = progress.get(&progress_key(season.as_deref(), Some(&ep)));
+                                                let done = p.is_some_and(|p| p.is_completed);
+                                                let partial = p.filter(|p| !p.is_completed && p.progress_percent > 0.0);
+                                                let pct = partial.map(|p| p.progress_percent).unwrap_or(0.0);
+                                                let caption = if done {
+                                                    "已看完".to_string()
+                                                } else if let Some(p) = partial {
+                                                    format!("看到 {}", clock(p.position_seconds))
+                                                } else {
+                                                    "未觀看".to_string()
+                                                };
+                                                let selected = current.as_deref() == Some(ep.as_str());
+                                                let id = format!("ep:{ep}");
+                                                let label = ep.clone();
+                                                view! {
+                                                    <button
+                                                        class="tv-ep"
+                                                        class:is-selected=selected
+                                                        class:is-watched=done
+                                                        data-focusable=""
+                                                        data-focus-id=id
+                                                        on:click=move |_| {
+                                                            st.episode.set(Some(ep.clone()));
+                                                            play(st, &tv.get_value(), Some(ep.clone()), false);
+                                                        }
+                                                    >
+                                                        <span class="tv-ep-label">{label}</span>
+                                                        <span class="tv-ep-caption tv-num">{caption}</span>
+                                                        {done.then(|| view! {
+                                                            <svg class="tv-ep-check" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                                                        })}
+                                                        {(pct > 0.0).then(|| {
+                                                            let w = format!("transform:scaleX({:.3})", (pct / 100.0).clamp(0.03, 1.0));
+                                                            view! { <span class="tv-ep-progress"><span class="tv-ep-progress-fill" style=w></span></span> }
+                                                        })}
+                                                    </button>
+                                                }
+                                            })
+                                            .collect_view()
+                                            .into_any()
+                                    }
+                                }}
+                            </div>
+                        </div>
+                    </section>
+                </Show>
+            </div>
         </div>
     }
 }

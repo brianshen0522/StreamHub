@@ -1144,11 +1144,15 @@ pub fn PlayerScreen(target: PlayTarget) -> impl IntoView {
             f(&c);
         }
     };
-    let pct = |num: u64, den: u64| {
-        if den == 0 { "0%".to_string() } else { format!("{:.2}%", (num.min(den) as f64 / den as f64) * 100.0) }
-    };
+    // Fractions, not widths: the fill scales and the thumb translates, so a
+    // tick never lays anything out (DESIGN.md: transform/opacity only).
+    let frac = |num: u64, den: u64| if den == 0 { 0.0 } else { (num.min(den) as f64 / den as f64).clamp(0.0, 1.0) };
     let paused = move || ui.status.get() == "paused";
-    let subtitle = move || {
+    let seeking = move || ui.seek_preview.get().is_some();
+    let busy = move || (ui.buffering.get() || ui.notice.get().is_some()) && ui.fatal.get().is_none();
+    let shown = move || ui.osd.get() || ui.controls.get() || busy() || paused();
+    let shown_pos = move || ui.seek_preview.get().unwrap_or_else(|| ui.pos_s.get());
+    let kicker = move || {
         let label = ui.source_label.get();
         match (episode.is_empty(), label.is_empty()) {
             (false, false) => format!("{episode} · {label}"),
@@ -1168,13 +1172,6 @@ pub fn PlayerScreen(target: PlayTarget) -> impl IntoView {
             data-backend=move || ui.backend.get()
             data-source=move || ui.current_source.get().map(|i| i.to_string()).unwrap_or_default()
         >
-            <Show when=move || (ui.buffering.get() || ui.notice.get().is_some()) && ui.fatal.get().is_none()>
-                <div class="vp-center" data-overlay="loading">
-                    <div class="vp-spinner"></div>
-                    <div class="vp-notice">{move || ui.notice.get().unwrap_or_else(|| "載入中…".into())}</div>
-                </div>
-            </Show>
-
             <Show when=move || ui.driver.get().is_some()>
                 <div class="vp-driver" data-overlay="driver">
                     <span class="vp-driver-dot"></span>
@@ -1182,104 +1179,165 @@ pub fn PlayerScreen(target: PlayTarget) -> impl IntoView {
                 </div>
             </Show>
 
-            <Show when=move || ui.up_next.get().is_some()>
-                <div class="vp-upnext" data-overlay="up-next">
-                    <div class="vp-upnext-title">{move || ui.up_next.get().map(|u| u.0).unwrap_or_default()}</div>
-                    <div class="vp-upnext-hint">
-                        {move || format!("{} 秒後自動播放", ui.up_next.get().map(|u| u.1).unwrap_or(0))}
-                        <span class="vp-key">"OK"</span>"立即播放"
-                        <span class="vp-key">"返回"</span>"取消"
-                    </div>
+            <Show when=move || paused() && ui.fatal.get().is_none() && !ui.picker.get()>
+                <div class="vp-paused" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
                 </div>
             </Show>
 
-            <div class="vp-bar" class:vp-show=move || ui.osd.get() || ui.controls.get()>
-                <div class="vp-meta">
+            <div class="vp-chrome" class:vp-show=shown class:vp-seeking=seeking class:vp-has-controls=move || ui.controls.get() class:vp-no-duration=move || ui.dur_s.get() == 0>
+                <div class="vp-head">
+                    <Show when=busy>
+                        <div class="vp-status" data-overlay="loading">
+                            {move || ui.notice.get().unwrap_or_else(|| "載入中…".into())}
+                        </div>
+                    </Show>
+                    <div class="vp-kicker">{kicker}</div>
                     <div class="vp-title">{title}</div>
-                    <div class="vp-sub">{subtitle}</div>
                 </div>
-                <div class="vp-progress">
-                    <div class="vp-progress-fill" style:width=move || pct(ui.pos_s.get(), ui.dur_s.get())></div>
-                    <Show when=move || ui.seek_preview.get().is_some()>
-                        <div
-                            class="vp-progress-target"
-                            style:left=move || pct(ui.seek_preview.get().unwrap_or(0), ui.dur_s.get())
-                        ></div>
-                    </Show>
+
+                <div class="vp-scrub">
+                    <div class="vp-track">
+                        <div class="vp-track-fill"
+                            style:transform=move || format!("scaleX({:.5})", frac(ui.pos_s.get(), ui.dur_s.get()))></div>
+                        <Show when=seeking>
+                            <div class="vp-track-target"
+                                style:transform=move || format!("scaleX({:.5})", frac(shown_pos(), ui.dur_s.get()))></div>
+                        </Show>
+                        <Show when=move || ui.buffering.get() && ui.fatal.get().is_none()>
+                            <div class="vp-track-busy" data-role="buffering"></div>
+                        </Show>
+                    </div>
+                    <div class="vp-rail"
+                        style:transform=move || format!("translateX({:.3}%)", frac(shown_pos(), ui.dur_s.get()) * 100.0)>
+                        <div class="vp-thumb"></div>
+                        <Show when=seeking>
+                            <div class="vp-seek-pill" data-role="seek-target">
+                                {move || media::format_time(ui.seek_preview.get().unwrap_or(0))}
+                            </div>
+                        </Show>
+                    </div>
                 </div>
-                <div class="vp-row">
-                    <span class="vp-time" data-role="time">
-                        {move || format!("{} / {}", media::format_time(ui.pos_s.get()), media::format_time(ui.dur_s.get()))}
+
+                <div class="vp-times">
+                    <span class="vp-time" data-role="time">{move || media::format_time(ui.pos_s.get())}</span>
+                    <span class="vp-time vp-remaining" data-role="remaining">
+                        {move || {
+                            let d = ui.dur_s.get();
+                            if d == 0 { "--:--".to_string() } else { format!("−{}", media::format_time(d.saturating_sub(ui.pos_s.get()))) }
+                        }}
                     </span>
-                    <Show when=move || ui.seek_preview.get().is_some()>
-                        <span class="vp-seek-target" data-role="seek-target">
-                            {move || format!("→ {}", media::format_time(ui.seek_preview.get().unwrap_or(0)))}
-                        </span>
-                    </Show>
-                    <span class="vp-hints">
-                        <span class="vp-key">"OK"</span>{move || if paused() { "播放" } else { "暫停" }}
-                        <span class="vp-key">"◀ ▶"</span>"10 秒"
-                        <span class="vp-key">"▲"</span>"選單"
-                        <span class="vp-key">"返回"</span>"離開"
-                    </span>
                 </div>
+
                 <Show when=move || ui.controls.get()>
                     <div class="vp-buttons">
-                        <button class="vp-btn" data-focusable="" data-focus-group="vp-controls" data-vp-default=""
+                        <button class="vp-pill" data-focusable="" data-focus-group="vp-controls" data-vp-default=""
                             data-action="toggle" on:click=act(Ctl::toggle)>
-                            {move || if paused() { "播放" } else { "暫停" }}
+                            <Show when=paused
+                                fallback=|| view! { <svg class="vp-ico" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg> }>
+                                <svg class="vp-ico" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                            </Show>
+                            <span>{move || if paused() { "播放" } else { "暫停" }}</span>
                         </button>
-                        <button class="vp-btn" data-focusable="" data-focus-group="vp-controls"
-                            data-action="back10" on:click=act(|c| c.nudge(-SEEK_STEP_MS))>"−10 秒"</button>
-                        <button class="vp-btn" data-focusable="" data-focus-group="vp-controls"
-                            data-action="fwd10" on:click=act(|c| c.nudge(SEEK_STEP_MS))>"+10 秒"</button>
+                        <button class="vp-pill" data-focusable="" data-focus-group="vp-controls"
+                            data-action="back10" on:click=act(|c| c.nudge(-SEEK_STEP_MS))>
+                            <svg class="vp-ico" viewBox="0 0 24 24"><path d="M11 6V2L5 7l6 5V8a6 6 0 1 1-6 6H3a8 8 0 1 0 8-8z"/></svg>
+                            <span>"10 秒"</span>
+                        </button>
+                        <button class="vp-pill" data-focusable="" data-focus-group="vp-controls"
+                            data-action="fwd10" on:click=act(|c| c.nudge(SEEK_STEP_MS))>
+                            <svg class="vp-ico" viewBox="0 0 24 24"><path d="M13 6V2l6 5-6 5V8a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/></svg>
+                            <span>"10 秒"</span>
+                        </button>
                         <Show when=move || ui.has_next.get()>
-                            <button class="vp-btn" data-focusable="" data-focus-group="vp-controls"
-                                data-action="next-episode" on:click=act(Ctl::go_next)>"下一集"</button>
+                            <button class="vp-pill" data-focusable="" data-focus-group="vp-controls"
+                                data-action="next-episode" on:click=act(Ctl::go_next)>
+                                <svg class="vp-ico" viewBox="0 0 24 24"><path d="M6 5v14l9-7zM16 5h2.5v14H16z"/></svg>
+                                <span>"下一集"</span>
+                            </button>
                         </Show>
-                        <button class="vp-btn" data-focusable="" data-focus-group="vp-controls"
-                            data-action="sources" on:click=act(Ctl::open_picker)>"片源"</button>
+                        <button class="vp-pill" data-focusable="" data-focus-group="vp-controls"
+                            data-action="sources" on:click=act(Ctl::open_picker)>
+                            <svg class="vp-ico" viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
+                            <span>"片源"</span>
+                        </button>
                     </div>
                 </Show>
             </div>
 
+            <Show when=move || ui.up_next.get().is_some()>
+                <div class="vp-upnext" data-overlay="up-next">
+                    <svg class="vp-ring" viewBox="0 0 80 80" aria-hidden="true">
+                        <circle class="vp-ring-bg" cx="40" cy="40" r=RING_R></circle>
+                        <circle class="vp-ring-fg" cx="40" cy="40" r=RING_R
+                            stroke-dasharray=format!("{RING_C:.2}")
+                            style:stroke-dashoffset=move || {
+                                let left = ui.up_next.get().map(|u| u.1).unwrap_or(0) as f64;
+                                format!("{:.2}", RING_C * (1.0 - (left / resume::UP_NEXT_LEAD_SECONDS).clamp(0.0, 1.0)))
+                            }></circle>
+                        <text class="vp-ring-num" x="40" y="40">{move || ui.up_next.get().map(|u| u.1).unwrap_or(0).to_string()}</text>
+                    </svg>
+                    <div class="vp-upnext-body">
+                        <div class="vp-upnext-kicker">"即將播放"</div>
+                        <div class="vp-upnext-title">{move || ui.up_next.get().map(|u| u.0).unwrap_or_default()}</div>
+                        <div class="vp-upnext-hint">
+                            <span class="vp-key">"OK"</span>"立即播放"
+                            <span class="vp-key">"返回"</span>"取消"
+                        </div>
+                    </div>
+                </div>
+            </Show>
+
             <Show when=move || ui.picker.get()>
-                <div class="vp-panel vp-sources" data-overlay="sources">
-                    <div class="vp-panel-title">"片源"</div>
-                    <div class="vp-source-list">
-                        {move || {
-                            ui.sources
-                                .get()
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, label)| {
-                                    view! {
-                                        <button class="vp-btn vp-source" data-focusable="" data-focus-group="vp-sources"
-                                            data-action="source" data-index=i.to_string()
-                                            class:is-current=move || ui.current_source.get() == Some(i)
-                                            on:click=move |_| { if let Some(c) = active(id) { c.select_source(i) } }>
-                                            {label}
-                                        </button>
-                                    }
-                                })
-                                .collect_view()
-                        }}
+                <div class="vp-modal">
+                    <div class="vp-panel vp-sources" data-overlay="sources">
+                        <div class="vp-panel-title">"選擇片源"</div>
+                        <div class="vp-panel-msg">"切換後會從目前位置繼續播放"</div>
+                        <div class="vp-source-list">
+                            {move || {
+                                ui.sources
+                                    .get()
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, label)| {
+                                        view! {
+                                            <button class="vp-pill vp-source" data-focusable="" data-focus-group="vp-sources"
+                                                data-action="source" data-index=i.to_string()
+                                                class:is-current=move || ui.current_source.get() == Some(i)
+                                                on:click=move |_| { if let Some(c) = active(id) { c.select_source(i) } }>
+                                                <span class="vp-source-label">{label}</span>
+                                                <Show when=move || ui.current_source.get() == Some(i)>
+                                                    <span class="vp-source-now">"播放中"</span>
+                                                </Show>
+                                            </button>
+                                        }
+                                    })
+                                    .collect_view()
+                            }}
+                        </div>
                     </div>
                 </div>
             </Show>
 
             <Show when=move || ui.fatal.get().is_some()>
-                <div class="vp-panel" data-overlay="error">
-                    <div class="vp-panel-title">"無法播放"</div>
-                    <div class="vp-panel-msg">{move || ui.fatal.get().unwrap_or_default()}</div>
-                    <div class="vp-panel-actions">
-                        <button class="vp-btn vp-primary" data-focusable="" data-focus-group="vp-error"
-                            data-action="retry" on:click=act(Ctl::retry)>"重試"</button>
-                        <button class="vp-btn" data-focusable="" data-focus-group="vp-error"
-                            data-action="back" on:click=act(Ctl::leave)>"返回"</button>
+                <div class="vp-modal">
+                    <div class="vp-panel" data-overlay="error">
+                        <div class="vp-panel-icon" aria-hidden="true">"!"</div>
+                        <div class="vp-panel-title">"無法播放"</div>
+                        <div class="vp-panel-msg">"這一集目前沒有可用的片源。可以重試，或返回改看其他集數。"</div>
+                        <div class="vp-panel-code">{move || ui.fatal.get().unwrap_or_default()}</div>
+                        <div class="vp-panel-actions">
+                            <button class="vp-pill vp-primary" data-focusable="" data-focus-group="vp-error"
+                                data-action="retry" on:click=act(Ctl::retry)>"重試"</button>
+                            <button class="vp-pill" data-focusable="" data-focus-group="vp-error"
+                                data-action="back" on:click=act(Ctl::leave)>"返回"</button>
+                        </div>
                     </div>
                 </div>
             </Show>
         </div>
     }
 }
+
+const RING_R: f64 = 34.0;
+const RING_C: f64 = 2.0 * std::f64::consts::PI * RING_R;

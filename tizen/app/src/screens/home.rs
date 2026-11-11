@@ -1,6 +1,11 @@
 //! Home: what you were watching, what you saved, what you watched. Rows, not a
 //! grid — left/right stays inside one idea, up/down changes it (android/tv
 //! home/HomeScreen.kt). Search and sign-out sit above the rails.
+//!
+//! Look (tizen/DESIGN.md "Home"): a full-bleed backdrop of the focused item,
+//! two <img> layers cross-fading after a 200 ms debounce; the hero text over
+//! it; the rows column moved by focus.rs so the focused row sits on a fixed
+//! line; the top bar slides away while the remote is in the rows.
 
 use std::sync::atomic::Ordering;
 
@@ -12,7 +17,7 @@ use crate::api;
 use crate::focus::{self, KeyHandler};
 use crate::keys::Key;
 use crate::nav::{self, DetailTarget, Route};
-use crate::screens::common::{array, num, opt, s, unavailable_label, CardData, Load, PosterCard, Rail};
+use crate::screens::common::{array, num, opt, s, unavailable_label, CardData, Load, PosterCard, Rail, Skeletons};
 use crate::session;
 
 const HISTORY_LIMIT: usize = 40;
@@ -24,6 +29,8 @@ struct Hero {
     meta: String,
     poster: String,
     badge: Option<String>,
+    /// 0–100 for a continue item's bar.
+    progress: Option<f64>,
 }
 
 /// Where a library row opens. Only history pins its season and episode; a
@@ -139,6 +146,7 @@ fn hero_of(card: &CardData, row: &Value) -> Hero {
         meta,
         poster: card.poster.clone(),
         badge: card.badge.clone(),
+        progress: card.progress.filter(|p| *p > 0.0),
     }
 }
 
@@ -154,16 +162,11 @@ fn LibraryRail(
     move || match rows.get() {
         Load::Loading => view! {
             <Rail title=title group=group>
-                <div class="tv-rail-empty">"載入中…"</div>
+                <Skeletons count=8/>
             </Rail>
         }
         .into_any(),
-        Load::Failed(e) => view! {
-            <Rail title=title group=group>
-                <div class="tv-rail-empty tv-error">{e}</div>
-            </Rail>
-        }
-        .into_any(),
+        Load::Failed(e) => view! { <Rail title=title group=group caption=e error=true>{()}</Rail> }.into_any(),
         Load::Ready(list) if list.is_empty() => ().into_any(),
         Load::Ready(list) => {
             let count = list.len().to_string();
@@ -198,6 +201,65 @@ async fn load_rows(path: &str, key: &str) -> Load<Vec<Value>> {
     }
 }
 
+/// Wait this long after the last focus change before swapping the backdrop,
+/// so scrubbing along a rail doesn't decode a poster per card.
+const BACKDROP_DEBOUNCE_MS: u32 = 200;
+
+/// Two stacked <img> layers; the back one takes the new picture and fades in
+/// over the front once it has loaded. Never more than two images in the DOM.
+#[component]
+pub fn Backdrop(#[prop(into)] poster: Signal<String>, alive: RwSignal<bool>) -> impl IntoView {
+    let layers = RwSignal::new([String::new(), String::new()]);
+    let front = RwSignal::new(0usize);
+    let generation = StoredValue::new(0u64);
+    Effect::new(move |_| {
+        let raw = poster.get();
+        let url = api::poster_url(&raw);
+        generation.update_value(|g| *g += 1);
+        let mine = generation.get_value();
+        gloo_timers::callback::Timeout::new(BACKDROP_DEBOUNCE_MS, move || {
+            if alive.try_get_untracked() != Some(true) || generation.try_get_value() != Some(mine) {
+                return;
+            }
+            let shown = front.get_untracked();
+            if layers.with_untracked(|l| l[shown] == url) {
+                return;
+            }
+            let back = 1 - shown;
+            if url.is_empty() {
+                layers.update(|l| l[back].clear());
+                front.set(back);
+            } else {
+                // Flipped by the image's load event, so it never fades in empty.
+                layers.update(|l| l[back] = url);
+            }
+        })
+        .forget();
+    });
+    let layer = move |i: usize| {
+        view! {
+            <img
+                class="tv-backdrop-img"
+                class:is-shown=move || front.get() == i && layers.with(|l| !l[i].is_empty())
+                src=move || layers.with(|l| l[i].clone())
+                alt=""
+                on:load=move |_| {
+                    if layers.with_untracked(|l| !l[i].is_empty()) {
+                        front.set(i);
+                    }
+                }
+            />
+        }
+    };
+    view! {
+        <div class="tv-backdrop" aria-hidden="true">
+            {layer(0)}
+            {layer(1)}
+            <div class="tv-scrim"></div>
+        </div>
+    }
+}
+
 #[component]
 pub fn HomeScreen() -> impl IntoView {
     let cont = RwSignal::new(Load::<Vec<Value>>::Loading);
@@ -205,6 +267,8 @@ pub fn HomeScreen() -> impl IntoView {
     let hist = RwSignal::new(Load::<Vec<Value>>::Loading);
     let hero = RwSignal::new(None::<Hero>);
     let confirming = RwSignal::new(false);
+    // True while the remote is in the rows: the top bar steps aside.
+    let browsing = RwSignal::new(false);
     let alive = RwSignal::new(true);
     on_cleanup(move || alive.set(false));
 
@@ -218,6 +282,18 @@ pub fn HomeScreen() -> impl IntoView {
             if alive.try_get_untracked() != Some(true) {
                 return;
             }
+            // The hero starts on what is most likely wanted: the first thing
+            // to continue, else the first favourite.
+            if hero.get_untracked().is_none() {
+                let first = match (&c, &f) {
+                    (Load::Ready(cs), _) if !cs.is_empty() => Some((continue_card(&cs[0]), cs[0].clone())),
+                    (_, Load::Ready(fs)) if !fs.is_empty() => Some((favorite_card(&fs[0]), fs[0].clone())),
+                    _ => None,
+                };
+                if let Some((card, row)) = first {
+                    hero.set(Some(hero_of(&card, &row)));
+                }
+            }
             cont.set(c);
             favs.set(f);
             hist.set(match h {
@@ -230,7 +306,7 @@ pub fn HomeScreen() -> impl IntoView {
                 if !focus::restore() {
                     let untouched = focus::focused().is_none() || focus::focused_matches("[data-action=search]");
                     if untouched {
-                        focus::focus_selector(".tv-rail [data-focusable]");
+                        focus::focus_selector(".tv-rows [data-focusable]");
                     }
                 }
             })
@@ -277,19 +353,12 @@ pub fn HomeScreen() -> impl IntoView {
     let all_empty = move || {
         [cont, favs, hist].iter().all(|r| matches!(r.get(), Load::Ready(ref v) if v.is_empty()))
     };
+    let backdrop = Signal::derive(move || hero.with(|h| h.as_ref().map(|h| h.poster.clone()).unwrap_or_default()));
 
     view! {
-        <div class="tv-screen tv-home" data-screen="home">
-            <div class="tv-hero-art">
-                {move || {
-                    hero.get()
-                        .map(|h| api::poster_url(&h.poster))
-                        .filter(|u| !u.is_empty())
-                        .map(|u| view! { <img class="tv-hero-img" src=u alt=""/> })
-                }}
-                <div class="tv-hero-shade"></div>
-            </div>
-            <header class="tv-topbar">
+        <div class="tv-screen tv-home" class:is-browsing=move || browsing.get() data-screen="home">
+            <Backdrop poster=backdrop alive=alive/>
+            <header class="tv-topbar" on:focusin=move |_| browsing.set(false)>
                 <span class="tv-brand">"StreamHub"</span>
                 <span class="tv-topbar-user">{name}</span>
                 <div class="tv-topbar-actions">
@@ -301,76 +370,90 @@ pub fn HomeScreen() -> impl IntoView {
                         data-focus-id="home-search"
                         on:click=move |_| nav::push(Route::Search)
                     >
+                        <svg class="tv-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="10.5" cy="10.5" r="6.5"/>
+                            <path d="m20 20-4.6-4.6"/>
+                        </svg>
                         "搜尋"
                     </button>
-                    <Show
-                        when=move || confirming.get()
-                        fallback=move || view! {
-                            <button
-                                class="tv-btn"
-                                data-focusable=""
-                                data-action="signout"
-                                data-focus-id="home-signout"
-                                on:click=move |_| {
-                                    confirming.set(true);
-                                    focus::focus_later("[data-action=signout-cancel]");
-                                }
-                            >
-                                "登出"
-                            </button>
+                    <button
+                        class="tv-btn"
+                        data-focusable=""
+                        data-action="signout"
+                        data-focus-id="home-signout"
+                        on:click=move |_| {
+                            confirming.set(true);
+                            focus::focus_later("[data-action=signout-cancel]");
                         }
                     >
-                        <span class="tv-confirm-text">"要登出這台電視嗎？"</span>
-                        // Focus lands on staying signed in: a reflexive second
-                        // OK cancels rather than signs out.
-                        <button
-                            class="tv-btn"
-                            data-focusable=""
-                            data-action="signout-cancel"
-                            on:click=move |_| {
-                                confirming.set(false);
-                                focus::focus_later("[data-action=signout]");
-                            }
-                        >
-                            "取消"
-                        </button>
-                        <button
-                            class="tv-btn tv-btn-danger"
-                            data-focusable=""
-                            data-action="signout-confirm"
-                            on:click=move |_| sign_out()
-                        >
-                            "登出"
-                        </button>
-                    </Show>
+                        "登出"
+                    </button>
                 </div>
             </header>
             <div class="tv-hero">
                 {move || match hero.get() {
                     Some(h) => view! {
                         <h1 class="tv-hero-title">{h.title}</h1>
-                        <p class="tv-hero-line">{h.line}</p>
                         <p class="tv-hero-meta">
-                            {h.meta}
+                            {(!h.line.is_empty()).then(|| view! { <span class="tv-hero-line">{h.line.clone()}</span> })}
+                            {(!h.meta.is_empty()).then(|| view! { <span class="tv-chip-plain">{h.meta.clone()}</span> })}
                             {h.badge.map(|b| view! { <span class="tv-badge tv-badge-warn">{b}</span> })}
                         </p>
+                        {h.progress.map(|p| {
+                            let w = format!("transform:scaleX({:.3})", (p / 100.0).clamp(0.02, 1.0));
+                            view! { <div class="tv-hero-progress"><div class="tv-hero-progress-fill" style=w></div></div> }
+                        })}
                     }
                     .into_any(),
                     None => view! {
                         <h1 class="tv-hero-title">"歡迎回來"</h1>
-                        <p class="tv-hero-line">"選一部繼續看，或按「搜尋」找新片。"</p>
+                        <p class="tv-hero-meta"><span class="tv-hero-line">"選一部繼續看，或按「搜尋」找新片。"</span></p>
                     }
                     .into_any(),
                 }}
             </div>
-            <div class="tv-rails">
-                <LibraryRail title="繼續觀看" group="home-continue" rows=cont hero=hero make=continue_card from_history=false/>
-                <LibraryRail title="我的收藏" group="home-favorites" rows=favs hero=hero make=favorite_card from_history=false/>
-                <LibraryRail title="觀看紀錄" group="home-history" rows=hist hero=hero make=history_card from_history=true/>
-                <Show when=all_empty>
-                    <div class="tv-empty">"還沒有內容。按「搜尋」找點東西來看吧。"</div>
-                </Show>
+            <div class="tv-rows-viewport">
+                <div class="tv-rows" data-row-column="" data-row-anchor="0" on:focusin=move |_| browsing.set(true)>
+                    <LibraryRail title="繼續觀看" group="home-continue" rows=cont hero=hero make=continue_card from_history=false/>
+                    <LibraryRail title="我的收藏" group="home-favorites" rows=favs hero=hero make=favorite_card from_history=false/>
+                    <LibraryRail title="觀看紀錄" group="home-history" rows=hist hero=hero make=history_card from_history=true/>
+                    <Show when=all_empty>
+                        <div class="tv-empty">"還沒有內容。按「搜尋」找點東西來看吧。"</div>
+                    </Show>
+                </div>
             </div>
+            <Show when=move || confirming.get()>
+                <div class="tv-modal-backdrop">
+                    <div class="tv-modal" data-focus-scope="" role="dialog">
+                        <h2 class="tv-modal-title">"要登出這台電視嗎？"</h2>
+                        <p class="tv-modal-text">"登出後，需要再配對一次或輸入密碼才能使用。"</p>
+                        <div class="tv-modal-actions">
+                            // Focus lands on staying signed in: a reflexive
+                            // second OK cancels rather than signs out.
+                            <button
+                                class="tv-btn"
+                                data-focusable=""
+                                data-autofocus=""
+                                data-action="signout-cancel"
+                                on:click=move |_| {
+                                    confirming.set(false);
+                                    focus::focus_later("[data-action=signout]");
+                                }
+                            >
+                                "取消"
+                            </button>
+                            <button
+                                class="tv-btn tv-btn-danger"
+                                data-focusable=""
+                                data-action="signout-confirm"
+                                on:click=move |_| sign_out()
+                            >
+                                "登出"
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }

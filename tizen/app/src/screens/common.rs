@@ -119,23 +119,58 @@ pub fn PosterCard(
     }
 }
 
-/// A titled horizontal rail. Children are the cards; `group` names the focus
-/// group the track gives them.
+/// A titled row holding a horizontal rail. The track is moved by focus.rs
+/// (`data-rail-track`); the row takes part in its column (`data-row`).
+/// Children are the cards; `group` names the focus group the track gives them.
+/// With `caption` the row collapses to its heading plus that one line (an
+/// empty or failed provider) and has no track.
 #[component]
 pub fn Rail(
     #[prop(into)] title: String,
     #[prop(optional, into)] note: Option<String>,
     #[prop(optional, into)] provider: Option<String>,
+    #[prop(optional, into)] caption: Option<String>,
+    #[prop(optional)] error: bool,
     #[prop(into)] group: String,
     children: Children,
 ) -> impl IntoView {
+    let collapsed = caption.is_some();
     view! {
-        <section class="tv-rail" data-provider=provider>
-            <h2 class="tv-rail-title">
+        <section class="tv-row" class:is-collapsed=collapsed data-row="" data-provider=provider>
+            <h2 class="tv-row-title">
                 {title}
-                {note.map(|n| view! { <span class="tv-rail-note">{n}</span> })}
+                {note.map(|n| view! { <span class="tv-row-note">{n}</span> })}
+                {caption.map(|c| view! { <span class="tv-row-caption" class:is-error=error>{c}</span> })}
             </h2>
-            <div class="tv-rail-track" data-focus-group=group>{children()}</div>
+            {(!collapsed).then(|| view! {
+                <div class="tv-rail">
+                    <div class="tv-track" data-rail-track="" data-focus-group=group>{children()}</div>
+                </div>
+            })}
         </section>
+    }
+}
+
+/// Placeholder cards with a shimmer while a rail loads.
+#[component]
+pub fn Skeletons(#[prop(default = 7)] count: usize) -> impl IntoView {
+    (0..count)
+        .map(|_| view! {
+            <div class="tv-card tv-skeleton" aria-hidden="true">
+                <div class="tv-card-art"></div>
+                <div class="tv-skel-line"></div>
+                <div class="tv-skel-line tv-skel-short"></div>
+            </div>
+        })
+        .collect_view()
+}
+
+/// The heart, outlined or filled.
+#[component]
+pub fn Heart(#[prop(into)] filled: Signal<bool>) -> impl IntoView {
+    view! {
+        <svg class="tv-heart" class:is-filled=move || filled.get() viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 20.5s-7.5-4.6-9.6-9.2C1 8.1 3 4.5 6.6 4.5c2.1 0 3.6 1.2 5.4 3.2 1.8-2 3.3-3.2 5.4-3.2 3.6 0 5.6 3.6 4.2 6.8-2.1 4.6-9.6 9.2-9.6 9.2z"/>
+        </svg>
     }
 }

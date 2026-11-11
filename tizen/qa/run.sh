@@ -34,7 +34,7 @@ if [[ -n "${QA_NATIVE:-}" ]]; then
 fi
 
 mounts=(-v "$repo:$repo")
-envs=(-e STREAMHUB_QA_API -e STREAMHUB_QA_PORT -e STREAMHUB_QA_USER -e STREAMHUB_QA_PASSWORD -e CI)
+envs=(-e STREAMHUB_QA_API -e STREAMHUB_QA_PORT -e STREAMHUB_QA_USER -e STREAMHUB_QA_PASSWORD -e CI -e SHOWCASE_VIDEO)
 if [[ -f "$envfile" ]]; then
   mounts+=(-v "$envfile:/run/qa.env:ro")
   envs+=(-e STREAMHUB_QA_ENV=/run/qa.env)

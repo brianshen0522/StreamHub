@@ -13,6 +13,7 @@ pub fn ExitPrompt() -> impl IntoView {
             <div class="tv-modal-backdrop" data-screen="exit">
                 <div class="tv-modal" data-focus-scope="" role="dialog">
                     <h2 class="tv-modal-title">"離開 StreamHub？"</h2>
+                    <p class="tv-modal-text">"看到一半的進度都已經存好了。"</p>
                     <div class="tv-modal-actions">
                         <button
                             class="tv-btn"

@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::api;
 use crate::focus;
 use crate::nav::{self, DetailTarget, Route};
-use crate::screens::common::{array, opt, s, CardData, Load, PosterCard, Rail};
+use crate::screens::common::{array, opt, s, CardData, Load, PosterCard, Rail, Skeletons};
 
 /// The server gives each site 8 s and movieffm makes two rounds; past this
 /// the site is not coming back.
@@ -202,20 +202,17 @@ fn ProviderRail(group: Group) -> impl IntoView {
     match group.state {
         Load::Loading => view! {
             <Rail title=group.name provider=key group=rail_group>
-                <div class="tv-rail-empty">"搜尋中…"</div>
+                <Skeletons count=8/>
             </Rail>
         }
         .into_any(),
+        // Empty and failed providers collapse to one caption line.
         Load::Failed(e) => view! {
-            <Rail title=group.name provider=key group=rail_group>
-                <div class="tv-rail-empty tv-error">{e}</div>
-            </Rail>
+            <Rail title=group.name provider=key group=rail_group caption=e error=true>{()}</Rail>
         }
         .into_any(),
         Load::Ready(items) if items.is_empty() => view! {
-            <Rail title=group.name provider=key group=rail_group note="0">
-                <div class="tv-rail-empty">"沒有結果"</div>
-            </Rail>
+            <Rail title=group.name provider=key group=rail_group caption="沒有結果">{()}</Rail>
         }
         .into_any(),
         Load::Ready(items) => {
@@ -280,7 +277,11 @@ pub fn SearchScreen() -> impl IntoView {
                     submit();
                 }
             >
-                <span class="tv-brand">"搜尋"</span>
+                <div class="tv-search-pill">
+                <svg class="tv-icon tv-search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="10.5" cy="10.5" r="6.5"/>
+                    <path d="m20 20-4.6-4.6"/>
+                </svg>
                 <input
                     class="tv-input tv-search-input"
                     name="q"
@@ -296,16 +297,19 @@ pub fn SearchScreen() -> impl IntoView {
                     prop:value=move || q.get()
                     on:input=move |ev| q.set(event_target_value(&ev))
                 />
+                </div>
                 <button type="button" class="tv-btn tv-btn-primary" data-focusable="" data-action="search-submit" on:click=move |_| submit()>
                     "搜尋"
                 </button>
             </form>
             <div class="tv-results">
-                {move || note.get().map(|n| view! { <p class="tv-muted tv-notice">{n}</p> })}
+                {move || note.get().map(|n| view! { <p class="tv-notice">{n}</p> })}
+                <div class="tv-rows" data-row-column="" data-row-anchor="0">
                 <Show when=move || gs.with(|g| g.is_empty()) && !recents.get().is_empty()>
-                    <section class="tv-rail">
-                        <h2 class="tv-rail-title">"最近搜尋"</h2>
-                        <div class="tv-chips" data-focus-group="search-recent">
+                    <section class="tv-row" data-row="">
+                        <h2 class="tv-row-title">"最近搜尋"</h2>
+                        <div class="tv-rail">
+                        <div class="tv-track tv-chips" data-rail-track="" data-focus-group="search-recent">
                             {move || {
                                 recents
                                     .get()
@@ -330,6 +334,7 @@ pub fn SearchScreen() -> impl IntoView {
                                     .collect_view()
                             }}
                         </div>
+                        </div>
                     </section>
                 </Show>
                 <For
@@ -337,6 +342,7 @@ pub fn SearchScreen() -> impl IntoView {
                     key=|g| (g.key.clone(), format!("{:?}", std::mem::discriminant(&g.state)), match &g.state { Load::Ready(v) => v.len(), _ => 0 })
                     children=|g| view! { <ProviderRail group=g/> }
                 />
+                </div>
             </div>
         </div>
     }
