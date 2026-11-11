@@ -264,6 +264,24 @@
 
   // ── mock ─────────────────────────────────────────────────────────────────
   var TICK_MS = 250;
+
+  // The page is transparent while playing because AVPlay draws on a plane
+  // behind it. The mock draws nothing, so without a stage the browser's white
+  // canvas showed through and every screenshot looked broken.
+  function mockStage(on) {
+    var el = document.getElementById("vp-mock-stage");
+    if (!on) { if (el) el.remove(); return; }
+    if (el) return;
+    el = document.createElement("div");
+    el.id = "vp-mock-stage";
+    el.setAttribute("aria-hidden", "true");
+    el.style.cssText = "position:fixed;inset:0;z-index:-1;display:flex;align-items:center;" +
+      "justify-content:center;background:radial-gradient(ellipse at center,#2a2f3a 0%,#0b0c10 75%);" +
+      "color:rgba(255,255,255,.28);font:500 34px/1.4 sans-serif;letter-spacing:.08em;text-align:center";
+    el.textContent = "模擬播放器 · 實機會在這裡顯示影片";
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+
   var mock = {
     name: "mock",
     pos: 0,
@@ -290,6 +308,7 @@
       this.playing = false;
       this.pos = Math.max(0, startMs);
       this.dur = 0;
+      mockStage(true);
       emit("onBuffering", true);
       var failing = this.shouldFail(url);
       this.pending = setTimeout(function () {
@@ -326,7 +345,7 @@
       setTimeout(function () { if (g === gen) emit("onBuffering", false); }, 150);
     },
     stop: function () { this.playing = false; this.clear(); },
-    close: function () { this.playing = false; this.clear(); this.dur = 0; this.pos = 0; },
+    close: function () { this.playing = false; this.clear(); this.dur = 0; this.pos = 0; mockStage(false); },
     position: function () { return this.pos; },
     duration: function () { return this.dur; },
   };

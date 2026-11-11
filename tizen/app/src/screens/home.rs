@@ -129,10 +129,14 @@ fn dedupe_history(rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn hero_of(card: &CardData, row: &Value) -> Hero {
+    let meta = s(row, "providerKey");
+    // A favourite with no episode uses the provider as its card subtitle; the
+    // hero already prints the provider under it, so it showed twice.
+    let line = if card.subtitle == meta { String::new() } else { card.subtitle.clone() };
     Hero {
         title: card.title.clone(),
-        line: card.subtitle.clone(),
-        meta: s(row, "providerKey"),
+        line,
+        meta,
         poster: card.poster.clone(),
         badge: card.badge.clone(),
     }

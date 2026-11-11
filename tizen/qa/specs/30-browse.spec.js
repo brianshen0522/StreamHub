@@ -58,6 +58,10 @@ test("search 黑暗榮耀 shows per-provider rails, opens detail, plays, reports
       await expect.poll(() => puts.length, { timeout: 60_000 }).toBeGreaterThan(0);
       const sent = puts[puts.length - 1];
       expect(Number.isInteger(sent.positionSeconds), "positions are integer seconds").toBeTruthy();
+      // The library shelves show this poster; an empty one leaves every
+      // continue/history card as a letter tile on every client.
+      expect(sent.posterUrl, "progress carries the provider's poster").toMatch(/^https?:\/\//);
+      expect(sent.posterUrl, "the raw poster, not our token-bearing proxy").not.toContain("accessToken");
       expect(sent).not.toHaveProperty("progressPercent");
       const query = `/me/progress?providerKey=${encodeURIComponent(sent.providerKey)}&itemUrl=${encodeURIComponent(sent.itemUrl)}`;
       // The request is seen before the server has written it, so poll.
