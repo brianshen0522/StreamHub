@@ -525,6 +525,31 @@ body.vp-playing .screen {
 }
 .vp-source.is-focused .vp-source-now,
 .vp-source:focus .vp-source-now { color: rgba(8, 9, 12, 0.7); }
+/* 免廣告: green like the web's tag — ads found and removed is a reason to pick
+   the source, not a fault in it. Runtime is the content's, ads taken out. */
+.vp-source-ads {
+  flex: none;
+  padding: 2px 14px;
+  border-radius: 999px;
+  background: rgba(46, 204, 113, 0.16);
+  color: #4ade80;
+  font-size: 22px;
+  line-height: 1.4;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.vp-source-runtime {
+  flex: none;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--vp-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.vp-source.is-focused .vp-source-ads,
+.vp-source:focus .vp-source-ads { background: rgba(22, 163, 74, 0.16); color: #15803d; }
+.vp-source.is-focused .vp-source-runtime,
+.vp-source:focus .vp-source-runtime { color: rgba(8, 9, 12, 0.7); }
 
 /* ── motion ─────────────────────────────────────────────────────────── */
 @keyframes vp-fade-in { from { opacity: 0; } }

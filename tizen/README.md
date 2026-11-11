@@ -79,6 +79,7 @@ app/    streamhub-tizen — Leptos CSR → wasm32
           boot.js           file:// fetch → XHR fallback for the .wasm
           tizen-keys.js     registers media keys via tizen.tvinputdevice
           player-shim.js    window.StreamHubPlayer: one interface, three backends
+          sfx.js            window.StreamHubSfx: interface sounds (see below)
           vendor/hls.min.js
 package/  config.xml, icon.png
 qa/       Playwright specs against dist/ + the live server
@@ -97,6 +98,25 @@ no SRI. A widget loads from `file://…/res/wgt/`, and Chromium refuses module
 scripts from `file:`. `config.xml` sets an explicit CSP with
 `'wasm-unsafe-eval'`, because Tizen's default policy would block compiling the
 wasm.
+
+## Interface sounds
+
+`js/sfx.js` synthesises four short sounds into AudioBuffers (no files): a
+tick when focus moves, a pop on OK, a falling pop on Back, a low thud at an
+edge. `focus.rs` calls them through `sfx.rs`; all the rules live in the
+script:
+
+- **One voice.** A new sound fades the last one out (8 ms) instead of
+  layering on it. OK/Back outrank an edge, which outranks a move: a lower
+  sound arriving while a higher one still sounds is dropped.
+- **Spacing.** The same sound inside its gap (move 70 ms, 120 ms while held
+  and quieter; edge 260 ms; OK/Back 140 ms) is dropped, never queued. A held
+  key against an edge thuds once, not once per bump.
+- **Silent in the player.** `set_body_playing` tells the script; the
+  AudioContext is suspended for as long as the player is up.
+- **Never throws**, and a suspended or missing AudioContext means silence.
+- The 音效 開/關 button on Home's top bar toggles it,
+  `localStorage["streamhub.sfx"]="0"` when off.
 
 ## Remote key map
 

@@ -63,6 +63,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement, KeyboardEvent};
 
+use crate::sfx::{self, Sound};
 use crate::keys::Key;
 use crate::nav::{self, Route};
 
@@ -90,6 +91,9 @@ struct State {
     hold_start: f64,
     last_move: f64,
     last_bump: f64,
+    /// A held direction already sounded its edge: one thud per wall, not one
+    /// per bump while the key stays down. Cleared by a move or a new press.
+    hold_edged: bool,
     /// Directional keys waiting for something focusable, with when they came.
     buffer: Vec<(Dir, f64)>,
     replaying: bool,
@@ -732,7 +736,8 @@ fn buffer(dir: Dir) {
     });
 }
 
-fn bump(el: &Element, dir: Dir) {
+/// Returns false when a bump was shown under 300 ms ago (nothing new shown).
+fn bump(el: &Element, dir: Dir) -> bool {
     let now = js_sys::Date::now();
     let recent = STATE.with(|s| {
         let mut s = s.borrow_mut();
@@ -743,7 +748,7 @@ fn bump(el: &Element, dir: Dir) {
         recent
     });
     if recent {
-        return;
+        return false;
     }
     let class = match dir {
         Dir::Up => "tv-bump-up",
@@ -764,6 +769,7 @@ fn bump(el: &Element, dir: Dir) {
         let _ = el.class_list().remove_1(class);
     })
     .forget();
+    true
 }
 
 /// Move `steps` times in `dir`. Returns false when nothing could move.
@@ -792,9 +798,23 @@ fn step(dir: Dir, steps: usize, repeat: bool) -> bool {
         // other edge is an edge now, loading or not.
         if dir == Dir::Down && screen_loading() && !repeat {
             buffer(dir);
-        } else {
-            bump(&cur, dir);
+        } else if bump(&cur, dir) {
+            let first = STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                let first = !(repeat && s.hold_edged);
+                s.hold_edged = true;
+                first
+            });
+            if first {
+                sfx::play(Sound::Edge);
+            }
         }
+    } else if repeat {
+        STATE.with(|s| s.borrow_mut().hold_edged = false);
+        sfx::play_repeat(Sound::Move);
+    } else {
+        STATE.with(|s| s.borrow_mut().hold_edged = false);
+        sfx::play(Sound::Move);
     }
     moved
 }
@@ -806,6 +826,7 @@ fn hold_steps(key: Key, repeat: bool) -> usize {
         let mut s = s.borrow_mut();
         if !repeat || s.hold_key != Some(key) {
             s.hold_key = Some(key);
+            s.hold_edged = false;
             s.hold_start = now;
             s.last_move = now;
             return 1;
@@ -926,6 +947,7 @@ fn ensure_valid_inner(active: bool) {
 
 fn handle_back(handler: Option<KeyHandler>) {
     STATE.with(|s| s.borrow_mut().buffer.clear());
+    sfx::play(Sound::Back);
     if let Some(h) = handler {
         if h(Key::Back) {
             return;
@@ -1012,6 +1034,14 @@ fn on_keydown(event: KeyboardEvent) {
         if let Some(h) = &handler {
             if h(key) {
                 event.prevent_default();
+                // The screen moved focus or acted itself (search's Up to the
+                // field, the player's keys — the player is silent anyway).
+                match key {
+                    Key::Up | Key::Down | Key::Left | Key::Right if event.repeat() => sfx::play_repeat(Sound::Move),
+                    Key::Up | Key::Down | Key::Left | Key::Right => sfx::play(Sound::Move),
+                    Key::Enter if !event.repeat() => sfx::play(Sound::Select),
+                    _ => {}
+                }
                 return;
             }
         }
@@ -1043,7 +1073,12 @@ fn on_keydown(event: KeyboardEvent) {
             if repeat {
                 return;
             }
-            match focused().filter(is_usable) {
+            let target = focused().filter(is_usable);
+            if target.is_some() {
+                // On the press, not the release: feedback has to be immediate.
+                sfx::play(Sound::Select);
+            }
+            match target {
                 Some(el) if el.has_attribute("data-longpress") => {
                     // Decided on keyup, or by the timer if held.
                     remember_route(&el);
@@ -1089,12 +1124,14 @@ fn on_keydown(event: KeyboardEvent) {
         Key::Play | Key::PlayPause => {
             if let Some(el) = focused().filter(|e| is_usable(e) && e.has_attribute("data-playable")) {
                 event.prevent_default();
+                sfx::play(Sound::Select);
                 click_with(&el, Intent::Play);
             }
         }
         Key::Other(403) => {
             if let Some(el) = focused().filter(|e| is_usable(e) && e.has_attribute("data-favable")) {
                 event.prevent_default();
+                sfx::play(Sound::Select);
                 click_with(&el, Intent::Favorite);
             }
         }

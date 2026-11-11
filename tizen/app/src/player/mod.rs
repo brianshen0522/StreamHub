@@ -88,7 +88,7 @@ struct Ui {
     up_next: RwSignal<Option<(String, u64)>>,
     has_next: RwSignal<bool>,
     picker: RwSignal<bool>,
-    sources: RwSignal<Vec<String>>,
+    sources: RwSignal<Vec<SourceRow>>,
     current_source: RwSignal<Option<usize>>,
     source_label: RwSignal<String>,
     driver: RwSignal<Option<String>>,
@@ -220,6 +220,9 @@ fn now() -> f64 {
 /// video plane, and Chrome 85 (the M7) has no `:has()` to reach <html> from
 /// the body's class.
 fn set_body_playing(on: bool) {
+    // Interface sounds stay silent (and their AudioContext suspended) for as
+    // long as the player is up: nothing over the film, nothing competing with AVPlay.
+    crate::sfx::set_player(on);
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
     let targets = [doc.document_element(), doc.body().map(Into::into)];
     for el in targets.into_iter().flatten() {
@@ -434,16 +437,13 @@ impl Ctl {
     }
 
     fn refresh_source_labels(&self) {
-        let labels: Vec<String> = self
+        let labels: Vec<SourceRow> = self
             .s
             .borrow()
             .sources
             .iter()
             .enumerate()
-            .map(|(i, v)| {
-                let l = media::str_field(v, "sourceLabel");
-                if l.is_empty() { format!("片源 {}", i + 1) } else { l.to_string() }
-            })
+            .map(|(i, v)| SourceRow::from_line(i, v))
             .collect();
         self.ui.sources.set(labels);
     }
@@ -452,7 +452,15 @@ impl Ctl {
         let Some(direct) = media::direct_url(&line).map(str::to_string) else { return };
         let (idx, started, waiting, preferred, label) = {
             let mut s = self.s.borrow_mut();
-            if s.sources.iter().any(|v| media::direct_url(v) == Some(direct.as_str())) {
+            if let Some(known) = s.sources.iter_mut().find(|v| media::direct_url(v) == Some(direct.as_str())) {
+                // Already listed — typically the source a cast or Detail
+                // started with, which carries no label, runtime or ad count.
+                // Fill those in from the probe's line; keep what is there.
+                let changed = merge_missing(known, &line);
+                drop(s);
+                if changed {
+                    self.refresh_source_labels();
+                }
                 return;
             }
             let label = media::str_field(&line, "sourceLabel").to_string();
@@ -1828,13 +1836,24 @@ pub fn PlayerScreen(target: PlayTarget) -> impl IntoView {
                                     .get()
                                     .into_iter()
                                     .enumerate()
-                                    .map(|(i, label)| {
+                                    .map(|(i, row)| {
+                                        let SourceRow { label, ad_seconds, runtime } = row;
                                         view! {
                                             <button class="vp-pill vp-source" data-focusable="" data-focus-group="vp-sources"
                                                 data-action="source" data-index=i.to_string()
                                                 class:is-current=move || ui.current_source.get() == Some(i)
                                                 on:click=move |_| { if let Some(c) = active(id) { c.select_source(i) } }>
                                                 <span class="vp-source-label">{label}</span>
+                                                // Same reading as the web's 免廣告 tag: the filter
+                                                // measured this source's ads and removes them, a
+                                                // reason to pick it. The runtime is the content's,
+                                                // ads already taken out.
+                                                {(ad_seconds > 0).then(|| view! {
+                                                    <span class="vp-source-ads" data-ad-seconds=ad_seconds.to_string()>
+                                                        "免廣告"
+                                                    </span>
+                                                })}
+                                                {runtime.map(|r| view! { <span class="vp-source-runtime">{r}</span> })}
                                                 <Show when=move || ui.current_source.get() == Some(i)>
                                                     <span class="vp-source-now">"播放中"</span>
                                                 </Show>
@@ -1873,3 +1892,74 @@ pub fn PlayerScreen(target: PlayTarget) -> impl IntoView {
 
 const RING_R: f64 = 34.0;
 const RING_C: f64 = 2.0 * std::f64::consts::PI * RING_R;
+
+/// Copy every field of `from` that `into` lacks (absent, null or ""). Returns
+/// whether anything was added.
+fn merge_missing(into: &mut Value, from: &Value) -> bool {
+    let (Some(dst), Some(src)) = (into.as_object_mut(), from.as_object()) else { return false };
+    let mut changed = false;
+    for (k, v) in src {
+        let missing = |x: &Value| x.is_null() || x.as_str() == Some("");
+        if dst.get(k).is_none_or(missing) && !missing(v) {
+            dst.insert(k.clone(), v.clone());
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// One line of the source picker, derived from an `/api/sources` NDJSON row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceRow {
+    pub label: String,
+    /// Seconds of spliced ads the server's filter found (and the manifest
+    /// endpoint removes). 0 when none were found, which is not proof of none.
+    pub ad_seconds: u64,
+    /// Content runtime, e.g. "1:52:07" or "45:10"; None when unknown.
+    pub runtime: Option<String>,
+}
+
+impl SourceRow {
+    pub fn from_line(i: usize, v: &Value) -> Self {
+        let l = media::str_field(v, "sourceLabel");
+        let label = if l.is_empty() { format!("片源 {}", i + 1) } else { l.to_string() };
+        let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|n| n.is_finite() && *n > 0.0);
+        let ad_seconds = num("adSeconds").map(|n| n.round() as u64).unwrap_or(0);
+        let runtime = num("durationSeconds").map(|n| {
+            let t = n.round() as u64;
+            let (h, m, sec) = (t / 3600, t / 60 % 60, t % 60);
+            if h > 0 { format!("{h}:{m:02}:{sec:02}") } else { format!("{m}:{sec:02}") }
+        });
+        SourceRow { label, ad_seconds, runtime }
+    }
+}
+
+#[cfg(test)]
+mod source_row_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ads_and_runtime_come_from_the_line() {
+        let r = SourceRow::from_line(0, &json!({"sourceLabel": "線路A", "adSeconds": 31.6, "durationSeconds": 6727}));
+        assert_eq!(r, SourceRow { label: "線路A".into(), ad_seconds: 32, runtime: Some("1:52:07".into()) });
+    }
+
+    #[test]
+    fn a_known_source_gains_the_probe_fields_without_losing_its_own() {
+        let mut known = json!({"directUrl": "https://cdn/a.m3u8", "durationSeconds": null, "sourceLabel": ""});
+        let probe = json!({"directUrl": "https://cdn/other.m3u8", "sourceLabel": "矽谷線路", "adSeconds": 52, "durationSeconds": 2838});
+        assert!(merge_missing(&mut known, &probe));
+        assert_eq!(known["directUrl"], "https://cdn/a.m3u8");
+        assert_eq!(SourceRow::from_line(0, &known).ad_seconds, 52);
+        assert_eq!(SourceRow::from_line(0, &known).label, "矽谷線路");
+        assert!(!merge_missing(&mut known, &probe));
+    }
+
+    #[test]
+    fn missing_fields_mean_no_badge_and_no_runtime() {
+        let r = SourceRow::from_line(2, &json!({"durationSeconds": null}));
+        assert_eq!(r, SourceRow { label: "片源 3".into(), ad_seconds: 0, runtime: None });
+        assert_eq!(SourceRow::from_line(0, &json!({"durationSeconds": 2710})).runtime.as_deref(), Some("45:10"));
+    }
+}

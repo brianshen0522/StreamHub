@@ -533,6 +533,7 @@ pub fn HomeScreen() -> impl IntoView {
     };
     let backdrop = Signal::derive(move || hero.with(|h| h.as_ref().map(|h| h.poster.clone()).unwrap_or_default()));
 
+    let sfx_on = RwSignal::new(crate::sfx::enabled());
     view! {
         <div
             class="tv-screen tv-home"
@@ -558,6 +559,32 @@ pub fn HomeScreen() -> impl IntoView {
                             <path d="m20 20-4.6-4.6"/>
                         </svg>
                         "搜尋"
+                    </button>
+                    <button
+                        class="tv-btn"
+                        class:is-off=move || !sfx_on.get()
+                        data-focusable=""
+                        data-action="sfx"
+                        data-focus-id="home-sfx"
+                        aria-pressed=move || if sfx_on.get() { "true" } else { "false" }
+                        on:click=move |_| {
+                            let on = crate::sfx::set_enabled(!sfx_on.get_untracked());
+                            sfx_on.set(on);
+                            if on {
+                                // The OK that switched it on was still silent.
+                                crate::sfx::play(crate::sfx::Sound::Select);
+                            }
+                        }
+                    >
+                        <svg class="tv-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 9v6h4l5 4V5L8 9z"/>
+                            {move || if sfx_on.get() {
+                                view! { <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/> }.into_any()
+                            } else {
+                                view! { <path d="m17 9 5 6m0-6-5 6"/> }.into_any()
+                            }}
+                        </svg>
+                        {move || if sfx_on.get() { "音效 開" } else { "音效 關" }}
                     </button>
                     <button
                         class="tv-btn"

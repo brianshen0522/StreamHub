@@ -8,6 +8,7 @@ mod player;
 mod realtime;
 mod screens;
 mod session;
+mod sfx;
 
 fn main() {
     console_error_panic_hook_lite();
