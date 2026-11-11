@@ -26,7 +26,11 @@ pkgid=StrmHubTV1
 wgt="${WGT:-$here/StreamHub.wgt}"
 port="${INSPECTOR_PORT:-9222}"
 
-docker build -q -t streamhub-tizen-cli -f "$here/build/Dockerfile.tizen" "$here/build" >/dev/null
+# Refresh the image, but fall back to a cached one when the build can't reach
+# the registry or a download host.
+docker build -q -t streamhub-tizen-cli -f "$here/build/Dockerfile.tizen" "$here/build" >/dev/null \
+  || docker image inspect streamhub-tizen-cli >/dev/null 2>&1 \
+  || { echo "cannot build streamhub-tizen-cli and no cached copy" >&2; exit 1; }
 tty=(-i); [[ -t 0 ]] && tty=(-it)
 
 docker run --rm "${tty[@]}" --network host -u "$(id -u):$(id -g)" \

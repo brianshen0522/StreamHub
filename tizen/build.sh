@@ -7,7 +7,11 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(dirname "$here")"
-docker build -q -t streamhub-tizen-build "$here/build" >/dev/null
+# Refresh the image, but fall back to a cached one when the build can't reach
+# the registry or a download host.
+docker build -q -t streamhub-tizen-build "$here/build" >/dev/null \
+  || docker image inspect streamhub-tizen-build >/dev/null 2>&1 \
+  || { echo "cannot build streamhub-tizen-build and no cached copy" >&2; exit 1; }
 run() {
   docker run --rm -u "$(id -u):$(id -g)" \
     -e CARGO_HOME=/cargo -e STREAMHUB_API_BASE="${STREAMHUB_API_BASE:-}" \
