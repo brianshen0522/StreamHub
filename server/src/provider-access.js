@@ -25,12 +25,19 @@ export async function getEnabledProvidersForUser(user) {
   // The health poller already knows whether each site is answering. Without it a
   // client can only report that a search returned nothing, which looks the same
   // whether the provider is down, disabled, or simply has no match.
-  const latestChecks = await prisma.providerHealthCheck.findMany({
-    where: { providerId: { in: providers.map((provider) => provider.id) } },
-    orderBy: { checkedAt: "desc" },
-    distinct: ["providerId"],
-  });
-  const healthByProvider = new Map(latestChecks.map((check) => [check.providerId, check]));
+  //
+  // One indexed lookup per provider rather than `findMany({ distinct })`:
+  // Prisma does `distinct` in memory, so that form read the *whole* table — a
+  // row every 30 s per provider, 864,000 rows after ten weeks — on every search
+  // and every library load, and searches sat 20 s on it before scraping began.
+  // (provider_id, checked_at) is indexed, so each of these reads one row.
+  const latestChecks = await Promise.all(providers.map((provider) =>
+    prisma.providerHealthCheck.findFirst({
+      where: { providerId: provider.id },
+      orderBy: { checkedAt: "desc" },
+      select: { providerId: true, status: true },
+    })));
+  const healthByProvider = new Map(latestChecks.filter(Boolean).map((check) => [check.providerId, check]));
 
   return providers.map((provider) => {
     const health = healthByProvider.get(provider.id);

@@ -26,6 +26,10 @@ export const HEARTBEAT_ONLINE_WINDOW_SECONDS = parsePositiveInt(process.env.HEAR
 export const CONTINUE_SCAN_LIMIT = parsePositiveInt(process.env.CONTINUE_SCAN_LIMIT, 500);
 
 export const PROVIDER_CHECK_INTERVAL_MS = parseDurationMs(process.env.PROVIDER_CHECK_INTERVAL_MS, 30_000);
+// Health checks older than this are deleted. Only the latest few are ever read
+// (status badges, the admin dashboard's recent list); keeping every one made
+// the table grow by ~14,000 rows a day without bound.
+export const PROVIDER_CHECK_RETENTION_DAYS = parsePositiveInt(process.env.PROVIDER_CHECK_RETENTION_DAYS, 7);
 export const PROVIDER_POLL_QUERY = String(process.env.PROVIDER_POLL_QUERY || "the");
 export const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "");
 

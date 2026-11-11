@@ -1,5 +1,5 @@
 import { ProviderHealthStatus } from "../generated/prisma/index.js";
-import { PROVIDER_CHECK_INTERVAL_MS, PROVIDER_POLL_QUERY } from "./config.js";
+import { PROVIDER_CHECK_INTERVAL_MS, PROVIDER_CHECK_RETENTION_DAYS, PROVIDER_POLL_QUERY } from "./config.js";
 import { prisma } from "./db.js";
 import { providers as providerClients } from "./providers/index.js";
 
@@ -72,10 +72,28 @@ export async function runProviderHealthCheck() {
   await Promise.all(providerRows.map((providerRow) => checkProvider(providerRow)));
 }
 
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+export async function pruneProviderHealthChecks() {
+  const cutoff = new Date(Date.now() - PROVIDER_CHECK_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const { count } = await prisma.providerHealthCheck.deleteMany({
+    where: { checkedAt: { lt: cutoff } },
+  });
+  if (count > 0) {
+    console.log(`Pruned ${count} provider health checks older than ${PROVIDER_CHECK_RETENTION_DAYS} days.`);
+  }
+}
+
 export function startMonitoring() {
   runProviderHealthCheck().catch((error) => {
     console.error("Initial provider health check failed:", error);
   });
+
+  const prune = () => pruneProviderHealthChecks().catch((error) => {
+    console.error("Pruning provider health checks failed:", error);
+  });
+  prune();
+  setInterval(prune, PRUNE_INTERVAL_MS).unref?.();
 
   return setInterval(() => {
     runProviderHealthCheck().catch((error) => {
