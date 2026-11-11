@@ -17,13 +17,21 @@ use serde_json::Value;
 use crate::api;
 use crate::focus;
 use crate::nav::{self, DetailTarget, Route};
-use crate::screens::common::{array, opt, s, CardData, Load, PosterCard, Rail, Skeletons};
+use crate::keys::Key;
+use crate::screens::common::{
+    array, favorite_toggle_with_toast, friendly_error, opt, s, CardData, FavoriteKey, Load, PosterCard, Rail, Skeletons, Toast,
+};
+use crate::screens::detail;
 
 /// The server gives each site 8 s and movieffm makes two rounds; past this
 /// the site is not coming back.
 const DEADLINE_MS: u32 = 20_000;
 const RECENT_KEY: &str = "streamhub.tizen.recentSearches";
 const RECENT_MAX: usize = 8;
+/// Cards per page of a result rail, and how near the end focus may get
+/// before the next page is added.
+const PAGE: usize = 30;
+const PREFETCH: usize = 6;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Group {
@@ -38,6 +46,17 @@ thread_local! {
     static NOTICE: ArcRwSignal<Option<String>> = ArcRwSignal::new(None);
     static SEQ: Cell<u64> = const { Cell::new(0) };
     static PENDING: RefCell<bool> = const { RefCell::new(false) };
+    /// How many cards each provider's rail had grown to, so coming back from
+    /// Detail can land on a card past the first page.
+    static SHOWN: RefCell<std::collections::HashMap<String, usize>> = RefCell::new(Default::default());
+}
+
+fn shown_for(provider: &str) -> usize {
+    SHOWN.with(|m| m.borrow().get(provider).copied()).unwrap_or(PAGE).max(PAGE)
+}
+
+fn remember_shown(provider: &str, n: usize) {
+    SHOWN.with(|m| m.borrow_mut().insert(provider.to_string(), n));
 }
 
 fn query() -> ArcRwSignal<String> {
@@ -59,6 +78,7 @@ pub fn prefill(title: &str) {
 }
 
 fn reset() {
+    SHOWN.with(|m| m.borrow_mut().clear());
     SEQ.with(|s| s.set(s.get() + 1));
     query().set(String::new());
     groups().set(Vec::new());
@@ -70,10 +90,12 @@ fn storage() -> Option<web_sys::Storage> {
 }
 
 fn recent() -> Vec<String> {
-    storage()
+    let mut list: Vec<String> = storage()
         .and_then(|s| s.get_item(RECENT_KEY).ok().flatten())
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    list.truncate(RECENT_MAX);
+    list
 }
 
 fn remember(q: &str) {
@@ -114,7 +136,7 @@ fn run_search(q: String) {
             Ok(v) => array(&v, "providers"),
             Err(e) => {
                 if SEQ.with(|s| s.get()) == seq {
-                    notice().set(Some(if e.is_offline() { "無法連線到伺服器".into() } else { e.message }));
+                    notice().set(Some(friendly_error(&e)));
                 }
                 return;
             }
@@ -148,12 +170,13 @@ fn run_search(q: String) {
                     Either::Left((Ok(v), _)) => {
                         let first = array(&v, "results").into_iter().next().unwrap_or(Value::Null);
                         match opt(&first, "error") {
-                            Some(err) => Load::Failed(err),
+                            // The provider's own failure, in the server's words.
+                            Some(err) => Load::Failed(friendly_error(&api::ApiError { status: 502, message: err })),
                             None => Load::Ready(array(&first, "items")),
                         }
                     }
                     Either::Left((Err(e), _)) => {
-                        Load::Failed(if e.is_offline() { "無法連線到伺服器".into() } else { e.message })
+                        Load::Failed(friendly_error(&e))
                     }
                     Either::Right(_) => Load::Failed("搜尋逾時".into()),
                 };
@@ -192,6 +215,7 @@ fn result_card(item: &Value, provider: &str) -> CardData {
         progress: None,
         badge: None,
         chip: None,
+        provider: None,
     }
 }
 
@@ -217,18 +241,57 @@ fn ProviderRail(group: Group) -> impl IntoView {
         .into_any(),
         Load::Ready(items) => {
             let note = items.len().to_string();
+            let total = items.len();
+            let items = StoredValue::new(items);
+            // A popular title answers with 240+ cards; rendering them all made
+            // every key slow. Show a page and add the next one as focus nears
+            // the end — holding Right never meets a wall, and appending is
+            // keyed, so the focused card is never re-rendered.
+            let shown = RwSignal::new(shown_for(&key).min(total));
+            let grow = move |provider: &str| {
+                let next = (shown.get_untracked() + PAGE).min(total);
+                if next > shown.get_untracked() {
+                    shown.set(next);
+                    remember_shown(provider, next);
+                }
+            };
             view! {
                 <Rail title=group.name provider=key.clone() group=rail_group note=note>
-                    {items
-                        .into_iter()
-                        .map(|item| {
+                    <For
+                        each={move || (0..shown.get()).collect::<Vec<usize>>()}
+                        key=|i| *i
+                        children=move |i| {
+                            let item = items.with_value(|v| v[i].clone());
                             let card = result_card(&item, &key);
                             let target = result_target(&item, &key);
+                            let t_play = target.clone();
+                            let fav = FavoriteKey {
+                                provider: target.provider.clone(),
+                                item_url: target.url.clone(),
+                                title: target.title.clone(),
+                                poster: target.poster_url.clone(),
+                                media_type: target.media_type.clone(),
+                                ..Default::default()
+                            };
+                            let k_focus = key.clone();
                             view! {
-                                <PosterCard card=card on_open=move |_| nav::push(Route::Detail(target.clone()))/>
+                                <PosterCard
+                                    card=card
+                                    on_open=move |_| nav::push(Route::Detail(target.clone()))
+                                    on_focus=move |_| {
+                                        if i + PREFETCH >= shown.get_untracked() {
+                                            grow(&k_focus);
+                                        }
+                                    }
+                                    on_play=move |_| {
+                                        detail::request_autoplay(&t_play.provider, &t_play.url);
+                                        nav::push(Route::Detail(t_play.clone()));
+                                    }
+                                    on_favorite=move |_| favorite_toggle_with_toast(fav.clone(), || {})
+                                />
                             }
-                        })
-                        .collect_view()}
+                        }
+                    />
                 </Rail>
             }
             .into_any()
@@ -254,6 +317,25 @@ pub fn SearchScreen() -> impl IntoView {
         })
         .forget();
     }
+
+    // Back from the results returns to the field first; Up from the first
+    // row always lands on it, whatever is nearest.
+    let live = focus::screen_alive();
+    let live_in = live.clone();
+    let handler: focus::KeyHandler = std::rc::Rc::new(move |key| {
+        if !live_in.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        match key {
+            Key::Back => focus::focused_within(".tv-results") && focus::back_to("input[name=q]"),
+            Key::Up if focus::focused_within(".tv-results .tv-rows > section:first-of-type") => {
+                focus::focus_selector("input[name=q]")
+            }
+            _ => false,
+        }
+    });
+    focus::set_screen_handler(Some(handler));
+    on_cleanup(move || live.store(false, std::sync::atomic::Ordering::Relaxed));
 
     on_cleanup(|| {
         // Leaving for Detail keeps the results; leaving Search for good drops them.
@@ -298,7 +380,7 @@ pub fn SearchScreen() -> impl IntoView {
                     on:input=move |ev| q.set(event_target_value(&ev))
                 />
                 </div>
-                <button type="button" class="tv-btn tv-btn-primary" data-focusable="" data-action="search-submit" on:click=move |_| submit()>
+                <button type="button" class="tv-btn" data-focusable="" data-action="search-submit" on:click=move |_| submit()>
                     "搜尋"
                 </button>
             </form>
@@ -344,6 +426,7 @@ pub fn SearchScreen() -> impl IntoView {
                 />
                 </div>
             </div>
+            <Toast/>
         </div>
     }
 }

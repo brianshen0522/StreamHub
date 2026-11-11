@@ -1,0 +1,8 @@
+/* Lead-owned. The app is driven by the remote's D-pad only; it has no pointer
+ * interactions. On a Smart Monitor a mouse or the remote's pointer mode still
+ * draws a cursor, which sat as a faint dot over the middle of the video.
+ * config.xml also sets pointing-device-support="disable"; this covers firmware
+ * that ignores it. */
+html, body, * {
+  cursor: none !important;
+}

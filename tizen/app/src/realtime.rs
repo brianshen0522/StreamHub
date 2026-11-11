@@ -113,6 +113,15 @@ struct Rt {
     handler: Option<(u64, CommandHandler)>,
     handler_seq: u64,
     driver: Option<(String, f64)>,
+    /// The access token and when (monotonic) this client first saw it: its
+    /// age is measured from here, not from the JWT's wall-clock `iat`.
+    token_seen: Option<(String, f64)>,
+    /// A socket reached `ready` before in this sign-in: the next `ready` is a
+    /// reconnect, and events sent while it was down were never heard.
+    ever_ready: bool,
+    /// A closed connection whose closures may still be on the stack; dropped
+    /// when the next one closes, instead of leaking a forgotten timer.
+    retired: Option<Conn>,
 }
 
 thread_local! {
@@ -120,8 +129,21 @@ thread_local! {
     static LIBRARY: ArcRwSignal<u64> = ArcRwSignal::new(0);
 }
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn performance_now() -> f64;
+}
+
+/// Monotonic milliseconds. Every interval here is measured with this, never
+/// the wall clock: a television's clock can be hours off or jump on an NTP
+/// sync, and both would break anything that subtracts two `Date.now()`s.
+pub fn mono_ms() -> f64 {
+    performance_now()
+}
+
 fn now() -> f64 {
-    js_sys::Date::now()
+    mono_ms()
 }
 
 /// Ticks on every `favorites` / `progress` event for this account.
@@ -157,9 +179,11 @@ fn on_token(token: Option<String>) {
             rt.state = None;
             rt.attempts = 0;
             rt.driver = None;
+            rt.ever_ready = false;
         });
         return;
     };
+    token_age_ms(&token);
     let start_heartbeat = RT.with(|rt| rt.borrow().heartbeat.is_none());
     if start_heartbeat {
         heartbeat();
@@ -204,6 +228,12 @@ fn schedule_reconnect(ms: u32) {
 }
 
 fn connect() {
+    connect_attempt(false);
+}
+
+/// One attempt: refresh first at most once, and only when the token is
+/// about to lapse by its own lifetime, then open the socket regardless.
+fn connect_attempt(refreshed: bool) {
     let Some(current) = session::current() else { return };
     let busy = RT.with(|rt| {
         let mut rt = rt.borrow_mut();
@@ -216,8 +246,9 @@ fn connect() {
     if busy {
         return;
     }
-    let expiring = token_expiry_ms(&current.access_token).is_some_and(|exp| exp - now() < EXPIRY_MARGIN_MS);
-    if !expiring {
+    let age = token_age_ms(&current.access_token);
+    let remaining = token_lifetime_ms(&current.access_token).map(|life| life - age);
+    if !should_refresh_first(remaining, refreshed) {
         open_socket(current.access_token);
         return;
     }
@@ -225,7 +256,7 @@ fn connect() {
         let result = api::refresh().await;
         RT.with(|rt| rt.borrow_mut().connecting = false);
         match result {
-            Ok(()) => connect(),
+            Ok(()) => connect_attempt(true),
             Err(e) if e.is_offline() => {
                 let ms = next_backoff();
                 schedule_reconnect(ms);
@@ -234,6 +265,28 @@ fn connect() {
             Err(_) => {}
         }
     });
+}
+
+fn should_refresh_first(remaining_ms: Option<f64>, already_refreshed: bool) -> bool {
+    !already_refreshed && remaining_ms.is_some_and(|r| r < EXPIRY_MARGIN_MS)
+}
+
+/// How long this client has held `token`, by the monotonic clock. A token
+/// seen for the first time (just issued, or loaded at startup) is age 0; a
+/// stored one that has in fact expired is answered 4003 at the handshake and
+/// replaced by the first REST refresh (the heartbeat fires at sign-in).
+fn token_age_ms(token: &str) -> f64 {
+    let t = now();
+    RT.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        match rt.token_seen.as_ref() {
+            Some((seen, at)) if seen == token => t - at,
+            _ => {
+                rt.token_seen = Some((token.to_string(), t));
+                0.0
+            }
+        }
+    })
 }
 
 fn next_backoff() -> u32 {
@@ -321,8 +374,9 @@ fn on_closed(id: u64, code: u16) {
     let Some(conn) = taken else { return };
     let token = conn.token.clone();
     conn.detach();
-    // This runs inside one of the connection's own closures: free them later.
-    Timeout::new(0, move || drop(conn)).forget();
+    // This runs inside one of the connection's own closures: free them on
+    // the next close, when they are certainly no longer on the stack.
+    RT.with(|rt| rt.borrow_mut().retired = Some(conn));
     if session::current().is_none() {
         return;
     }
@@ -375,17 +429,24 @@ fn on_frame(id: u64, text: &str) {
     let Ok(frame) = serde_json::from_str::<Value>(text) else { return };
     match frame.get("type").and_then(Value::as_str).unwrap_or("") {
         "ready" => {
+            let mut reconnected = false;
             let announce = RT.with(|rt| {
                 let mut rt = rt.borrow_mut();
                 let state = rt.state.clone();
                 let Some(conn) = rt.conn.as_mut().filter(|c| c.id == id) else { return None };
                 conn.ready = true;
                 rt.attempts = 0;
+                reconnected = std::mem::replace(&mut rt.ever_ready, true);
                 rt.session_id = frame.get("sessionId").and_then(Value::as_str).map(str::to_string);
                 Some(playback_frame(&state))
             });
             if let Some(f) = announce {
                 send_on_ready_socket(&f);
+            }
+            // Back after a drop (an outage, a 4002 refresh): whatever the
+            // library did meanwhile was never heard, so screens refetch.
+            if reconnected {
+                library_version().update(|v| *v += 1);
             }
         }
         "command" => on_command(&frame),
@@ -525,11 +586,14 @@ pub fn controlled_by() -> Option<String> {
 
 // ── token expiry, without a base64 dependency ──────────────────────────────
 
-fn token_expiry_ms(token: &str) -> Option<f64> {
+/// `exp − iat` of a JWT, in ms: its lifetime, which needs no clock at all.
+fn token_lifetime_ms(token: &str) -> Option<f64> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64url_decode(payload)?;
     let claims: Value = serde_json::from_slice(&bytes).ok()?;
-    claims.get("exp").and_then(Value::as_f64).map(|s| s * 1000.0)
+    let exp = claims.get("exp").and_then(Value::as_f64)?;
+    let iat = claims.get("iat").and_then(Value::as_f64)?;
+    Some((exp - iat) * 1000.0)
 }
 
 fn base64url_decode(input: &str) -> Option<Vec<u8>> {
@@ -572,11 +636,27 @@ mod tests {
     }
 
     #[test]
-    fn reads_jwt_expiry() {
-        // {"sub":"u","exp":1700000000}
-        let t = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiZXhwIjoxNzAwMDAwMDAwfQ.sig";
-        assert_eq!(token_expiry_ms(t), Some(1_700_000_000_000.0));
-        assert_eq!(token_expiry_ms("garbage"), None);
+    fn reads_jwt_lifetime() {
+        // {"sub":"u","iat":1700000000,"exp":1700014400} — a 4 h token.
+        let t = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMTQ0MDB9.sig";
+        assert_eq!(token_lifetime_ms(t), Some(14_400_000.0));
+        // No iat: unknown lifetime, so never a reason to refresh first.
+        let no_iat = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiZXhwIjoxNzAwMDAwMDAwfQ.sig";
+        assert_eq!(token_lifetime_ms(no_iat), None);
+        assert_eq!(token_lifetime_ms("garbage"), None);
+    }
+
+    #[test]
+    fn pre_connect_refresh_is_bounded_and_clock_free() {
+        let life = 14_400_000.0;
+        // A fresh token is never "expiring", however wrong the wall clock is:
+        // its age comes from when this client received it.
+        assert!(!should_refresh_first(Some(life - 0.0), false));
+        // Held almost its whole life: refresh before connecting…
+        assert!(should_refresh_first(Some(life - (life - 30_000.0)), false));
+        // …but only once per attempt — the refreshed token opens the socket.
+        assert!(!should_refresh_first(Some(10.0), true));
+        assert!(!should_refresh_first(None, false));
     }
 
     #[test]

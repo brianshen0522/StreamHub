@@ -28,7 +28,8 @@ test("showcase", async ({ page, remote, shot, qaApi }) => {
       title: it.title, posterUrl: it.posterUrl, itemUrl: it.url,
     });
     made.favs.push(fav.favorite?.id || fav.id);
-    made.titles.push({ providerKey: s.provider, title: it.title });
+    // itemUrl is validated even though scope "title" ignores it.
+    made.titles.push({ providerKey: s.provider, title: it.title, itemUrl: it.url });
     if (s.q === "蘭香如故") {
       await qaApi.json("PUT", "/me/progress", {
         providerKey: s.provider, mediaType: "tv", title: it.title, posterUrl: it.posterUrl,
@@ -46,6 +47,9 @@ test("showcase", async ({ page, remote, shot, qaApi }) => {
     await shot("login-pairing");
 
     const { username, password } = credentials();
+    // The password card is one step away from the pairing screen.
+    await focusTo(page, remote, '[data-action="use-password"]', { dirs: ["Down", "Up"] });
+    await remote.enter();
     await focusTo(page, remote, 'input[name="username"]', { dirs: ["Left", "Up"] });
     await page.keyboard.type(username);
     await remote.down();
@@ -120,7 +124,11 @@ test("showcase", async ({ page, remote, shot, qaApi }) => {
     await shot("signout-confirm");
     await remote.back();
     await page.waitForTimeout(300);
-    await remote.back();
+    // Back walks to the first card first, then opens the exit prompt.
+    for (let i = 0; i < 3 && !(await screen(page, "exit").isVisible()); i += 1) {
+      await remote.back();
+      await page.waitForTimeout(300);
+    }
     await expect(screen(page, "exit")).toBeVisible();
     await page.waitForTimeout(400);
     await shot("exit-prompt");
@@ -129,7 +137,7 @@ test("showcase", async ({ page, remote, shot, qaApi }) => {
     await page.evaluate(() => localStorage.removeItem("streamhub.mockDuration")).catch(() => {});
     for (const id of made.favs) if (id) await qaApi.call("DELETE", `/me/favorites/${id}`);
     const seen = new Set();
-    for (const t of [...made.titles, { providerKey: "movieffm", title: "瑞克和莫蒂" }]) {
+    for (const t of [...made.titles, { providerKey: "movieffm", title: "瑞克和莫蒂", itemUrl: "https://www.mvffm.net/" }]) {
       const k = t.providerKey + t.title;
       if (seen.has(k)) continue;
       seen.add(k);
@@ -156,9 +164,15 @@ test("showcase: player states", async ({ page, seedSession, remote, shot, qaApi 
     await expect(screen(page, "home")).toBeVisible({ timeout: 20_000 });
 
     // A real source line, as the phone would have it.
-    const sources = await fetch(`${API_BASE}/api/v1/sources?provider=777tv&sourceUrl=${encodeURIComponent(ITEM)}&episode=${encodeURIComponent("第01集")}`,
-      { headers: { Authorization: `Bearer ${qaApi.session.accessToken}` } }).then((r) => r.text());
-    const line = sources.split("\n").filter(Boolean).map((l) => JSON.parse(l))[0];
+    // Source probes run live against the provider's CDNs and now and then
+    // come back empty; ask again before calling it a failure.
+    let line = null;
+    for (let attempt = 0; attempt < 4 && !line; attempt += 1) {
+      if (attempt) await page.waitForTimeout(3000);
+      const sources = await fetch(`${API_BASE}/api/v1/sources?provider=777tv&sourceUrl=${encodeURIComponent(ITEM)}&episode=${encodeURIComponent("第01集")}`,
+        { headers: { Authorization: `Bearer ${qaApi.session.accessToken}` } }).then((r) => r.text());
+      line = sources.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.directUrl) || null;
+    }
     expect(line, "777tv has a playable source for 第01集").toBeTruthy();
 
     const tvToken = await page.evaluate(() => JSON.parse(localStorage.getItem("streamhub.session")).access_token);

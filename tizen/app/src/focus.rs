@@ -32,6 +32,24 @@
 //!   focus returns to rest. Tracks and columns carry a CSS transition, so a
 //!   new target mid-flight restarts from where it is rather than queueing.
 //!   Anything outside both falls back to `scrollIntoView` (nearest, instant).
+//! - Holding a direction (keydown `repeat`): Left/Right step every 160 ms,
+//!   every 80 ms after 400 ms held, and three cards per step after 1.5 s;
+//!   Up/Down step every 220 ms. Excess repeats are dropped, never queued, so
+//!   letting go (keyup) stops exactly where focus is. The transform for many
+//!   steps in one frame is applied once, on the next animation frame.
+//! - At an edge (nothing in that direction) the focused element gets
+//!   `tv-bump-<dir>` for a short nudge; nothing wraps.
+//! - Directional keys that arrive while nothing is focusable (a route change,
+//!   Detail loading), and Down with nothing below while rows are still loading
+//!   (`.tv-skeleton` / `[data-loading]` on screen), are buffered — up to 3,
+//!   for at most 2 s — and replayed once something takes focus. Back is
+//!   never buffered and clears the buffer.
+//! - OK on an element with `data-longpress` waits for keyup: released before
+//!   700 ms it clicks; held past it, it clicks with `intent() ==
+//!   Intent::LongPress` and the keyup does nothing. Play/PlayPause on a
+//!   `data-playable` element clicks it with `Intent::Play`; the red key (403)
+//!   on a `data-favable` one with `Intent::Favorite`. CH+/CH− (427/428) and
+//!   PageUp/PageDown (33/34) move a whole row up/down.
 //! - Text inputs: Left/Right move the caret (they leave the field only from
 //!   its first/last position), Up/Down leave it, Backspace edits, Enter
 //!   submits the enclosing `<form>` (a `submit` event is dispatched on it).
@@ -66,12 +84,63 @@ struct State {
     routes: HashMap<String, String>,
     /// Where focus was before a modal scope opened.
     before_scope: Option<Element>,
+    /// The direction being held, when it started, when focus last moved for
+    /// it and when it last bumped an edge (ms, Date.now()).
+    hold_key: Option<Key>,
+    hold_start: f64,
+    last_move: f64,
+    last_bump: f64,
+    /// Directional keys waiting for something focusable, with when they came.
+    buffer: Vec<(Dir, f64)>,
+    replaying: bool,
+    /// An OK press on a long-press element: the element, a generation, and
+    /// whether the long press already fired.
+    press: Option<(Element, u64, bool)>,
+    press_gen: u64,
+    /// The element whose transform the next animation frame applies.
+    reveal_pending: Option<Element>,
+}
+
+/// Why a focusable is being clicked. Screens read it in `on:click`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Intent {
+    /// OK (or anything else that clicks).
+    #[default]
+    Open,
+    /// The Play / PlayPause key.
+    Play,
+    /// OK held for 700 ms.
+    LongPress,
+    /// The red colour key.
+    Favorite,
 }
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
     static EXIT_PROMPT: ArcRwSignal<bool> = ArcRwSignal::new(false);
+    static INTENT: std::cell::Cell<Intent> = const { std::cell::Cell::new(Intent::Open) };
+    static KEY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
+
+/// How many keys have been pressed since launch. A screen compares two
+/// readings to tell whether the viewer has touched the remote in between.
+pub fn key_count() -> u64 {
+    KEY_COUNT.with(|c| c.get())
+}
+
+/// The intent of the click being handled right now (Open outside a click).
+pub fn intent() -> Intent {
+    INTENT.with(|i| i.get())
+}
+
+fn click_with(el: &Element, intent: Intent) {
+    INTENT.with(|i| i.set(intent));
+    click(el);
+    INTENT.with(|i| i.set(Intent::Open));
+}
+
+const LONG_PRESS_MS: u32 = 700;
+const BUFFER_TTL_MS: f64 = 2000.0;
 
 /// Whether the "離開 StreamHub？" prompt is showing. screens/exit.rs renders it.
 /// An Arc signal: it lives in a global, so it must not belong to any owner.
@@ -201,7 +270,8 @@ fn dom_focus(el: &Element) {
 
 fn scroll_into_view(el: &Element) {
     let opts = web_sys::ScrollIntoViewOptions::new();
-    opts.set_behavior(web_sys::ScrollBehavior::Instant);
+    // "auto" rather than "instant": the 2022 sets (Chromium 85) predate it.
+    opts.set_behavior(web_sys::ScrollBehavior::Auto);
     opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
     opts.set_inline(web_sys::ScrollLogicalPosition::Center);
     el.scroll_into_view_with_scroll_into_view_options(&opts);
@@ -241,7 +311,18 @@ fn reveal_in_track(el: &HtmlElement, track: &Element) {
     let viewport = track.parent_element().map(|p| p.client_width() as f64).unwrap_or(1920.0);
     let max_shift = (track_h.offset_width() as f64 - viewport).max(0.0);
     let shift = (left - start).clamp(0.0, max_shift);
+    // A track just rendered (a rail reloaded under the viewer) takes its
+    // position at once; sliding in from 0 would read as the rail jumping.
+    let fresh = track.get_attribute("data-shift").is_none();
+    let _ = track.set_attribute("data-shift", &format!("{}", shift.round()));
+    if fresh {
+        let _ = track_h.style().set_property("transition", "none");
+    }
     set_transform(track, &format!("translate3d({}px,0,0)", -shift.round()));
+    if fresh {
+        let _ = track_h.offset_width();
+        let _ = track_h.style().remove_property("transition");
+    }
 }
 
 /// Slide the column so the focused row's top sits on the anchor line.
@@ -341,6 +422,9 @@ fn focus_element_with(el: &Element, remember: bool) {
         }
     }
     let _ = el.class_list().add_1(FOCUSED_CLASS);
+    if let Some(prev) = previous.as_ref().filter(|p| *p != el) {
+        let _ = prev.remove_attribute("data-bump");
+    }
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.focused = Some(el.clone());
@@ -352,7 +436,64 @@ fn focus_element_with(el: &Element, remember: bool) {
         remember_route(el);
     }
     dom_focus(el);
-    reveal(el);
+    schedule_reveal(el);
+    schedule_replay();
+}
+
+/// Apply the transform for the latest focused element on the next animation
+/// frame: a burst of steps (key repeat, a 3-card jump) costs one transform.
+fn schedule_reveal(el: &Element) {
+    let first = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let first = s.reveal_pending.is_none();
+        s.reveal_pending = Some(el.clone());
+        first
+    });
+    if !first {
+        return;
+    }
+    let Some(window) = web_sys::window() else { return };
+    let cb = Closure::once_into_js(move || {
+        let pending = STATE.with(|s| s.borrow_mut().reveal_pending.take());
+        if let Some(el) = pending.filter(|e| e.is_connected()) {
+            reveal(&el);
+        }
+    });
+    if window.request_animation_frame(cb.unchecked_ref()).is_err() {
+        if let Some(el) = STATE.with(|s| s.borrow_mut().reveal_pending.take()) {
+            reveal(&el);
+        }
+    }
+}
+
+/// Replay buffered directional keys once something holds focus.
+fn schedule_replay() {
+    let wanted = STATE.with(|s| {
+        let s = s.borrow();
+        !s.replaying && !s.buffer.is_empty()
+    });
+    if !wanted {
+        return;
+    }
+    gloo_timers::callback::Timeout::new(0, || {
+        let keys = STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if s.replaying {
+                return Vec::new();
+            }
+            s.replaying = true;
+            std::mem::take(&mut s.buffer)
+        });
+        // A key older than this was meant for a screen long gone.
+        let now = js_sys::Date::now();
+        for (dir, at) in keys {
+            if now - at <= BUFFER_TTL_MS {
+                step(dir, 1, false);
+            }
+        }
+        STATE.with(|s| s.borrow_mut().replaying = false);
+    })
+    .forget();
 }
 
 /// Focus the first element matching a CSS selector (e.g. "[data-autofocus]").
@@ -395,11 +536,6 @@ pub fn restore() -> bool {
 /// The element the remote is on, if it is still in the document.
 pub fn focused() -> Option<Element> {
     STATE.with(|s| s.borrow().focused.clone()).filter(|e| e.is_connected())
-}
-
-/// True when the focused element (if any) matches `selector`.
-pub fn focused_matches(selector: &str) -> bool {
-    focused().is_some_and(|e| e.matches(selector).unwrap_or(false))
 }
 
 /// Screens set this on mount and clear it (None) on cleanup. The next screen
@@ -471,9 +607,13 @@ struct Measure {
 
 /// Some(m) when `c` lies in `dir` from `cur`.
 fn measure(cur: &Rect, c: &Rect, dir: Dir) -> Option<Measure> {
-    // A little slack: the focused element is scaled up, so its edges overlap
-    // its neighbours' by a few pixels.
+    // A little slack for edges: the focused element is scaled up, so they
+    // overlap its neighbours' by a few pixels. Centres must clear a quarter of
+    // the focused element's size: a lifted, scaled card's centre sits a few
+    // pixels off its unfocused neighbours', which must not read as "below".
     const SLACK: f64 = 2.0;
+    let slack_x = ((cur.r - cur.l) * 0.25).max(SLACK);
+    let slack_y = ((cur.b - cur.t) * 0.25).max(SLACK);
     let horizontal = |primary: f64| Measure {
         primary: primary.max(0.0),
         cross_gap: gap(cur.t, cur.b, c.t, c.b),
@@ -487,10 +627,10 @@ fn measure(cur: &Rect, c: &Rect, dir: Dir) -> Option<Measure> {
         cross_edge: (c.l - cur.l).abs(),
     };
     match dir {
-        Dir::Right if c.cx() > cur.cx() + SLACK && c.l >= cur.l + SLACK => Some(horizontal(c.l - cur.r)),
-        Dir::Left if c.cx() < cur.cx() - SLACK && c.r <= cur.r - SLACK => Some(horizontal(cur.l - c.r)),
-        Dir::Down if c.cy() > cur.cy() + SLACK && c.t >= cur.t + SLACK => Some(vertical(c.t - cur.b)),
-        Dir::Up if c.cy() < cur.cy() - SLACK && c.b <= cur.b - SLACK => Some(vertical(cur.t - c.b)),
+        Dir::Right if c.cx() > cur.cx() + slack_x && c.l >= cur.l + SLACK => Some(horizontal(c.l - cur.r)),
+        Dir::Left if c.cx() < cur.cx() - slack_x && c.r <= cur.r - SLACK => Some(horizontal(cur.l - c.r)),
+        Dir::Down if c.cy() > cur.cy() + slack_y && c.t >= cur.t + SLACK => Some(vertical(c.t - cur.b)),
+        Dir::Up if c.cy() < cur.cy() - slack_y && c.b <= cur.b - SLACK => Some(vertical(cur.t - c.b)),
         _ => None,
     }
 }
@@ -535,11 +675,21 @@ fn find_target(cur: &Element, dir: Dir) -> Option<Element> {
             }
         }
         Dir::Up | Dir::Down => {
+            // Inside a row column, the column's own rows come first: rows
+            // that slid out of view above can sit geometrically further away
+            // than something outside the column (the search field), yet Up
+            // means "the previous row".
+            let column = cur.closest("[data-row-column]").ok().flatten();
+            let in_column: Vec<(Element, Measure)> = match &column {
+                Some(c) => measured.iter().filter(|(e, _)| c.contains(Some(e.as_ref()))).cloned().collect(),
+                None => Vec::new(),
+            };
+            let pool = if in_column.is_empty() { &measured } else { &in_column };
             // The nearest row first, then on that row the closest thing:
             // overlapping before not, then aligned leading edges.
-            let nearest = pick(measured.iter(), |m| m.primary + m.cross_centre * 0.001)?;
+            let nearest = pick(pool.iter(), |m| m.primary + m.cross_centre * 0.001)?;
             let n = Rect::of(&nearest);
-            let row = measured.iter().filter(|(e, _)| {
+            let row = pool.iter().filter(|(e, _)| {
                 let r = Rect::of(e);
                 r.t < n.b && r.b > n.t
             });
@@ -568,20 +718,163 @@ fn find_target(cur: &Element, dir: Dir) -> Option<Element> {
     Some(chosen)
 }
 
-fn move_focus(dir: Dir) -> bool {
-    let Some(cur) = focused().filter(is_usable) else {
-        ensure_valid();
-        return true;
-    };
-    if let Some(target) = find_target(&cur, dir) {
-        focus_element(&target);
+/// Is the screen still filling in? (Keys meeting an empty edge then wait.)
+fn screen_loading() -> bool {
+    document().is_some_and(|d| !query_all(&d, ".tv-skeleton, [data-loading]").is_empty())
+}
+
+fn buffer(dir: Dir) {
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.buffer.len() < 3 {
+            s.buffer.push((dir, js_sys::Date::now()));
+        }
+    });
+}
+
+fn bump(el: &Element, dir: Dir) {
+    let now = js_sys::Date::now();
+    let recent = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let recent = now - s.last_bump < 300.0;
+        if !recent {
+            s.last_bump = now;
+        }
+        recent
+    });
+    if recent {
+        return;
     }
+    let class = match dir {
+        Dir::Up => "tv-bump-up",
+        Dir::Down => "tv-bump-down",
+        Dir::Left => "tv-bump-left",
+        Dir::Right => "tv-bump-right",
+    };
+    let list = el.class_list();
+    let _ = list.remove_4("tv-bump-up", "tv-bump-down", "tv-bump-left", "tv-bump-right");
+    // Read layout so re-adding the class restarts the animation.
+    let _ = el.get_bounding_client_rect();
+    let _ = list.add_1(class);
+    // A lasting record of the last bump (cleared when focus moves), for tests
+    // and for anyone inspecting the page on the set.
+    let _ = el.set_attribute("data-bump", &class["tv-bump-".len()..]);
+    let el = el.clone();
+    gloo_timers::callback::Timeout::new(220, move || {
+        let _ = el.class_list().remove_1(class);
+    })
+    .forget();
+}
+
+/// Move `steps` times in `dir`. Returns false when nothing could move.
+fn step(dir: Dir, steps: usize, repeat: bool) -> bool {
+    let Some(mut cur) = focused().filter(is_usable) else {
+        // Nothing to move from yet (route change, loading): keep the key.
+        if !repeat {
+            buffer(dir);
+        }
+        ensure_valid_now();
+        return false;
+    };
+    let mut moved = false;
+    for _ in 0..steps.max(1) {
+        match find_target(&cur, dir) {
+            Some(target) => {
+                focus_element(&target);
+                cur = target;
+                moved = true;
+            }
+            None => break,
+        }
+    }
+    if !moved {
+        // Rows still loading can only arrive below: Down waits for them; any
+        // other edge is an edge now, loading or not.
+        if dir == Dir::Down && screen_loading() && !repeat {
+            buffer(dir);
+        } else {
+            bump(&cur, dir);
+        }
+    }
+    moved
+}
+
+/// Hold-to-scroll pacing: how many steps this keydown takes (0 = drop it).
+fn hold_steps(key: Key, repeat: bool) -> usize {
+    let now = js_sys::Date::now();
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        if !repeat || s.hold_key != Some(key) {
+            s.hold_key = Some(key);
+            s.hold_start = now;
+            s.last_move = now;
+            return 1;
+        }
+        let held = now - s.hold_start;
+        let horizontal = matches!(key, Key::Left | Key::Right);
+        let (interval, steps) = if !horizontal {
+            (220.0, 1)
+        } else if held < 400.0 {
+            (160.0, 1)
+        } else if held < 1500.0 {
+            (80.0, 1)
+        } else {
+            (80.0, 3)
+        };
+        if now - s.last_move < interval {
+            return 0;
+        }
+        s.last_move = now;
+        steps
+    })
+}
+
+/// Focus the first element matching `selector`, putting every rail and row
+/// back at rest first. Returns false (and does nothing) when focus is already
+/// there and nothing is scrolled — the caller's Back then goes further.
+pub fn back_to(selector: &str) -> bool {
+    let Some(doc) = document() else { return false };
+    let Some(target) = query_all(&doc, selector).into_iter().find(is_usable) else { return false };
+    let at_rest = query_all(&doc, "[data-rail-track]")
+        .iter()
+        .all(|t| t.get_attribute("data-shift").is_none_or(|v| v == "0"));
+    if focused().as_ref() == Some(&target) && at_rest {
+        return false;
+    }
+    for t in query_all(&doc, "[data-rail-track]") {
+        set_transform(&t, "translate3d(0,0,0)");
+        let _ = t.set_attribute("data-shift", "0");
+    }
+    for c in query_all(&doc, "[data-row-column]") {
+        rest_column(&c);
+    }
+    focus_element(&target);
     true
 }
 
+/// True when the focused element lies inside something matching `selector`.
+pub fn focused_within(selector: &str) -> bool {
+    focused().is_some_and(|e| e.closest(selector).ok().flatten().is_some())
+}
+
 /// Keep focus on something real: after a route change, a data load or a
-/// modal opening/closing. Runs from the key handler and a slow ticker.
+/// modal opening/closing. Runs from a slow ticker and after transitions.
+///
+/// While a screen marks itself `[data-loading]` (Home's first load), this
+/// passive pass puts no fallback focus anywhere: a default landing on 搜尋
+/// that the rails then take away a moment later is exactly when an OK lands
+/// on the wrong thing. A key pressed meanwhile focuses at once
+/// (`ensure_valid_now`).
 pub fn ensure_valid() {
+    ensure_valid_inner(false);
+}
+
+/// The same, on behalf of a key the viewer pressed: never waits for loading.
+fn ensure_valid_now() {
+    ensure_valid_inner(true);
+}
+
+fn ensure_valid_inner(active: bool) {
     let scope = active_scope();
     let current = focused().filter(is_usable);
     match &scope {
@@ -617,6 +910,9 @@ pub fn ensure_valid() {
                 return;
             }
             let Some(doc) = document() else { return };
+            if !active && !query_all(&doc, "[data-loading]").is_empty() {
+                return;
+            }
             let pick = query_all(&doc, "[data-autofocus]")
                 .into_iter()
                 .find(is_usable)
@@ -629,6 +925,7 @@ pub fn ensure_valid() {
 }
 
 fn handle_back(handler: Option<KeyHandler>) {
+    STATE.with(|s| s.borrow_mut().buffer.clear());
     if let Some(h) = handler {
         if h(Key::Back) {
             return;
@@ -671,6 +968,7 @@ fn caret(el: &Element) -> Option<(u32, u32, u32)> {
 }
 
 fn on_keydown(event: KeyboardEvent) {
+    KEY_COUNT.with(|c| c.set(c.get() + 1));
     let code = event.key_code();
     if event.is_composing() || code == 229 {
         return;
@@ -719,32 +1017,65 @@ fn on_keydown(event: KeyboardEvent) {
         }
     }
 
+    let repeat = event.repeat();
+    let dir = match key {
+        Key::Up => Some(Dir::Up),
+        Key::Down => Some(Dir::Down),
+        Key::Left => Some(Dir::Left),
+        Key::Right => Some(Dir::Right),
+        // A whole row at a time, if the remote has them.
+        Key::Other(427) | Key::Other(33) => Some(Dir::Up),
+        Key::Other(428) | Key::Other(34) => Some(Dir::Down),
+        _ => None,
+    };
+    if let Some(dir) = dir {
+        event.prevent_default();
+        let steps = if matches!(key, Key::Other(_)) { 1 } else { hold_steps(key, repeat) };
+        if steps > 0 {
+            step(dir, steps, repeat);
+        }
+        return;
+    }
+
     match key {
-        Key::Up => {
-            event.prevent_default();
-            move_focus(Dir::Up);
-        }
-        Key::Down => {
-            event.prevent_default();
-            move_focus(Dir::Down);
-        }
-        Key::Left => {
-            event.prevent_default();
-            move_focus(Dir::Left);
-        }
-        Key::Right => {
-            event.prevent_default();
-            move_focus(Dir::Right);
-        }
         Key::Enter => {
             event.prevent_default();
+            if repeat {
+                return;
+            }
             match focused().filter(is_usable) {
+                Some(el) if el.has_attribute("data-longpress") => {
+                    // Decided on keyup, or by the timer if held.
+                    remember_route(&el);
+                    let gen = STATE.with(|s| {
+                        let mut s = s.borrow_mut();
+                        s.press_gen += 1;
+                        s.press = Some((el.clone(), s.press_gen, false));
+                        s.press_gen
+                    });
+                    gloo_timers::callback::Timeout::new(LONG_PRESS_MS, move || {
+                        let target = STATE.with(|s| {
+                            let mut s = s.borrow_mut();
+                            match s.press.as_mut() {
+                                Some((el, g, fired)) if *g == gen && !*fired => {
+                                    *fired = true;
+                                    Some(el.clone())
+                                }
+                                _ => None,
+                            }
+                        });
+                        if let Some(el) = target.filter(|e| e.is_connected()) {
+                            click_with(&el, Intent::LongPress);
+                        }
+                    })
+                    .forget();
+                }
                 Some(el) => {
                     // Pressing OK is a choice even where focus only landed by default.
                     remember_route(&el);
                     click(&el)
                 }
-                None => ensure_valid(),
+                None => ensure_valid_now(),
             }
         }
         Key::Back => {
@@ -754,6 +1085,38 @@ fn on_keydown(event: KeyboardEvent) {
         Key::Exit => {
             event.prevent_default();
             exit_app();
+        }
+        Key::Play | Key::PlayPause => {
+            if let Some(el) = focused().filter(|e| is_usable(e) && e.has_attribute("data-playable")) {
+                event.prevent_default();
+                click_with(&el, Intent::Play);
+            }
+        }
+        Key::Other(403) => {
+            if let Some(el) = focused().filter(|e| is_usable(e) && e.has_attribute("data-favable")) {
+                event.prevent_default();
+                click_with(&el, Intent::Favorite);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn on_keyup(event: KeyboardEvent) {
+    let key = Key::from_code(event.key_code(), &event.key());
+    match key {
+        Key::Up | Key::Down | Key::Left | Key::Right => {
+            STATE.with(|s| s.borrow_mut().hold_key = None);
+        }
+        Key::Enter => {
+            let press = STATE.with(|s| s.borrow_mut().press.take());
+            // A short press clicks now; a long one already fired, and its
+            // release must not click as well.
+            if let Some((el, _, false)) = press {
+                if el.is_connected() {
+                    click(&el);
+                }
+            }
         }
         _ => {}
     }
@@ -776,6 +1139,9 @@ pub fn init() {
     let keydown = Closure::<dyn FnMut(KeyboardEvent)>::new(on_keydown);
     let _ = window.add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref());
     keydown.forget();
+    let keyup = Closure::<dyn FnMut(KeyboardEvent)>::new(on_keyup);
+    let _ = window.add_event_listener_with_callback("keyup", keyup.as_ref().unchecked_ref());
+    keyup.forget();
     let focusin = Closure::<dyn FnMut(web_sys::FocusEvent)>::new(on_focusin);
     let _ = window.add_event_listener_with_callback("focusin", focusin.as_ref().unchecked_ref());
     focusin.forget();

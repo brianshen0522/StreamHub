@@ -23,10 +23,10 @@ export class QaApi {
   }
 
   /** A fresh session as the QA user. `client` sets X-StreamHub-Client (the TV sends "tv"). */
-  static async login({ client = "tv" } = {}) {
+  static async login({ client = "tv", creds = credentials() } = {}) {
     const api = new QaApi();
     const r = await api.raw("POST", "/auth/login", {
-      body: (({ username, password }) => ({ login: username, password }))(credentials()),
+      body: (({ username, password }) => ({ login: username, password }))(creds),
       headers: client ? { "X-StreamHub-Client": client } : {},
     });
     if (!r.ok) throw new Error(`QA login failed: HTTP ${r.status} ${r.json?.error || ""}`);

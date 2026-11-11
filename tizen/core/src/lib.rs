@@ -5,6 +5,7 @@
 //! "Resume semantics now exist three times").
 
 pub mod entry;
+pub mod labels;
 pub mod models;
 pub mod ndjson;
 pub mod resume;

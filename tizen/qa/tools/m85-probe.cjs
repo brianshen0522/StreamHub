@@ -12,7 +12,18 @@ const { chromium } = require(require("path").join(__dirname, "..", "node_modules
   page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`.slice(0, 300)));
   await page.goto("file:///w/index.html");
   await page.waitForTimeout(5000);
-  if (process.argv[2]) { await page.evaluate(process.argv[2]); await page.waitForTimeout(3000); }
+  // argv[2]: one JS expression, or several separated by a line ";;" — each runs
+  // after the previous settled (3 s), and a step that navigates (reload) is
+  // fine. A step "shot:<name>" saves /out/m85-<name>.png at that point.
+  if (process.argv[2]) {
+    for (const step of process.argv[2].split(/\n;;\n|;;\n|\n;;/)) {
+      const st = step.trim();
+      if (!st) continue;
+      if (st.startsWith("shot:")) { await page.screenshot({ path: `/out/m85-${st.slice(5).trim()}.png` }); continue; }
+      try { await page.evaluate(st); } catch (e) { logs.push(`step error: ${e.message}`.slice(0, 200)); }
+      await page.waitForTimeout(3000);
+    }
+  }
   const ua = await page.evaluate(() => navigator.userAgent);
   const screens = await page.evaluate(() => [...document.querySelectorAll("[data-screen]")].map((e) => e.dataset.screen).join(","));
   console.log(`UA: ${ua}\nscreens: ${screens || "(none mounted)"}`);

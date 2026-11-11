@@ -14,6 +14,10 @@
   var KEYS = [
     "MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop",
     "MediaRewind", "MediaFastForward", "MediaTrackPrevious", "MediaTrackNext",
+    // Not on the M7's minimal remote, but on fuller Samsung remotes; screens
+    // may bind them. Registered only where the set reports them.
+    "ChannelUp", "ChannelDown", "ColorF0Red", "Info",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
   ];
   var input = window.tizen && window.tizen.tvinputdevice;
   if (!input) return;

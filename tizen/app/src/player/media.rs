@@ -4,9 +4,7 @@
 //! query; progress is integer seconds and never carries the derived fields.
 
 use serde_json::{json, Value};
-use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{AbortSignal, Headers, Request, RequestInit, Response};
+use web_sys::AbortSignal;
 
 use crate::api::{self, ApiError};
 use crate::config;
@@ -108,7 +106,7 @@ pub fn progress_body(
         "providerKey": target.provider,
         "mediaType": media_type(target),
         "title": target.title,
-        "posterUrl": target.poster_url,
+        "posterUrl": absolute_or_empty(&target.poster_url),
         "itemUrl": target.item_url,
         // As the web derives it: the season page (movieffm), else the title's own.
         "detailUrl": episode_source_url(target),
@@ -127,14 +125,51 @@ pub fn progress_body(
     body
 }
 
-/// "第4集" stays as is; a bare "04" becomes "第04集". Never used as a key.
-pub fn episode_caption(label: &str) -> String {
-    let bare = !label.is_empty() && label.chars().all(|c| c.is_ascii_digit());
-    if bare {
-        format!("第{label}集")
+/// The server validates posterUrl as a URL or "": a provider's relative
+/// poster path would 400 every progress save, so it is dropped instead.
+pub fn absolute_or_empty(url: &str) -> &str {
+    let u = url.trim();
+    let lower = u.get(..8).unwrap_or(u).to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        u
     } else {
-        label.to_string()
+        ""
     }
+}
+
+/// What the "controlled by" badge calls the driving device. A real name
+/// (a native client's "Pixel 7", a browser's "Chrome on Mac") is kept; the
+/// server's fallback "StreamHub (<kind>)" becomes something a viewer reads.
+pub fn friendly_device(name: &str) -> String {
+    let name = name.trim();
+    let kind = name
+        .strip_prefix("StreamHub (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(str::to_ascii_lowercase);
+    match kind.as_deref() {
+        Some("android") => "Android 手機".into(),
+        Some("ios") => "iPhone".into(),
+        Some("web") | Some("browser") => "瀏覽器".into(),
+        Some("tv") => "電視".into(),
+        Some(_) => "另一部裝置".into(),
+        None if name.is_empty() || name == "Unknown device" => "另一部裝置".into(),
+        None => name.to_string(),
+    }
+}
+
+/// 「由 Android 手機控制」: a space only where Latin text meets the CJK frame.
+pub fn driver_caption(name: &str) -> String {
+    let n = friendly_device(name);
+    let latin = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    let before = if latin(n.chars().next()) { " " } else { "" };
+    let after = if latin(n.chars().last()) { " " } else { "" };
+    format!("由{before}{n}{after}控制")
+}
+
+/// The one display rule every screen uses (core `labels`): bare digits
+/// become 「第N集」, anything else is shown as given. Never used as a key.
+pub fn episode_caption(label: &str) -> String {
+    streamhub_core::labels::episode_caption(label)
 }
 
 pub fn format_time(seconds: u64) -> String {
@@ -211,74 +246,7 @@ pub async fn stream_sources(
         return Ok(());
     }
     let body = json!({ "streams": streams, "provider": target.provider, "preferredLabel": preferred });
-    ndjson_post("/check-sources", &body, signal, on_line).await
-}
-
-/// `api::ndjson` is GET-only; `/check-sources` is a POST.
-async fn ndjson_post(
-    path: &str,
-    body: &Value,
-    signal: &AbortSignal,
-    mut on_line: impl FnMut(Value),
-) -> Result<(), ApiError> {
-    let mut refreshed = false;
-    let response = loop {
-        let token = session::current().map(|s| s.access_token).unwrap_or_default();
-        let headers = Headers::new().map_err(|_| ApiError::network("headers"))?;
-        let _ = headers.set("X-StreamHub-Client", api::CLIENT_KIND);
-        let _ = headers.set("Content-Type", "application/json");
-        let _ = headers.set("Authorization", &format!("Bearer {token}"));
-        let init = RequestInit::new();
-        init.set_method("POST");
-        init.set_headers(&headers);
-        init.set_body(&JsValue::from_str(&body.to_string()));
-        init.set_signal(Some(signal));
-        let request = Request::new_with_str_and_init(&config::api_url(path), &init)
-            .map_err(|_| ApiError::network("bad request"))?;
-        let window = web_sys::window().ok_or_else(|| ApiError::network("no window"))?;
-        let response: Response = JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(|_| ApiError::network("無法連線到伺服器"))?
-            .unchecked_into();
-        if response.status() == 401 && !refreshed {
-            refreshed = true;
-            api::refresh().await?;
-            continue;
-        }
-        if !(200..300).contains(&response.status()) {
-            let text = match response.text() {
-                Ok(p) => JsFuture::from(p).await.ok().and_then(|t| t.as_string()).unwrap_or_default(),
-                Err(_) => String::new(),
-            };
-            let message = serde_json::from_str::<Value>(&text)
-                .ok()
-                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string))
-                .unwrap_or_else(|| format!("伺服器錯誤（{}）", response.status()));
-            return Err(ApiError { status: response.status(), message });
-        }
-        break response;
-    };
-    let Some(stream) = response.body() else { return Ok(()) };
-    let reader: web_sys::ReadableStreamDefaultReader =
-        stream.get_reader().dyn_into().map_err(|_| ApiError::network("reader"))?;
-    let decoder = web_sys::TextDecoder::new().map_err(|_| ApiError::network("decoder"))?;
-    let mut buffer = streamhub_core::ndjson::LineBuffer::default();
-    loop {
-        let chunk = JsFuture::from(reader.read())
-            .await
-            .map_err(|_| ApiError::network("stream interrupted"))?;
-        let done = js_sys::Reflect::get(&chunk, &"done".into())
-            .ok()
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        if done {
-            buffer.finish().into_iter().for_each(&mut on_line);
-            return Ok(());
-        }
-        let bytes = js_sys::Reflect::get(&chunk, &"value".into()).unwrap_or(JsValue::NULL);
-        let text = decoder.decode_with_js_u8_array(&bytes.unchecked_into()).unwrap_or_default();
-        buffer.push(&text).into_iter().for_each(&mut on_line);
-    }
+    api::ndjson_with("POST", "/check-sources", Some(&body), Some(signal), on_line).await
 }
 
 /// Did the *server* answer? A playback error while it cannot be reached is an
@@ -319,6 +287,28 @@ mod tests {
         assert_eq!(b["detailUrl"], "https://dramasq.io/drama/1.html");
         assert!(b.get("progressPercent").is_none());
         assert!(b.get("isCompleted").is_none());
+    }
+
+    #[test]
+    fn relative_posters_are_not_sent() {
+        let mut t = target();
+        t.poster_url = "/wp-content/uploads/x.jpg".into();
+        assert_eq!(progress_body(&t, "", 0.0, 1000.0, "progress")["posterUrl"], "");
+        t.poster_url = "https://img/x.jpg".into();
+        assert_eq!(progress_body(&t, "", 0.0, 1000.0, "progress")["posterUrl"], "https://img/x.jpg");
+        assert_eq!(absolute_or_empty("HTTPS://A/b"), "HTTPS://A/b");
+        assert_eq!(absolute_or_empty("  "), "");
+    }
+
+    #[test]
+    fn driver_names_read_as_devices() {
+        assert_eq!(driver_caption("StreamHub (android)"), "由 Android 手機控制");
+        assert_eq!(driver_caption("StreamHub (ios)"), "由 iPhone 控制");
+        assert_eq!(driver_caption("StreamHub (web)"), "由瀏覽器控制");
+        assert_eq!(driver_caption("Pixel 7"), "由 Pixel 7 控制");
+        assert_eq!(driver_caption("Chrome on Mac"), "由 Chrome on Mac 控制");
+        assert_eq!(driver_caption("Unknown device"), "由另一部裝置控制");
+        assert_eq!(driver_caption("客廳的手機"), "由客廳的手機控制");
     }
 
     #[test]

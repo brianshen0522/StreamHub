@@ -21,7 +21,14 @@
  *                                open fails (reaches the error panel).
  *   streamhub.mockDuration       seconds, default 1500.
  *   streamhub.mockRate           clock speed multiplier, default 1.
- * StreamHubPlayer.opened records every {url, startMs, backend} opened.
+ *   streamhub.mockOpenDelay      ms from open() to playing, default 400.
+ * In mock mode only, StreamHubPlayer.opened records the last 50
+ * {url, startMs, backend} opened (URLs carry access tokens, so nothing is
+ * kept on a real set).
+ *
+ * pause()/play() during loading set an intent instead of reaching a backend
+ * that is not ready: the source then comes up paused (state "paused") rather
+ * than playing over the viewer's press.
  */
 (function () {
   "use strict";
@@ -35,6 +42,8 @@
   var state = "idle";
   var current = null;
   var opened = [];
+  var OPENED_MAX = 50;
+  var wantPaused = false;
 
   function emit(name, arg) {
     var f = listener[name];
@@ -115,7 +124,9 @@
           if (g !== gen) return;
           var go = function () {
             if (g !== gen) return;
-            try { p.play(); setState("playing", g); emit("onBuffering", false); }
+            emit("onBuffering", false);
+            if (wantPaused) { setState("paused", g); return; }
+            try { p.play(); setState("playing", g); }
             catch (e) { fail(e && e.name || "PLAY_FAILED", g); }
           };
           if (startMs > 0) {
@@ -137,7 +148,10 @@
         this.p().seekTo(Math.max(0, ms),
           function () { if (g === gen) emit("onBuffering", false); },
           function () { if (g === gen) emit("onBuffering", false); });
-      } catch (e) {}
+      } catch (e) {
+        // Neither callback will come: clear the spinner ourselves.
+        emit("onBuffering", false);
+      }
     },
     stop: function () { try { this.p().stop(); } catch (e) {} },
     close: function () {
@@ -220,6 +234,7 @@
           });
           hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
             if (g !== gen) return;
+            if (wantPaused) { emit("onBuffering", false); setState("paused", g); return; }
             var pr = v.play();
             if (pr && pr.catch) pr.catch(function () {});
           });
@@ -230,9 +245,12 @@
           v.addEventListener("loadedmetadata", function once() {
             v.removeEventListener("loadedmetadata", once);
             if (start > 0) v.currentTime = start;
+            if (wantPaused) { emit("onBuffering", false); setState("paused", g); }
           });
-          var pr = v.play();
-          if (pr && pr.catch) pr.catch(function () {});
+          if (!wantPaused) {
+            var pr = v.play();
+            if (pr && pr.catch) pr.catch(function () {});
+          }
         } else {
           fail("HLS_UNSUPPORTED", g);
         }
@@ -275,7 +293,7 @@
     el = document.createElement("div");
     el.id = "vp-mock-stage";
     el.setAttribute("aria-hidden", "true");
-    el.style.cssText = "position:fixed;inset:0;z-index:-1;display:flex;align-items:center;" +
+    el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:-1;display:flex;align-items:center;" +
       "justify-content:center;background:radial-gradient(ellipse at center,#2a2f3a 0%,#0b0c10 75%);" +
       "color:rgba(255,255,255,.28);font:500 34px/1.4 sans-serif;letter-spacing:.08em;text-align:center";
     el.textContent = "模擬播放器 · 實機會在這裡顯示影片";
@@ -317,8 +335,8 @@
         self.dur = (Number(ls("streamhub.mockDuration")) || 1500) * 1000;
         if (self.pos >= self.dur) self.pos = 0;
         emit("onBuffering", false);
-        self.playing = true;
-        setState("playing", g);
+        self.playing = !wantPaused;
+        setState(wantPaused ? "paused" : "playing", g);
         emit("onTime", self.pos);
         self.timer = setInterval(function () {
           if (g !== gen || !self.playing) return;
@@ -332,7 +350,7 @@
             emit("onEnded");
           }
         }, TICK_MS);
-      }, 400);
+      }, Number(ls("streamhub.mockOpenDelay")) || 400);
     },
     play: function () { if (this.dur > 0 && state !== "ended") { this.playing = true; setState("playing"); } },
     pause: function () { if (this.dur > 0 && state !== "ended") { this.playing = false; setState("paused"); } },
@@ -360,6 +378,7 @@
     opened: opened,
     open: function (url, startMs) {
       gen += 1;
+      wantPaused = false;
       var g = gen;
       state = "idle";
       setState("loading", g);
@@ -368,12 +387,23 @@
         var next = pick();
         if (current && current !== next) current.close();
         current = next;
-        opened.push({ url: String(url), startMs: Number(startMs) || 0, backend: next.name });
+        if (next === mock) {
+          opened.push({ url: String(url), startMs: Number(startMs) || 0, backend: next.name });
+          if (opened.length > OPENED_MAX) opened.splice(0, opened.length - OPENED_MAX);
+        }
         next.open(String(url), Number(startMs) || 0, g);
       });
     },
-    play: function () { if (current) current.play(); },
-    pause: function () { if (current) current.pause(); },
+    // While loading there is nothing to drive yet: record the intent, which
+    // the backend honours when the source is ready.
+    play: function () {
+      wantPaused = false;
+      if (current && state !== "loading") current.play();
+    },
+    pause: function () {
+      wantPaused = true;
+      if (current && state !== "loading") current.pause();
+    },
     seek: function (ms) { if (current) current.seek(Number(ms) || 0); },
     stop: function () { if (current) current.stop(); },
     close: function () {

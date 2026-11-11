@@ -8,6 +8,9 @@ test("login with username and password", async ({ page, remote, focused, shot })
 
   const { username, password } = credentials();
   // Text goes in the way the IME delivers it: into the focused field.
+  // The password card is one step away from the pairing screen.
+  await focusTo(page, remote, '[data-action="use-password"]', { dirs: ["Down", "Up"] });
+  await remote.enter();
   await focusTo(page, remote, 'input[name="username"]');
   expect((await focused()).isActive, "the focused field also holds DOM focus (IME needs it)").toBeTruthy();
   await page.keyboard.type(username);

@@ -46,7 +46,11 @@
        $WEBAPIS/webapis/webapis.js load from the platform directory. -->
   <tizen:content-security-policy>default-src 'self' file:; script-src 'self' file: 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' file: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src * data: blob:; font-src 'self' file: data:; worker-src 'self' blob:; object-src 'none'</tizen:content-security-policy>
 
-  <tizen:setting screen-orientation="landscape"
+  <!-- pointing-device-support="disable": the app is D-pad only. With a mouse or
+       the remote's pointer mode the platform otherwise draws a cursor, which
+       showed as a faint dot over the middle of the video. -->
+  <tizen:setting pointing-device-support="disable"
+                 screen-orientation="landscape"
                  context-menu="disable"
                  background-support="disable"
                  encryption="disable"

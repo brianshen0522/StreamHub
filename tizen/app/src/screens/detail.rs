@@ -19,7 +19,7 @@ use streamhub_core::resume::{progress_key, progress_map, resume_position_seconds
 use crate::api;
 use crate::focus;
 use crate::nav::{self, DetailTarget, PlayTarget, Route};
-use crate::screens::common::{array, clock, media_type, opt, s, unavailable_label, Heart, Load};
+use crate::screens::common::{self, array, clock, media_type, opt, s, unavailable_label, Heart, Load};
 use crate::screens::search;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,11 +42,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 
 fn offline_or(e: &api::ApiError) -> String {
-    if e.is_offline() {
-        "無法連線到伺服器".into()
-    } else {
-        e.message.clone()
-    }
+    common::friendly_error(e)
 }
 
 #[derive(Clone, Copy)]
@@ -69,6 +65,9 @@ struct State {
     favorites: RwSignal<Vec<Value>>,
     fav_busy: RwSignal<bool>,
     fav_error: RwSignal<Option<String>>,
+    /// Bumped by every season request; an answer for an older one is
+    /// dropped (S2 then S1 quickly must not leave S2's episodes under S1).
+    season_seq: StoredValue<u64>,
 }
 
 impl State {
@@ -95,6 +94,8 @@ impl State {
 /// entry point and rolls a finished season over to the next (as the web does);
 /// a season picked on the rail resumes within itself.
 async fn open_season(st: State, target: DetailTarget, season: SeasonRef, initial: bool) {
+    st.season_seq.update_value(|n| *n += 1);
+    let mine = st.season_seq.get_value();
     st.season.set(Some(season.clone()));
     st.episodes.set(Load::Loading);
     st.episode.set(None);
@@ -103,7 +104,9 @@ async fn open_season(st: State, target: DetailTarget, season: SeasonRef, initial
         api::query(&[("provider", &target.provider), ("sourceUrl", &season.url)])
     );
     let result = api::get(&path).await;
-    if st.dead() {
+    // Gone, or another season was picked while this one loaded: the newer
+    // request owns the rail.
+    if st.dead() || st.season_seq.try_get_value() != Some(mine) {
         return;
     }
     let eps = match result {
@@ -248,7 +251,32 @@ async fn load(st: State, target: DetailTarget) {
     }
 }
 
-fn play(st: State, target: &DetailTarget, episode: Option<String>, from_start: bool) {
+thread_local! {
+    /// A title the Play key was pressed on elsewhere (a Home or Search card):
+    /// Detail resolves where to resume, then replaces itself with the player.
+    static AUTOPLAY: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Ask the next Detail for (provider, url) to start playing as soon as it
+/// knows what and where — the Play key on a card. Call before pushing Detail.
+pub fn request_autoplay(provider: &str, url: &str) {
+    AUTOPLAY.with(|a| *a.borrow_mut() = Some((provider.to_string(), url.to_string())));
+}
+
+fn take_autoplay(provider: &str, url: &str) -> bool {
+    AUTOPLAY.with(|a| {
+        let mut a = a.borrow_mut();
+        let hit = a.as_ref().is_some_and(|(p, u)| p == provider && u == url);
+        if hit || a.is_some() {
+            *a = None;
+        }
+        hit
+    })
+}
+
+/// `replace`: the player takes Detail's place in the stack (autoplay), so
+/// Back from it returns to where Play was pressed.
+fn play(st: State, target: &DetailTarget, episode: Option<String>, from_start: bool, replace: bool) {
     let is_movie = st.kind.get_untracked() == Kind::Movie;
     if !is_movie && episode.is_none() {
         return;
@@ -264,7 +292,7 @@ fn play(st: State, target: &DetailTarget, episode: Option<String>, from_start: b
         .with_untracked(|seasons| seasons.iter().find(|s| s.url == season_url).map(|s| s.label.clone()))
         .unwrap_or_default();
     let media_type = if is_movie { "movie".to_string() } else { "tv".to_string() };
-    nav::push(Route::Player(PlayTarget {
+    let route = Route::Player(PlayTarget {
         provider: target.provider.clone(),
         item_url: target.url.clone(),
         season_url,
@@ -277,7 +305,12 @@ fn play(st: State, target: &DetailTarget, episode: Option<String>, from_start: b
         source: None,
         start_seconds: Some(start),
         from_cast: false,
-    }));
+    });
+    if replace {
+        nav::replace(route);
+    } else {
+        nav::push(route);
+    }
 }
 
 fn toggle_favorite(st: State, target: DetailTarget) {
@@ -352,6 +385,7 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
         favorites: RwSignal::new(Vec::new()),
         fav_busy: RwSignal::new(false),
         fav_error: RwSignal::new(None),
+        season_seq: StoredValue::new(0),
     };
     on_cleanup(move || st.alive.set(false));
     spawn_local(load(st, target.clone()));
@@ -365,12 +399,20 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
     });
     // Focus Play the first time it can actually play (or wherever focus was
     // when this screen was left, coming back from the player).
+    // Copy handles, so the view's Fn closures can reach the target.
+    let tv = StoredValue::new(target.clone());
+    common::ensure_provider_names();
     Effect::new(move |done: Option<bool>| {
         if done == Some(true) {
             return true;
         }
         if !ready.get() {
             return false;
+        }
+        let t = tv.get_value();
+        if take_autoplay(&t.provider, &t.url) {
+            play(st, &t, st.episode.get_untracked(), false, true);
+            return true;
         }
         gloo_timers::callback::Timeout::new(0, || {
             if !focus::restore() {
@@ -381,28 +423,54 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
         true
     });
 
-    let badge = target.row.as_ref().and_then(unavailable_label);
-    // Copy handles, so the view's Fn closures can reach the target.
-    let tv = StoredValue::new(target.clone());
-    let gone_title = target.title.clone();
-    let poster_src = move || api::poster_url(&st.poster.get());
+    // Play/PlayPause anywhere on Detail plays (resume rules, like OK on 播放);
+    // Back from deep in the rows returns to 播放 first, then leaves.
+    let live = focus::screen_alive();
+    let live_in = live.clone();
+    let handler: focus::KeyHandler = std::rc::Rc::new(move |key| {
+        if !live_in.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        match key {
+            crate::keys::Key::Play | crate::keys::Key::PlayPause => {
+                if ready.get_untracked() {
+                    play(st, &tv.get_value(), st.episode.get_untracked(), false, false);
+                    return true;
+                }
+                false
+            }
+            crate::keys::Key::Back => {
+                !focus::focused_within("[data-focus-group=detail-actions]") && focus::back_to("[data-action=play]")
+            }
+            _ => false,
+        }
+    });
+    focus::set_screen_handler(Some(handler));
+    on_cleanup(move || live.store(false, std::sync::atomic::Ordering::Relaxed));
 
-    let provider_label = target.provider.clone();
+    let badge = target.row.as_ref().and_then(unavailable_label);
+    let gone_title = target.title.clone();
+    let poster_src = move || common::poster_src(&st.poster.get());
+
+    let provider_key = target.provider.clone();
+    // 「MovieFFM · 影集 · 第 1 季 · 11 集」: display names and captions only.
     let chips = move || {
-        let mut parts = vec![provider_label.clone()];
+        let mut parts = vec![common::provider_name(&provider_key)];
         parts.push(match st.kind.get() {
             Kind::Movie => "電影".into(),
             Kind::Series => "影集".into(),
         });
+        if st.seasons.with(|s| s.len() > 1) {
+            if let Some(season) = st.season.get().filter(|s| !s.label.is_empty()) {
+                parts.push(streamhub_core::labels::season_parts(&season.label).0);
+            }
+        }
         if st.kind.get() == Kind::Series {
             if let Load::Ready(e) = st.episodes.get() {
                 if !e.is_empty() {
                     parts.push(format!("{} 集", e.len()));
                 }
             }
-        }
-        if let Some(season) = st.season.get().filter(|s| !s.label.is_empty()) {
-            parts.push(season.label);
         }
         parts.into_iter().map(|p| view! { <span class="tv-chip-plain">{p}</span> }).collect_view()
     };
@@ -418,7 +486,7 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
         let ep = st.episode.get();
         let _ = st.progress.get();
         let pos = st.position_for(ep.as_deref());
-        let ep_text = ep.map(|e| format!(" · {e}")).unwrap_or_default();
+        let ep_text = ep.map(|e| format!(" {}", common::episode_caption(&e))).unwrap_or_default();
         if pos > 0.0 {
             format!("繼續播放{ep_text} · {}", clock(pos))
         } else {
@@ -481,7 +549,12 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
             <div class="tv-backdrop tv-backdrop-detail" aria-hidden="true">
                 {move || {
                     let src = poster_src();
-                    (!src.is_empty()).then(|| view! { <img class="tv-backdrop-img is-shown" src=src alt=""/> })
+                    (!src.is_empty()).then(|| view! {
+                        <div class="tv-backdrop-layer is-shown">
+                            <img class="tv-backdrop-wash" src=src.clone() alt=""/>
+                            <img class="tv-backdrop-img" src=src alt=""/>
+                        </div>
+                    })
                 }}
                 <div class="tv-scrim"></div>
             </div>
@@ -507,7 +580,7 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                 aria-disabled=move || (!ready.get()).then_some("true")
                                 on:click=move |_| {
                                     if ready.get_untracked() {
-                                        play(st, &tv.get_value(), st.episode.get_untracked(), false)
+                                        play(st, &tv.get_value(), st.episode.get_untracked(), false, false)
                                     }
                                 }
                             >
@@ -520,7 +593,7 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                     data-focusable=""
                                     data-action="restart"
                                     data-focus-id="detail-restart"
-                                    on:click=move |_| play(st, &tv.get_value(), st.episode.get_untracked(), true)
+                                    on:click=move |_| play(st, &tv.get_value(), st.episode.get_untracked(), true, false)
                                 >
                                     <svg class="tv-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg>
                                     "從頭播放"
@@ -554,12 +627,18 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                         .into_iter()
                                         .map(|season| {
                                             let selected = current.as_deref() == Some(season.url.as_str());
-                                            let label = if season.label.is_empty() { "季".to_string() } else { season.label.clone() };
+                                            // 「第 2 季」 over the site's "201510集全".
+                                            let (main, rest) = if season.label.is_empty() {
+                                                ("季".to_string(), String::new())
+                                            } else {
+                                                streamhub_core::labels::season_parts(&season.label)
+                                            };
                                             let id = format!("season:{}", season.url);
                                             view! {
                                                 <button
                                                     class="tv-btn tv-btn-seg"
                                                     class:is-selected=selected
+                                                    class:has-sub=!rest.is_empty()
                                                     data-focusable=""
                                                     data-focus-id=id
                                                     on:click=move |_| {
@@ -568,7 +647,8 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                                         }
                                                     }
                                                 >
-                                                    {label}
+                                                    <span class="tv-seg-main">{main}</span>
+                                                    {(!rest.is_empty()).then(|| view! { <span class="tv-seg-sub">{rest.clone()}</span> })}
                                                 </button>
                                             }
                                         })
@@ -606,16 +686,23 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                                 let done = p.is_some_and(|p| p.is_completed);
                                                 let partial = p.filter(|p| !p.is_completed && p.progress_percent > 0.0);
                                                 let pct = partial.map(|p| p.progress_percent).unwrap_or(0.0);
+                                                // Status only where there is one: in progress
+                                                // (time left) or finished; unwatched is just the caption.
                                                 let caption = if done {
-                                                    "已看完".to_string()
-                                                } else if let Some(p) = partial {
-                                                    format!("看到 {}", clock(p.position_seconds))
+                                                    Some("已看完".to_string())
                                                 } else {
-                                                    "未觀看".to_string()
+                                                    partial.map(|p| {
+                                                        let left = (p.duration_seconds - p.position_seconds).max(0.0);
+                                                        if p.duration_seconds > 0.0 {
+                                                            format!("剩 {} 分鐘", (left / 60.0).ceil().max(1.0) as u64)
+                                                        } else {
+                                                            format!("看到 {}", clock(p.position_seconds))
+                                                        }
+                                                    })
                                                 };
                                                 let selected = current.as_deref() == Some(ep.as_str());
                                                 let id = format!("ep:{ep}");
-                                                let label = ep.clone();
+                                                let label = common::episode_caption(&ep);
                                                 view! {
                                                     <button
                                                         class="tv-ep"
@@ -625,13 +712,17 @@ pub fn DetailScreen(target: DetailTarget) -> impl IntoView {
                                                         data-focus-id=id
                                                         on:click=move |_| {
                                                             st.episode.set(Some(ep.clone()));
-                                                            play(st, &tv.get_value(), Some(ep.clone()), false);
+                                                            play(st, &tv.get_value(), Some(ep.clone()), false, false);
                                                         }
                                                     >
                                                         <span class="tv-ep-label">{label}</span>
-                                                        <span class="tv-ep-caption tv-num">{caption}</span>
-                                                        {done.then(|| view! {
-                                                            <svg class="tv-ep-check" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                                                        {caption.map(|c| view! {
+                                                            <span class="tv-ep-caption tv-num">
+                                                                {done.then(|| view! {
+                                                                    <svg class="tv-ep-check" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                                                                })}
+                                                                {c}
+                                                            </span>
                                                         })}
                                                         {(pct > 0.0).then(|| {
                                                             let w = format!("transform:scaleX({:.3})", (pct / 100.0).clamp(0.03, 1.0));
