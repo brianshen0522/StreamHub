@@ -100,7 +100,12 @@ playing:
     "paused": false, "buffering": false } }
 ```
 
-Faster than one frame per 250 ms is dropped by the server.
+Frames faster than one per 250 ms are not published one by one: the server
+holds the newest and publishes it when the window closes, so bursts are safe.
+
+Do not send this — or anything else — before `ready`. The server drops frames
+that arrive while it is still checking `auth` (it used to close the socket
+`4003` for them).
 
 ### Receiving commands
 
@@ -111,6 +116,10 @@ Faster than one frame per 250 ms is dropped by the server.
 
 Actions: `play`, `pause`, `resume`, `seek` (`positionMs`), `stop`, `next`.
 An action the build does not know must be ignored, not treated as an error.
+
+`positionMs` in `play` is where to start, and is honoured when non-zero: it
+is the live position when a playing video is moved across or the source of
+the showing episode is switched.
 
 `streamUrl` is the provider's direct URL. The receiver resolves its own
 `/api/manifest` or `/api/stream` URL from it with its own token — the phone

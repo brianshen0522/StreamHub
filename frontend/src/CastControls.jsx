@@ -158,6 +158,9 @@ function CastPicker({ cast, t, onClose }) {
 export function CastBar({ t }) {
   const cast = useCast();
   const [open, setOpen] = useState(false);
+  // The bar's pause button flips at once like the remote's does; reading the
+  // report alone left it showing the old state long enough to press twice.
+  const r = useRemoteTransport(cast);
 
   // The bar is fixed over the page, so the page needs to know to leave room
   // for it — but only while it is there.
@@ -198,10 +201,10 @@ export function CastBar({ t }) {
           <button
             type="button"
             className="cast-bar-toggle"
-            onClick={() => (state.paused ? cast.resume() : cast.pause())}
-            aria-label={state.paused ? (t?.resume || "Resume") : (t?.pause || "Pause")}
+            onClick={r.togglePause}
+            aria-label={r.paused ? (t?.resume || "Resume") : (t?.pause || "Pause")}
           >
-            {state.paused ? "▶" : "❚❚"}
+            {r.paused ? "▶" : "❚❚"}
           </button>
         ) : null}
       </div>
@@ -230,21 +233,36 @@ function useRemoteTransport(cast) {
   const [scrubbing, setScrubbing] = useState(null);
   const [pending, setPending] = useState(null);
   const [assumed, setAssumed] = useState(null);
-  const reportedAt = useRef(Date.now());
+  // The position the bar advances from, and when it was taken.
+  const anchor = useRef({ position: 0, at: Date.now() });
   const [, tick] = useState(0);
 
   // Nothing loaded is not "playing from zero": an idle receiver has no
   // position to advance, and interpolating from a missing report counted a
   // connected-but-idle device upward from 0:00 forever.
   const idle = !state || !state.title;
+  // A receiver that is buffering is not moving, however un-paused it is: the
+  // bar ran on ahead of a stalled set after every seek and then jumped back.
+  const moving = (paused) => !idle && !paused && !state?.buffering;
 
+  // Reports arrive up to a few hundred milliseconds old — the receiver's own
+  // deferral plus the server's burst window — so one landing a fraction
+  // behind the locally advanced position is lag, not the set going backwards.
+  // Taken literally, the clock ticked back a second every few reports. A
+  // report more than that behind (a seek, a restart) is taken as it is.
+  const reportedMs = state?.positionMs ?? 0;
   useEffect(() => {
-    reportedAt.current = Date.now();
-    if (pending !== null && Math.abs((state?.positionMs ?? 0) / 1000 - pending) < 2) {
+    const now = Date.now();
+    const reported = reportedMs / 1000;
+    const previous = anchor.current;
+    const estimate = previous.position + (now - previous.at) / 1000;
+    const lagging = moving(Boolean(state?.paused)) && reported < estimate && estimate - reported < 1.5;
+    anchor.current = lagging ? { position: estimate, at: now } : { position: reported, at: now };
+    if (pending !== null && Math.abs(reported - pending) < 2) {
       setPending(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.positionMs]);
+  }, [reportedMs, state?.paused, state?.buffering]);
 
   // A scrub the receiver ignored — or answered with an end-of-episode — must
   // not hold a wrong position on screen forever. Same 4-second give-up the
@@ -268,15 +286,20 @@ function useRemoteTransport(cast) {
   }, [assumed, state?.paused]);
 
   const paused = assumed ?? Boolean(state?.paused);
+  const advancing = moving(paused);
 
   useEffect(() => {
-    if (idle || paused) return undefined;
+    if (!advancing) return undefined;
     const timer = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(timer);
-  }, [idle, paused]);
+  }, [advancing]);
 
-  const base = (state?.positionMs ?? 0) / 1000;
-  const live = idle ? 0 : paused ? base : base + (Date.now() - reportedAt.current) / 1000;
+  // Paused or stalled, the bar shows the last report as it is.
+  const live = idle
+    ? 0
+    : advancing
+      ? Math.min(anchor.current.position + (Date.now() - anchor.current.at) / 1000, duration > 0 ? duration : Infinity)
+      : reportedMs / 1000;
   const shown = scrubbing ?? pending ?? live;
 
   const seekTo = (seconds) => {
@@ -307,7 +330,9 @@ function useRemoteTransport(cast) {
       if (next) cast.pause();
       else cast.resume();
     },
-    seekBy: (delta) => seekTo(live + delta),
+    // From a seek still in flight, not the stale report: two quick +10s
+    // are +20, where they used to land as one.
+    seekBy: (delta) => seekTo((pending ?? live) + delta),
   };
 }
 
@@ -442,6 +467,42 @@ export function RemotePanel({ t, poster, canSend, onSendCurrent }) {
   const cast = useCast();
   const r = useRemoteTransport(cast);
   const device = cast.target ?? cast.lostDevice;
+
+  // The player's keyboard shortcuts, aimed at the receiver. The local player
+  // is not mounted while this panel stands in for it, so space and the arrows
+  // simply did nothing — on the one screen where a keyboard is the remote.
+  const keysRef = useRef(null);
+  keysRef.current = cast.lost || r.idle ? null : r;
+  useEffect(() => {
+    function onKey(event) {
+      const remote = keysRef.current;
+      if (!remote || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      const tag = target?.tagName;
+      if (
+        target?.isContentEditable
+        || tag === "TEXTAREA" || tag === "SELECT"
+        || (tag === "INPUT" && target.type !== "range")
+        || ((tag === "BUTTON" || tag === "A" || tag === "INPUT") && (event.key === " " || event.key === "Enter"))
+      ) return;
+      // A sheet over the page owns the keyboard.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      // The seek slider's own arrows already scrub it.
+      if (tag === "INPUT" && event.key.startsWith("Arrow")) return;
+      switch (event.key) {
+        case " ":
+        case "k": remote.togglePause(); break;
+        case "ArrowLeft":
+        case "j": remote.seekBy(-10); break;
+        case "ArrowRight":
+        case "l": remote.seekBy(10); break;
+        default: return;
+      }
+      event.preventDefault();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   if (!device) return null;
   const state = r.state;
 

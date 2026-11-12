@@ -540,7 +540,17 @@ function App() {
   const [activeSource, setActiveSource] = useState(null);
   const cast = useCast();
   const castTargetId = cast.target?.sessionId || null;
+  // Whether the player area is the remote panel rather than the video. The
+  // <video> element is unmounted while it is, so anything holding on to the
+  // element has to let go on the way in and pick the new one up on the way out.
+  const remoteMode = Boolean(cast.target || cast.lostDevice);
   const castStateRef = useRef({});
+  /**
+   * Where the local video was when it was handed to a television through the
+   * picker. The element is gone by the time the send happens — the remote
+   * panel replaces it — so the position is taken while it still exists.
+   */
+  const handoffPositionRef = useRef(0);
 
   /**
    * Whether this page has been *asked* to play something on the television.
@@ -570,13 +580,46 @@ function App() {
     if (video) {
       video.onerror = null;
       video.pause();
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
       video.removeAttribute("src");
       video.load();
     }
+    // Not inside the branch above: by now the remote panel has usually
+    // replaced the element, and an instance left attached to the detached one
+    // went on buffering the whole film while the television played it.
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+    setHlsInstance(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [castTargetId, activeSource, castSendState]);
+
+  // The same for any other way into the remote panel — a remembered
+  // television coming back, a set picked without sending anything. The
+  // element is unmounted either way; nothing should be loading into it.
+  useEffect(() => {
+    if (!remoteMode) return;
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+    setHlsInstance(null);
+  }, [remoteMode]);
+
+  /**
+   * Whether the receiver is showing the very episode this page has open.
+   * Decides whether "play this there" is worth offering, and lets a sent
+   * episode that later ends — stopped at the set, finished, replaced — offer
+   * the button again instead of leaving the page stuck on "sent".
+   */
+  const receiverShowsThis = Boolean(cast.target?.state?.itemUrl)
+    && cast.target.state.itemUrl === selectedItem?.url
+    && (cast.target.state.episodeLabel || null) === (selectedEpisode || null);
+  const sentSeenRef = useRef(false);
+  useEffect(() => {
+    if (castSendState !== "sent") {
+      sentSeenRef.current = false;
+      return;
+    }
+    if (receiverShowsThis) sentSeenRef.current = true;
+    else if (sentSeenRef.current) setCastSendState("idle");
+  }, [castSendState, receiverShowsThis]);
 
   // Losing or leaving the television clears the ask: whatever is chosen next
   // should be judged on its own gesture, not inherit an old one.
@@ -592,11 +635,16 @@ function App() {
   // does not start it by being dismissed.
   const pausedForPickerRef = useRef(false);
   useEffect(() => {
+    // Read fresh on each branch, and not required on the way out: choosing a
+    // television swaps the video for the remote panel *before* the picker
+    // closes, so the element is already gone when the hand-off has to be
+    // armed. Bailing out on a missing element is what made moving a playing
+    // video to the television do nothing at all.
     const video = videoRef.current;
-    if (!video) return;
     if (cast.pickerOpen) {
-      if (!video.paused) {
+      if (video && !video.paused) {
         pausedForPickerRef.current = true;
+        handoffPositionRef.current = video.currentTime || 0;
         video.pause();
       }
     } else if (pausedForPickerRef.current) {
@@ -609,7 +657,8 @@ function App() {
         // nothing is sent.
         setCastSendState("armed");
       } else {
-        void video.play().catch(() => {});
+        handoffPositionRef.current = 0;
+        if (video) void video.play().catch(() => {});
       }
     }
   }, [cast.pickerOpen, cast.target]);
@@ -640,6 +689,10 @@ function App() {
   function sendToTelevision(source) {
     const { play, payload, resume, nextEpisodeLabel, prevEpisodeLabel, targetState } = castStateRef.current;
     if (!play || !payload || !source) return false;
+    // A video that was playing here when the set was chosen carries on from
+    // where it was, not from the progress record, which lags it.
+    const handoffAt = handoffPositionRef.current;
+    handoffPositionRef.current = 0;
 
     // Switching the source of the episode the television is already showing
     // continues from where the television *is*, not from the account's saved
@@ -659,9 +712,11 @@ function App() {
       // title to a television lands where it would have landed here.
       resumeAtSeconds: liveHandover
         ? Math.max(0, targetState.positionMs / 1000 - 2)
-        : resume?.isCompleted
-          ? 0
-          : Math.max(0, (resume?.positionSeconds || 0) - 30),
+        : handoffAt > 0
+          ? handoffAt
+          : resume?.isCompleted
+            ? 0
+            : Math.max(0, (resume?.positionSeconds || 0) - 30),
       nextEpisodeLabel,
       prevEpisodeLabel,
     });
@@ -739,6 +794,10 @@ function App() {
   // a source picked by hand keeps its usual resume-from-progress behaviour.
   const errorPositionRef = useRef(0);
   const seekAfterLoadRef = useRef(0);
+  // Set by the player effect when this load starts somewhere specific (an
+  // outage restart, a failover, "Play here"), so the saved-progress seek that
+  // follows does not drag it back to the resume point.
+  const positionClaimedRef = useRef(false);
   // Bumped to run the player effect again on the same source.
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
   // Bumped to run the one-shot loaders (providers) again after an outage.
@@ -749,6 +808,31 @@ function App() {
   pendingSearchRef.current = pendingSearchProviders;
   sourcesRef.current = sources;
   latestRef.current = { playerError, activeSource, castTargetId, castLost: cast.lost };
+
+  // "Play here" carries on from where the receiver *is*. The player effect
+  // starts the moment the television is let go, and on its own it started
+  // the episode from its saved progress — minutes behind a set that had been
+  // playing it, since this page's resume point is whatever it was when the
+  // episode was opened. Taken during render, before that effect runs; held
+  // through a blip of the receiver's socket, dropped by Stop, and only used
+  // when the receiver was showing the episode this page has open.
+  const castHandBackRef = useRef({ id: null, state: null, stopped: 0 });
+  if (castTargetId) {
+    castHandBackRef.current = { id: castTargetId, state: cast.target?.state ?? null, stopped: cast.stopped };
+  } else if (castHandBackRef.current.id && !cast.lost) {
+    const { state, stopped } = castHandBackRef.current;
+    castHandBackRef.current = { id: null, state: null, stopped: 0 };
+    if (
+      stopped === cast.stopped
+      && state?.itemUrl
+      && state.itemUrl === selectedItem?.url
+      && (state.episodeLabel || null) === (selectedEpisode || null)
+      && state.positionMs > 0
+      && activeSource
+    ) {
+      seekAfterLoadRef.current = state.positionMs / 1000;
+    }
+  }
 
   const groupedResults = useMemo(
     () => results.filter((group) => group.items.length > 0),
@@ -832,6 +916,7 @@ function App() {
     // this same source — a manual pick, another retry — starts clean.
     const seekTo = seekAfterLoadRef.current;
     seekAfterLoadRef.current = 0;
+    positionClaimedRef.current = seekTo > 0;
     if (seekTo > 0) {
       video.addEventListener("loadedmetadata", () => {
         if (Math.abs(video.currentTime - seekTo) > 1) video.currentTime = seekTo;
@@ -1256,7 +1341,7 @@ function App() {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !resumeProgress) return undefined;
+    if (!video || !resumeProgress || positionClaimedRef.current) return undefined;
 
     const resumeAt = Math.max(0, (resumeProgress.positionSeconds || 0) - 30);
     if (resumeAt <= 0) return undefined;
@@ -1273,7 +1358,8 @@ function App() {
     }
     video.addEventListener("loadedmetadata", doSeek, { once: true });
     return () => video.removeEventListener("loadedmetadata", doSeek);
-  }, [resumeProgress, activeSource]);
+    // remoteMode: the element is a new one after the remote panel goes away.
+  }, [resumeProgress, activeSource, remoteMode]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1364,7 +1450,9 @@ function App() {
       video.removeEventListener("ended", handleEnded);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt]);
+    // remoteMode: returning from the remote panel mounts a new <video>; bound
+    // to the old one, nothing played here afterwards was ever saved.
+  }, [currentPlaybackPayload, activeSource, itemDetail, episodes, selectedEpisode, selectedSeason, nextEpPrompt, remoteMode]);
 
   /** The same identity rule as the phone app: one download per episode-and-source. */
   const downloadIdentityFor = useCallback(async () => {
@@ -1560,6 +1648,39 @@ function App() {
     // reads its position from here so the picture carries straight on.
     targetState: cast.target?.state ?? null,
   };
+
+  // The remote follows the receiver's episode. Skipping on the set — from
+  // this remote, another one, or the set's own controls — used to leave this
+  // page highlighting the episode it had sent, its source list and its
+  // "play here" both for an episode nobody was watching any more. Only a
+  // *change* in what the receiver reports is followed, never a difference:
+  // right after this page sends an episode the set still reports the old one
+  // for a moment, and chasing that would undo the press. Nothing is sent —
+  // loading the episode's sources without a gesture never arms a cast.
+  const targetItemUrl = cast.target?.state?.itemUrl || null;
+  const targetEpisode = cast.target?.state?.episodeLabel || null;
+  const followedRef = useRef({ itemUrl: null, episode: null });
+  useEffect(() => {
+    // A receiver between episodes reports nothing for a moment — the web one
+    // has no player while the next episode's sources load — and that gap is
+    // not a change of title, or the episode after it is never followed.
+    if (!targetItemUrl) return;
+    const previous = followedRef.current;
+    followedRef.current = { itemUrl: targetItemUrl, episode: targetEpisode };
+    if (previous.itemUrl !== targetItemUrl) return;
+    if (!targetEpisode || previous.episode === targetEpisode) return;
+    if (!itemDetail || selectedItem?.url !== targetItemUrl) return;
+    if (targetEpisode === selectedEpisode || !episodes.includes(targetEpisode)) return;
+    if (castSendState === "armed") return;
+    void loadEpisodeSources(
+      itemDetail.provider,
+      episodeSourceUrl(),
+      targetEpisode,
+      itemDetail.title,
+      itemDetail.mediaType,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetItemUrl, targetEpisode]);
 
   // ── the receiver role: this tab can be driven like a television ──────────
   // Who is holding this tab's remote right now, for the on-screen badge. A
@@ -1807,6 +1928,12 @@ function App() {
     // this, the player effect defers to the held target and the command
     // lands as a detail page with nothing playing.
     if (castTargetId) cast.disconnect();
+    // Start where the sender said. A video moved here mid-episode carries its
+    // position, and so does a source switch on the episode already showing;
+    // left to this page's own resume point the picture jumped back to the
+    // last progress save less its thirty-second rewind. Zero means the
+    // sender had nothing better, and the usual resume applies.
+    seekAfterLoadRef.current = Math.max(0, Number(playback.positionMs) || 0) / 1000;
     // Chosen from across the room as the screen to watch on: fill it.
     remotePlayPendingRef.current = true;
     setImmersive(true);
@@ -3046,7 +3173,7 @@ function App() {
                           || itemDetail?.posterUrl
                           || "",
                       )}
-                      canSend={Boolean(cast.target) && Boolean(activeSource) && castSendState === "idle"}
+                      canSend={Boolean(cast.target) && Boolean(activeSource) && castSendState === "idle" && !receiverShowsThis}
                       onSendCurrent={() => setCastSendState("armed")}
                     />
                   ) : (

@@ -437,6 +437,10 @@ export default function VideoPlayer({
         ((tag === "BUTTON" || tag === "A") && (event.key === " " || event.key === "Enter"))
       ) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // A sheet over the player — the cast picker above all — owns the
+      // keyboard. The picker pauses the video while a device is chosen, and
+      // space or K behind it started the video again under the sheet.
+      if (document.querySelector('[aria-modal="true"]')) return;
 
       const key = event.key;
       let handled = true;

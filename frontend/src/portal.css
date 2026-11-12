@@ -1139,7 +1139,7 @@
 @media (min-width: 861px) {
   .cast-bar { left: auto; right: 20px; bottom: 20px; width: 360px; border-radius: 14px; border: 1px solid var(--border); }
 }
-.cast-bar-lost { color: var(--danger); }
+.cast-bar-lost { color: #ff6b74; }
 
 .cast-bar-main {
   display: flex;
@@ -1232,7 +1232,13 @@
   cursor: pointer;
 }
 .cast-remote-transport button:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Five buttons and four 18px gaps are wider than a phone's sheet: the row
+   shrank the play button into an oval. It keeps its size; the gaps give. */
+@media (max-width: 480px) {
+  .cast-remote-transport { gap: 8px; }
+}
 .cast-remote-play {
+  flex: none;
   width: 64px !important;
   height: 64px !important;
   border-radius: 32px !important;
@@ -1252,7 +1258,7 @@
   color: var(--t2);
   cursor: pointer;
 }
-.cast-remote-stop { color: var(--danger) !important; }
+.cast-remote-stop { color: #ff6b74 !important; }
 
 /* ── the watch page as a remote ──────────────────────────────
    While this browser drives another device, the player area is a remote: the

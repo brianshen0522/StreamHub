@@ -237,6 +237,11 @@ must arrive within 5 seconds:
 { "type": "auth", "token": "<accessToken>" }
 ```
 
+Send nothing else until `ready` arrives. The server reads only the first frame
+as the handshake and drops anything sent behind it while the session is still
+being checked; it used to close such a socket `4003`, so a receiver whose
+heartbeat slipped in behind `auth` was signed out.
+
 The server answers `{ "type": "ready", "expiresAt": <ms epoch>, "sessionId": …,
 "deviceName": …, "receivers": [...] }` — `deviceName` is what the receiver
 lists will call *this* client, which a remote needs to tell "also controlled
@@ -271,6 +276,12 @@ null state while idle, the way a television on its home screen does — so an
 idle browser is listed and can be handed a title even before anything plays.
 A `play` arriving while the watch page is not mounted is stashed and honoured
 after navigating there.
+
+A `play` command's `playback.positionMs` is where to start: the controller
+sends the live position when it moves a playing video across or switches the
+source of the episode already showing, and its resume point otherwise. A
+receiver must honour a non-zero value rather than its own saved progress,
+which lags the picture. Zero means the sender had nothing better.
 
 A receiver may include `controlledBy` (the device name of whoever last drove
 it, while that is fresh — the badge's own 12-second window) in its state;
