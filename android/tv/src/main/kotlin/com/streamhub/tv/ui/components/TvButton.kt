@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -54,6 +55,8 @@ enum class TvButtonSize { Regular, Chip }
  * Pass [target] to own the focus target yourself (to read `isFocused` outside,
  * or share it); otherwise the attribute parameters build one.
  * [content] replaces the default label row; it gets the current text colour.
+ * [height], [paddingX] and [textStyle] override the variant's box and label
+ * (the top bar's 64px pills: `.tv-topbar .tv-btn`).
  */
 @Composable
 fun TvButton(
@@ -75,6 +78,9 @@ fun TvButton(
     target: TvFocusTarget? = null,
     icon: (@Composable (Color) -> Unit)? = null,
     content: (@Composable RowScope.(Color) -> Unit)? = null,
+    height: Dp? = null,
+    paddingX: Dp? = null,
+    textStyle: TextStyle? = null,
 ) {
     val own = rememberTvFocusTarget(
         focusId = focusId, action = action, group = group, autofocus = autofocus, longPress = longPress,
@@ -85,8 +91,8 @@ fun TvButton(
     val shadowAlpha by animateFloatAsState(if (focused) 1f else 0f, TvMotion.tween(TvMotion.T), label = "btn-shadow")
 
     val small = size == TvButtonSize.Chip || style == TvButtonStyle.Text
-    val height: Dp = if (small) 30.dp else 36.dp
-    val padX: Dp = if (size == TvButtonSize.Chip) 15.dp else 20.dp
+    val h: Dp = height ?: if (small) 30.dp else 36.dp
+    val padX: Dp = paddingX ?: if (size == TvButtonSize.Chip) 15.dp else 20.dp
     val bg = when {
         focused -> TvColors.Focus
         style == TvButtonStyle.Primary -> TvColors.Accent
@@ -108,7 +114,7 @@ fun TvButton(
             .tvFocusable(t, TvFocusTransform.Button)
             .then(if (style != TvButtonStyle.Text) Modifier.tvShadow(TvShadows.Button, 999.dp) { shadowAlpha } else Modifier)
             .then(if (wide) Modifier.fillMaxWidth() else Modifier)
-            .height(height)
+            .height(h)
             .clip(TvShapes.Pill)
             .background(bg)
             .padding(horizontal = padX),
@@ -119,7 +125,7 @@ fun TvButton(
             content(fg)
         } else {
             icon?.invoke(fg)
-            if (text != null) TvText(text, if (small) TvType.ButtonSmall else TvType.Button, color = fg)
+            if (text != null) TvText(text, textStyle ?: if (small) TvType.ButtonSmall else TvType.Button, color = fg)
         }
     }
 }

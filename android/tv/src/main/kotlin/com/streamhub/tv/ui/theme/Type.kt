@@ -2,6 +2,11 @@ package com.streamhub.tv.ui.theme
 
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.isUnspecified
+import kotlin.math.roundToInt
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -105,7 +110,11 @@ fun TvText(
     var merged = style.copy(fontFamily = style.fontFamily ?: LocalTvFontFamily.current)
     if (color != Color.Unspecified) merged = merged.copy(color = color)
     if (textAlign != null) merged = merged.copy(textAlign = textAlign)
-    BasicText(text, modifier, merged, overflow = overflow, softWrap = softWrap, maxLines = maxLines)
+    val box = remember { LineBox() }
+    BasicText(
+        text, modifier.cssLineBox(box, merged), merged,
+        onTextLayout = { box.lines = it.lineCount }, overflow = overflow, softWrap = softWrap, maxLines = maxLines,
+    )
 }
 
 /** [TvText] for a lambda colour (an animated one), read at draw time only. */
@@ -119,5 +128,39 @@ fun TvText(
     overflow: TextOverflow = TextOverflow.Ellipsis,
 ) {
     val merged = style.copy(fontFamily = style.fontFamily ?: LocalTvFontFamily.current)
-    BasicText(text, modifier, merged, overflow = overflow, softWrap = maxLines > 1, maxLines = maxLines, color = ColorProducer { color() })
+    val box = remember { LineBox() }
+    BasicText(
+        text, modifier.cssLineBox(box, merged), merged, onTextLayout = { box.lines = it.lineCount },
+        overflow = overflow, softWrap = maxLines > 1, maxLines = maxLines, color = ColorProducer { color() },
+    )
+}
+
+/** The line count of the last layout, written by `onTextLayout` during measure. */
+private class LineBox {
+    var lines = 1
+}
+
+/**
+ * A CSS line box. Android never makes a line shorter than the font's own
+ * ascent + descent (Noto Sans CJK is 1.448em; with fallback fonts the
+ * tallest one wins), so `line-height: 1.15` on a title lays out at ~1.45.
+ * CSS instead centres the content area in the shorter box (negative
+ * half-leading). This reports `lines × line-height` as the height and
+ * centres the text in it, drawing outside its box exactly as CSS overflows.
+ */
+private fun Modifier.cssLineBox(box: LineBox, style: TextStyle): Modifier {
+    val lh = style.lineHeight
+    if (lh.isUnspecified) return this
+    return this.layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+        val linePx = if (lh.isEm) lh.value * style.fontSize.toPx() else lh.toPx()
+        val target = (box.lines.coerceAtLeast(1) * linePx).roundToInt()
+        if (placeable.height <= target) {
+            val h = placeable.height.coerceIn(constraints.minHeight, constraints.maxHeight)
+            layout(placeable.width, h) { placeable.place(0, 0) }
+        } else {
+            val h = target.coerceIn(constraints.minHeight, constraints.maxHeight)
+            layout(placeable.width, h) { placeable.place(0, (h - placeable.height) / 2) }
+        }
+    }
 }

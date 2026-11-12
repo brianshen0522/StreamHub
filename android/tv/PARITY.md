@@ -822,8 +822,11 @@ that is an `IOException` or timeout.
    - else "發生錯誤（{s}）{detail}".
 
 A missing server `error` field becomes "伺服器錯誤（{status}）" (`api.rs:130-137`).
-`:core` produces "Request failed ($status)." instead (`StreamHubApi.kt:573-579`),
-which rule 9 handles identically.
+`:core` produces "Request failed ($status)." instead (`StreamHubApi.kt:573-579`).
+That is *not* equivalent: Tizen's fallback contains CJK, so rule 1 shows
+"伺服器錯誤（502）" verbatim, while the English one would reach rule 8/9.
+`screens/common/FriendlyError.kt` rewrites the `:core` fallback to Tizen's
+before applying the rules.
 
 ---
 

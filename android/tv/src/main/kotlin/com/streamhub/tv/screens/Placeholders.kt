@@ -29,7 +29,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.streamhub.core.model.SearchResponse
 import com.streamhub.tv.AppContainer
-import com.streamhub.tv.auth.LoginViewModel
 import com.streamhub.tv.focus.LocalTvFocus
 import com.streamhub.tv.focus.TvKey
 import com.streamhub.tv.focus.TvScreenKeys
@@ -38,11 +37,9 @@ import com.streamhub.tv.focus.rememberTvColumnState
 import com.streamhub.tv.focus.rememberTvRowState
 import com.streamhub.tv.focus.tvRegion
 import com.streamhub.tv.focus.tvRowColumn
-import com.streamhub.tv.home.HomeViewModel
 import com.streamhub.tv.nav.DetailTarget
 import com.streamhub.tv.nav.PlayTarget
 import com.streamhub.tv.nav.TvRoute
-import com.streamhub.tv.ui.QrCode
 import com.streamhub.tv.ui.components.LocalTvToast
 import com.streamhub.tv.ui.components.PosterCardData
 import com.streamhub.tv.ui.components.TvButton
@@ -64,89 +61,6 @@ import kotlinx.coroutines.launch
  * browse the library, search, open a title. None of them is a parity
  * implementation; replace each file's screen wholesale.
  */
-
-/** Sign-in stand-in: the pairing code and QR, or username and password. */
-@Composable
-fun LoginPlaceholder(container: AppContainer, onSignedIn: () -> Unit) {
-    val vm = viewModel { LoginViewModel(container) }
-    val state by vm.state.collectAsStateWithLifecycle()
-    val engine = LocalTvFocus.current
-    var password by remember { mutableStateOf(false) }
-    var user by remember { mutableStateOf(TextFieldValue()) }
-    var pass by remember { mutableStateOf(TextFieldValue()) }
-    LaunchedEffect(Unit) { vm.startPairing(onSignedIn) }
-    TvScreenKeys { press ->
-        if (press.key == TvKey.Back && password) {
-            password = false
-            engine.focusLater(TvSelect.action("use-password"))
-            true
-        } else {
-            false
-        }
-    }
-    Column(Modifier.fillMaxSize().padding(horizontal = TvSpace.SafeX, vertical = TvSpace.SafeY)) {
-        TvText("StreamHub", TvType.Brand)
-        Spacer(Modifier.height(24.dp))
-        if (!password) {
-            Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(180.dp)) {
-                    state.pairing?.let { QrCode(it.verificationUrlComplete, Modifier.fillMaxSize()) }
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TvText("用手機掃描或輸入代碼", TvType.Title)
-                    TvText(
-                        state.pairing?.userCode ?: (state.pairingError ?: "正在取得代碼…"),
-                        TvType.Display.copy(fontFamily = FontFamily.Monospace, fontSize = 28.sp),
-                    )
-                    TvButton("改用帳號密碼登入", onClick = { password = true; engine.focusLater(TvSelect.action("username")) },
-                        style = TvButtonStyle.Text, autofocus = true, action = "use-password")
-                }
-            }
-        } else {
-            Column(Modifier.width(360.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                TvTextField(user, { user = it }, onSubmit = { engine.focusFirst(TvSelect.action("password")) },
-                    label = "帳號", action = "username", autofocus = true, imeAction = ImeAction.Next)
-                TvTextField(pass, { pass = it }, onSubmit = { vm.signIn(user.text, pass.text, onSignedIn) },
-                    label = "密碼", action = "password", password = true)
-                TvButton(if (state.busy) "登入中…" else "登入", onClick = { vm.signIn(user.text, pass.text, onSignedIn) },
-                    style = TvButtonStyle.Primary, wide = true, action = "login")
-                state.error?.let { TvText(it, TvType.Error) }
-            }
-        }
-    }
-}
-
-/** Home stand-in: the sample screen fed with the library. */
-@Composable
-fun HomePlaceholder(container: AppContainer, sfxOn: Boolean, onToggleSfx: () -> Unit, onOpen: (TvRoute) -> Unit, onSignOut: () -> Unit) {
-    val vm = viewModel { HomeViewModel(container) }
-    val state by vm.state.collectAsStateWithLifecycle()
-    val poster: (String?) -> String? = { p -> p?.takeIf { it.isNotBlank() }?.let { container.api.posterUrl(it) } }
-    val targets = HashMap<String, DetailTarget>()
-    val cont = state.continueWatching.map { c ->
-        val id = "continue:${c.providerKey}:${c.itemUrl}"
-        targets[id] = DetailTarget(c.providerKey, c.itemUrl, c.title, c.posterUrl.orEmpty(), c.mediaType, c.seasonUrl, c.episodeLabel, row = c)
-        PosterCardData(id, c.title, c.episodeLabel.orEmpty(), poster(c.posterUrl), c.progressPercent, nextUp = c.nextUp)
-    }
-    val favs = state.favorites.map { f ->
-        val id = "fav:${f.providerKey}:${f.itemUrl}"
-        targets[id] = DetailTarget(f.providerKey, f.itemUrl, f.title, f.posterUrl.orEmpty(), f.mediaType, f.seasonUrl, f.episodeLabel, row = f)
-        PosterCardData(id, f.title, f.providerKey, poster(f.posterUrl))
-    }
-    val rails = listOf(
-        SampleRail("繼續觀看", "continue", cont, loading = state.loading),
-        SampleRail("我的收藏", "favorites", favs, loading = state.loading),
-    ).filter { it.loading || it.cards.isNotEmpty() } + listOfNotNull(state.error?.let { SampleRail("首頁", "error", error = it) })
-    SampleHome(
-        rails = rails,
-        onOpen = { card -> targets[card.id]?.let { onOpen(TvRoute.Detail(it)) } },
-        sfxOn = sfxOn,
-        onSearch = { onOpen(TvRoute.Search) },
-        onToggleSfx = onToggleSfx,
-        onSignOut = onSignOut,
-        hero = cont.firstOrNull()?.title,
-    )
-}
 
 /** Search stand-in: a field and one rail per provider. */
 @Composable

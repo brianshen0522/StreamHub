@@ -9,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -23,19 +22,18 @@ import com.streamhub.tv.nav.PlayTarget
 import com.streamhub.tv.nav.TvNav
 import com.streamhub.tv.nav.TvRoute
 import com.streamhub.tv.screens.DetailPlaceholder
-import com.streamhub.tv.screens.HomePlaceholder
-import com.streamhub.tv.screens.LoginPlaceholder
 import com.streamhub.tv.screens.PlayerPlaceholder
 import com.streamhub.tv.screens.SearchPlaceholder
+import com.streamhub.tv.screens.home.HomeScreen
+import com.streamhub.tv.screens.home.libraryChanges
+import com.streamhub.tv.screens.login.LoginScreen
 import com.streamhub.tv.sfx.SfxControl
-import com.streamhub.tv.sfx.Sound
 import com.streamhub.tv.ui.TvCanvas
 import com.streamhub.tv.ui.components.LocalTvToast
 import com.streamhub.tv.ui.components.TvExitPrompt
 import com.streamhub.tv.ui.components.TvScreenEnter
 import com.streamhub.tv.ui.components.TvToastHost
 import com.streamhub.tv.ui.components.TvToastState
-import kotlinx.coroutines.launch
 
 /** The navigation stack, for screens. */
 val LocalTvNav = staticCompositionLocalOf<TvNav> { error("No TvShell above this composable") }
@@ -78,8 +76,7 @@ fun TvShell(
 @Composable
 fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxControl) {
     var signedIn by remember { mutableStateOf(container.sessionStore.load() != null) }
-    var sfxOn by remember { mutableStateOf(sfx.enabled) }
-    val scope = rememberCoroutineScope()
+    val libraryChanges = remember(container) { libraryChanges(container) }
 
     // Posters sit behind auth: the image loader uses the client with the bearer token.
     setSingletonImageLoaderFactory { context ->
@@ -127,27 +124,21 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
     TvShell(engine, nav, sfx) {
         if (!signedIn) {
             key("login") {
-                TvScreenEnter { LoginPlaceholder(container) { signedIn = true } }
+                TvScreenEnter { LoginScreen(container.api, onSignedIn = { signedIn = true }) }
             }
         } else {
             val entry = nav.top
             key(entry.id) {
                 when (val route = entry.route) {
                     TvRoute.Home -> TvScreenEnter {
-                        HomePlaceholder(
-                            container,
-                            sfxOn = sfxOn,
-                            onToggleSfx = {
-                                sfxOn = sfx.setEnabled(!sfxOn)
-                                if (sfxOn) sfx.play(Sound.Select) // home.rs:573-576
-                            },
-                            onOpen = nav::push,
-                            onSignOut = {
-                                scope.launch {
-                                    runCatching { container.api.logout() }
-                                    signedIn = false
-                                    nav.reset()
-                                }
+                        val user = remember { container.sessionStore.load()?.user }
+                        HomeScreen(
+                            api = container.api,
+                            userName = user?.let { it.displayName ?: it.username }.orEmpty(),
+                            libraryChanges = libraryChanges,
+                            onSignedOut = {
+                                signedIn = false
+                                nav.reset()
                             },
                         )
                     }

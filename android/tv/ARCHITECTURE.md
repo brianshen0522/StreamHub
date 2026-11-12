@@ -17,8 +17,10 @@ com.streamhub.tv
 ├── nav/TvNav.kt        the stack (port of nav.rs) and the routes
 ├── sfx/                SfxRules.kt (pure port of sfx.js), TvSfx.kt (AudioTrack mixer)
 ├── ui/sample/          SampleHome — a Home-shaped screen of primitives; the screenshot subject
-├── screens/Placeholders.kt   stand-in Login/Home/Search/Detail/Player — replace these
-├── auth/LoginViewModel.kt, home/HomeViewModel.kt, cast/, AppContainer.kt   kept data code
+├── screens/login/, screens/home/   the Login and Home screens
+├── screens/common/      helpers every screen shares (friendlyError, ProviderNames, favourites)
+├── screens/Placeholders.kt   stand-in Search/Detail/Player — replace these
+├── cast/, AppContainer.kt   kept data code
 ```
 
 The previous screens were deleted; read them with
@@ -65,6 +67,15 @@ Named after the CSS variables:
 Text: always `TvText(text, TvType.X, color = …)`. It merges the font family
 (`LocalTvFontFamily`), CSS-like line boxes (centred, no font padding), one line
 + ellipsis by default. `fontFeatureSettings = TvType.TabularNums` for `tv-num`.
+A line-height below the font's own height (Title 1.15, Display 1.05, row
+headings 1.2 …) is honoured as CSS does: Android never makes a line shorter
+than ascent + descent (Noto CJK is ~1.45em), so `TvText` reports
+`lines × line-height` and centres the glyphs in it. Multi-line text keeps the
+font's natural pitch *between* lines.
+
+Shared screen helpers live in `screens/common/` (`friendlyError`,
+`ProviderNames`, `toggleFavoriteWithToast`), `nav/TvAutoplay` (the Play key's
+"open and play") and `ui/components/TvBrand` (logo mark + wordmark).
 
 **Performance rules (DESIGN.md):** animate only `graphicsLayer` scale,
 translation and alpha. Never animate size, padding, shadow or blur. Shadows are

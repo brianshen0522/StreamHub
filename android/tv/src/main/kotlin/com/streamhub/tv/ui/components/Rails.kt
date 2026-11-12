@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -97,7 +98,7 @@ data class PosterCardData(
  *
  * The click dispatches on the engine's intent like `common.rs:128-137`: Play →
  * [onPlay] (else open), LongPress → [onLongPress] (else open), Favorite →
- * [onFavorite], Open → [onOpen]. Passing a callback sets the matching
+ * [onFavorite], Open → [onOpen]. [onFocus] runs each time it gains focus (`on_focus`). Passing a callback sets the matching
  * `data-playable` / `data-longpress` / `data-favable`.
  */
 @Composable
@@ -110,6 +111,7 @@ fun TvPosterCard(
     onFavorite: (() -> Unit)? = null,
     autofocus: Boolean = false,
     target: TvFocusTarget? = null,
+    onFocus: (() -> Unit)? = null,
 ) {
     val own = rememberTvFocusTarget(
         focusId = card.id,
@@ -130,6 +132,9 @@ fun TvPosterCard(
     val focused = t.isFocused
     val glow by animateFloatAsState(if (focused) 1f else 0f, TvMotion.focus(), label = "card-glow")
     val sheen = remember { Animatable(0f) }
+    val latestOnFocus by rememberUpdatedState(onFocus)
+    // `on:focus`: each time the card gains focus (Home's hero follows it).
+    LaunchedEffect(focused) { if (focused) latestOnFocus?.invoke() }
     LaunchedEffect(focused) {
         if (focused) {
             sheen.snapTo(0f)
