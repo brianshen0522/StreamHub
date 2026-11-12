@@ -34,7 +34,13 @@ import okhttp3.OkHttpClient
 class ExoEngine(context: Context, client: OkHttpClient) : PlaybackEngine {
 
     val player: ExoPlayer = ExoPlayer.Builder(context)
-        .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(client)))
+        // Media reads keep OkHttp's 10 s read timeout: a stalled segment must
+        // fail into the ladder, whatever the API client's longer timeout is.
+        .setMediaSourceFactory(
+            DefaultMediaSourceFactory(
+                OkHttpDataSource.Factory(client.newBuilder().readTimeout(10, java.util.concurrent.TimeUnit.SECONDS).build()),
+            ),
+        )
         // Scraped CDNs stall and vanish mid-episode: buffer well ahead, but
         // cap the bytes — ExoPlayer buffers on the Java heap, and a
         // television's heap can be 48 MB (the old player's OOM lesson).

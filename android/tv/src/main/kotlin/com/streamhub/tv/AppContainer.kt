@@ -14,6 +14,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.shareIn
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 /**
  * Hand-wired dependencies, matching the phone app. One person's app with a
@@ -35,7 +37,14 @@ class AppContainer(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val api: StreamHubApi by lazy {
-        StreamHubApi(serverUrl, sessionStore, ClientKind.TV)
+        StreamHubApi(
+            serverUrl, sessionStore, ClientKind.TV,
+            // Tizen's fetch has no timeout of its own: Search waits for its
+            // 20 s deadline (搜尋逾時), and the server can take longer than
+            // OkHttp's default 10 s read timeout for a slow provider. Above
+            // the deadline, so the deadline is what a person sees.
+            baseClient = apiBaseClient(),
+        )
     }
 
     val realtime: RealtimeClient by lazy {
@@ -110,7 +119,11 @@ class AppContainer(context: Context) {
         }
     }
 
-    private companion object {
-        const val CONSCRYPT = "Conscrypt"
+    internal companion object {
+        private const val CONSCRYPT = "Conscrypt"
+        const val API_READ_TIMEOUT_S = 30L
+
+        fun apiBaseClient(): OkHttpClient =
+            OkHttpClient.Builder().readTimeout(API_READ_TIMEOUT_S, TimeUnit.SECONDS).build()
     }
 }
