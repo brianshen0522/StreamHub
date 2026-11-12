@@ -81,8 +81,20 @@ class CastFrameTest {
      * The collection is held open for the whole test rather than taken with
      * `first()`: collecting is what owns the socket, so ending it early closes
      * the connection and there is nothing left to send on.
+     *
+     * [awaitEvents] is how many events the test expects to have been
+     * *collected* before the collection is cancelled. Events reach the list on
+     * the collector's coroutine, asynchronously to the socket thread that set
+     * `connected`, so returning as soon as the sent frame arrived raced the
+     * collector: when the server echoed quickly the handshake's Receivers event
+     * was still in the channel when collection was cancelled, the list came
+     * back empty, and `events.first()` threw NoSuchElementException.
      */
-    private fun connected(ready: String, act: (RealtimeClient) -> Unit): List<RealtimeEvent> = runBlocking {
+    private fun connected(
+        ready: String,
+        awaitEvents: Int = 0,
+        act: (RealtimeClient) -> Unit,
+    ): List<RealtimeEvent> = runBlocking {
         server.enqueue(
             MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -100,6 +112,7 @@ class CastFrameTest {
             // The frame is sent from this thread but observed on the server's,
             // so allow it to arrive before asserting on it.
             withTimeout(5_000) { while (sent.size < 2) delay(10) }
+            withTimeout(5_000) { while (events.size < awaitEvents) delay(10) }
         } finally {
             collector.cancel()
         }
@@ -186,7 +199,8 @@ class CastFrameTest {
             """{"type":"ready","sessionId":"s-phone","receivers":[
                 {"sessionId":"s-tv","deviceName":"Living room","clientKind":"tv",
                  "state":{"title":"Test","positionMs":1000,"durationMs":2000,"paused":false}}
-            ]}"""
+            ]}""",
+            awaitEvents = 1,
         ) { realtime -> realtime.publishPlayback(null) }
 
         val receivers = (events.first() as RealtimeEvent.Receivers).receivers
