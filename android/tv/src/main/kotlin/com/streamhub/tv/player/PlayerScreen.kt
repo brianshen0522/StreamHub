@@ -21,6 +21,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.streamhub.tv.AppContainer
+import com.streamhub.tv.cast.CastHub
+import kotlinx.coroutines.CoroutineScope
 import com.streamhub.tv.LocalTvNav
 import com.streamhub.tv.focus.LocalTvFocus
 import com.streamhub.tv.focus.TvFocusEngine
@@ -42,27 +44,68 @@ import com.streamhub.tv.nav.TvRoute
 @Composable
 fun PlayerScreen(container: AppContainer, target: PlayTarget) {
     val context = LocalContext.current
+    val exo = remember { ExoEngine(context, container.api.authenticatedClient) }
+    PlayerLayer(
+        target = target,
+        engine = exo,
+        data = container.playerData,
+        cast = container.castReceiver,
+        background = container.backgroundScope,
+        clock = { SystemClock.uptimeMillis() },
+        onTeardown = { exo.release() },
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShutterBackgroundColor(android.graphics.Color.BLACK)
+                    isFocusable = false
+                    player = exo.player
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+/**
+ * Everything of the player route but the video: the controller on the nav
+ * stack and the focus engine, its lifecycle (mount/teardown, ON_STOP/ON_START),
+ * keep-screen-on, the keys and the OSD over [video]. Behaviour tests mount
+ * this with a fake engine.
+ */
+@Composable
+fun PlayerLayer(
+    target: PlayTarget,
+    engine: PlaybackEngine,
+    data: PlayerData,
+    cast: CastHub,
+    background: CoroutineScope,
+    clock: () -> Long,
+    onTeardown: () -> Unit = {},
+    video: @Composable () -> Unit,
+) {
     val nav = LocalTvNav.current
-    val engine = LocalTvFocus.current
+    val focusEngine = LocalTvFocus.current
     val scope = rememberCoroutineScope()
 
-    val exo = remember { ExoEngine(context, container.api.authenticatedClient) }
     val ctl = remember {
         PlayerController(
             target = target,
-            engine = exo,
-            data = container.playerData,
-            cast = container.castReceiver,
+            engine = engine,
+            data = data,
+            cast = cast,
             nav = object : PlayerNav {
                 override fun replace(target: PlayTarget) = nav.replace(TvRoute.Player(target))
                 override fun back() {
                     nav.back()
                 }
             },
-            focus = PlayerFocus { focusPlayer(engine, it) },
+            focus = PlayerFocus { focusPlayer(focusEngine, it) },
             scope = scope,
-            background = container.backgroundScope,
-            clock = { SystemClock.uptimeMillis() },
+            background = background,
+            clock = clock,
         )
     }
 
@@ -70,7 +113,7 @@ fun PlayerScreen(container: AppContainer, target: PlayTarget) {
         ctl.mount()
         onDispose {
             ctl.teardown()
-            exo.release()
+            onTeardown()
         }
     }
 
@@ -99,18 +142,7 @@ fun PlayerScreen(container: AppContainer, target: PlayTarget) {
     TvScreenKeys(onKeyUp = { key, _ -> ctl.onKeyUp(key) }) { press -> ctl.onKey(press) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    isFocusable = false
-                    player = exo.player
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+        video()
         PlayerOsd(ctl.ui, target, ControllerActions(ctl))
     }
 }
