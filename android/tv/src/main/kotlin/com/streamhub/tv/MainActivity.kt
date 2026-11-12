@@ -1,5 +1,6 @@
 package com.streamhub.tv
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -42,7 +43,12 @@ class MainActivity : ComponentActivity() {
      * (PARITY §4). Back is handled on the down, so OnBackPressedDispatcher —
      * which fires on the up — never sees it. Keys the engine leaves alone (a
      * caret move inside a text field, volume) continue as usual.
+     *
+     * RestrictedApi is a false positive: `androidx.core.app.ComponentActivity`
+     * re-declares the public `Activity.dispatchKeyEvent` under `@RestrictTo`,
+     * and overriding the framework method is exactly what it is for.
      */
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
         engine.onKeyEvent(event) || super.dispatchKeyEvent(event)
 }
