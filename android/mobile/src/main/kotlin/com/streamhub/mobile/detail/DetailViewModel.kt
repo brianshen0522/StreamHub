@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 data class DetailUiState(
     val loading: Boolean = true,
@@ -217,7 +218,7 @@ class DetailViewModel(
             episodeLabel = episode,
             sourceLabel = source.sourceLabel,
             directUrl = source.directUrl,
-            durationSeconds = source.durationSeconds,
+            durationSeconds = source.durationSeconds?.roundToInt(),
             resumeAtSeconds = ResumeRules.resumePositionSeconds(existing),
             // Only within this season. Rolling over to the next one needs a
             // different season's episode list, which the player does not have.

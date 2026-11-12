@@ -38,6 +38,7 @@ import com.streamhub.mobile.ui.ErrorState
 import com.streamhub.mobile.ui.LoadingState
 import com.streamhub.mobile.ui.Poster
 import com.streamhub.mobile.ui.StreamHubColors
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -191,8 +192,8 @@ fun DetailScreen(
 
 /** Runtime already has detected ads subtracted, so it matches the timeline. */
 private fun Source.describe(): String {
-    val minutes = durationSeconds?.let { "${it / 60} min" }
-    val ads = adSeconds.takeIf { it > 0 }?.let { "${it}s of ads removed" }
+    val minutes = durationSeconds?.let { "${it.roundToInt() / 60} min" }
+    val ads = adSeconds.roundToInt().takeIf { it > 0 }?.let { "${it}s of ads removed" }
     return listOfNotNull(minutes, ads).joinToString(" · ").ifEmpty { "Ready" }
 }
 

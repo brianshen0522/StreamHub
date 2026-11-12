@@ -198,11 +198,259 @@ class StreamHubApiTest {
         series as ItemDetail.Episodes
         assertEquals(listOf("EP1", "第2集"), series.episodes)
         assertEquals("d", series.sourceUrl)
+        assertNull("a single-page series has no season, so its resume key is empty", series.seasonUrl)
+        assertEquals("d", series.detailUrl)
 
         server.enqueue(ok("""{"provider":"movieffm","title":"Film","streams":[{"sourceLabel":"L1","url":"m3u8"}]}"""))
         val movie = api.item("movieffm", "u")
         assertTrue(movie is ItemDetail.Movie)
         assertEquals("L1", (movie as ItemDetail.Movie).streams.single().sourceLabel)
+    }
+
+    // ── /api/item, read the way Tizen reads it (detail.rs `load`) ───────────
+
+    private suspend fun itemFor(body: String): ItemDetail {
+        server.enqueue(ok(body))
+        return api.item("p", "u")
+    }
+
+    @Test
+    fun `an item with neither episodes nor streams is a movie`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val item = itemFor("""{"provider":"movieffm","title":"Film","mediaType":"movie"}""")
+
+        assertTrue("not an empty series", item is ItemDetail.Movie)
+        assertEquals(emptyList<Any>(), (item as ItemDetail.Movie).streams)
+    }
+
+    @Test
+    fun `an empty seasons list is not a hub`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        // movieffm answers a hub page whose season links it could not read with
+        // `seasons: []`. With nothing to pick, Tizen reads on past the key.
+        val bare = itemFor("""{"provider":"movieffm","title":"Hub","mediaType":"tv","seasons":[]}""")
+        assertTrue(bare is ItemDetail.Movie)
+
+        val withEpisodes = itemFor("""{"provider":"movieffm","title":"Hub","seasons":[],"episodes":["EP1"],"seasonUrl":"s"}""")
+        assertTrue(withEpisodes is ItemDetail.Episodes)
+        assertEquals("s", (withEpisodes as ItemDetail.Episodes).seasonUrl)
+    }
+
+    @Test
+    fun `seasons without a url are dropped, and a hub of only those is not a hub`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val hub = itemFor(
+            """{"provider":"movieffm","title":"Hub","seasons":[
+                {"label":"S1","url":""},{"label":"S2","url":"  "},{"label":"S3","url":"s3"}]}"""
+        )
+        assertEquals(listOf("S3"), (hub as ItemDetail.Seasons).seasons.map { it.label })
+
+        val blank = itemFor("""{"provider":"movieffm","title":"Hub","seasons":[{"label":"S1","url":""}],"episodes":[]}""")
+        assertTrue("falls through to the episodes key", blank is ItemDetail.Episodes)
+    }
+
+    @Test
+    fun `an episodes key makes a series even when it is empty`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val item = itemFor("""{"provider":"dramasq","title":"Gone","detailUrl":"d","episodes":[]}""")
+
+        assertTrue(item is ItemDetail.Episodes)
+        assertEquals(emptyList<String>(), (item as ItemDetail.Episodes).episodes)
+    }
+
+    @Test
+    fun `episodes win over streams, as in Tizen`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val item = itemFor(
+            """{"provider":"p","title":"T","episodes":["EP1"],"streams":[{"sourceLabel":"L","url":"m"}]}"""
+        )
+
+        assertTrue(item is ItemDetail.Episodes)
+    }
+
+    @Test
+    fun `item detail carries description, media type and detail url`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val described = itemFor(
+            """{"provider":"777tv","title":"Show","mediaType":"tv","description":"A plot.",
+               "summary":"ignored","detailUrl":"d","episodes":["1"]}"""
+        )
+        assertEquals("A plot.", described.description)
+        assertEquals("tv", described.mediaType)
+        assertEquals("d", described.detailUrl)
+
+        val summarised = itemFor("""{"provider":"p","title":"Film","summary":"Short.","streams":[]}""")
+        assertEquals("summary is the fallback", "Short.", summarised.description)
+        assertNull(summarised.mediaType)
+        assertNull(summarised.detailUrl)
+
+        val hub = itemFor("""{"provider":"movieffm","title":"Hub","mediaType":"tv","seasons":[{"label":"S1","url":"s1"}]}""")
+        assertEquals("tv", hub.mediaType)
+        assertNull(hub.description)
+    }
+
+    @Test
+    fun `a movieffm season keys progress on its seasonUrl`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        val item = itemFor("""{"provider":"movieffm","title":"S","seasonUrl":"https://m/s2","episodes":["EP1"]}""")
+
+        item as ItemDetail.Episodes
+        assertEquals("https://m/s2", item.seasonUrl)
+        assertEquals("https://m/s2", item.sourceUrl)
+    }
+
+    // ── numbers as JavaScript writes them ───────────────────────────────────
+
+    @Test
+    fun `fractional ad and duration seconds decode`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(
+            ok(
+                """
+                {"sourceLabel":"線路A","url":"u","directUrl":"d","adSeconds":31.6,"durationSeconds":6727.4}
+                {"sourceLabel":"線路B","url":"u","directUrl":"d","adSeconds":52,"durationSeconds":null}
+                """.trimIndent()
+            )
+        )
+
+        val sources = api.sources("p", "s", "EP1").toList()
+
+        assertEquals(2, sources.size)
+        assertEquals(31.6, sources[0].adSeconds, 1e-9)
+        assertEquals(6727.4, sources[0].durationSeconds!!, 1e-9)
+        assertEquals(52.0, sources[1].adSeconds, 0.0)
+        assertNull(sources[1].durationSeconds)
+    }
+
+    @Test
+    fun `one unreadable line does not end the source stream`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(
+            ok(
+                """
+                {"sourceLabel":"A","url":"u","directUrl":"d","adSeconds":1.5}
+                {"sourceLabel":"broken","adSeconds":"lots"
+                {"url":"no label or directUrl"}
+                {"sourceLabel":"C","url":"u","directUrl":"d"}
+                """.trimIndent()
+            )
+        )
+
+        val labels = api.sources("p", "s", "EP1").toList().map { it.sourceLabel }
+
+        assertEquals(listOf("A", "C"), labels)
+    }
+
+    @Test
+    fun `checked movie sources accept fractional numbers too`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(ok("""{"sourceLabel":"L1","url":"u","directUrl":"d","adSeconds":0.4,"durationSeconds":5400.5}"""))
+
+        val source = api.checkSources("p", emptyList()).toList().single()
+
+        assertEquals(0.4, source.adSeconds, 1e-9)
+        assertEquals(5400.5, source.durationSeconds!!, 1e-9)
+    }
+
+    @Test
+    fun `library rows accept fractional seconds and round them`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        server.enqueue(
+            ok(
+                """{"items":[{"providerKey":"p","title":"T","itemUrl":"i","durationSeconds":2820.6,
+                   "positionSeconds":61.2,"episodesTouched":2.0,"episodesCompleted":1}]}"""
+            )
+        )
+        val card = api.continueWatching().single()
+        assertEquals(2821, card.durationSeconds)
+        assertEquals(61, card.positionSeconds)
+        assertEquals(2, card.episodesTouched)
+
+        server.enqueue(
+            ok("""{"progress":[{"providerKey":"p","title":"T","itemUrl":"i","durationSeconds":99.5,"positionSeconds":null}]}""")
+        )
+        val row = api.progress().single()
+        assertEquals(100, row.durationSeconds)
+        assertEquals(0, row.positionSeconds)
+
+        server.enqueue(
+            ok("""{"history":[{"id":"h","providerKey":"p","title":"T","itemUrl":"i","positionSeconds":12.4,"durationSeconds":30.5}]}""")
+        )
+        val entry = api.history().single()
+        assertEquals(12, entry.positionSeconds)
+        assertEquals(31, entry.durationSeconds)
+    }
+
+    // ── fields screens need, optional so older payloads still decode ─────────
+
+    @Test
+    fun `library rows carry the unavailable mark only when the server set it`() = runBlocking {
+        store.save(json(sessionJson()))
+
+        server.enqueue(
+            ok(
+                """{"favorites":[
+                  {"id":"f1","providerKey":"p","title":"Gone","itemUrl":"i","isUnavailable":true,"unavailableReason":"no-episodes"},
+                  {"id":"f2","providerKey":"p","title":"Fine","itemUrl":"j"}
+                ]}"""
+            )
+        )
+        val favorites = api.favorites()
+        assertTrue(favorites[0].isUnavailable)
+        assertEquals(com.streamhub.core.model.UnavailableReason.NO_EPISODES, favorites[0].unavailableReason)
+        assertEquals("absent reads as no record", false, favorites[1].isUnavailable)
+        assertNull(favorites[1].unavailableReason)
+
+        server.enqueue(
+            ok(
+                """{"history":[{"id":"h","providerKey":"p","title":"T","itemUrl":"i","detailUrl":"d",
+                   "isUnavailable":true,"unavailableReason":"not-found"}]}"""
+            )
+        )
+        val entry = api.history().single()
+        assertTrue(entry.isUnavailable)
+        assertEquals("not-found", entry.unavailableReason)
+        assertEquals("d", entry.detailUrl)
+
+        server.enqueue(
+            ok("""{"items":[{"id":"c1","providerKey":"p","title":"T","itemUrl":"i","isUnavailable":true,"unavailableReason":"not-found"}]}""")
+        )
+        val card = api.continueWatching().single()
+        assertTrue(card.isUnavailable)
+        assertEquals("c1", card.id)
+
+        server.enqueue(ok("""{"items":[{"providerKey":"p","title":"T","itemUrl":"i"}]}"""))
+        val old = api.continueWatching().single()
+        assertNull("older servers send no id", old.id)
+        assertEquals(false, old.isUnavailable)
+    }
+
+    @Test
+    fun `a search result carries its year, as text or as a number`() = runBlocking {
+        store.save(json(sessionJson()))
+        server.enqueue(
+            ok(
+                """{"query":"q","results":[{"provider":"p","items":[
+                  {"provider":"p","title":"A","url":"a","year":"2019"},
+                  {"provider":"p","title":"B","url":"b","year":2021},
+                  {"provider":"p","title":"C","url":"c"},
+                  {"provider":"p","title":"D","url":"d","year":null},
+                  {"provider":"p","title":"E","url":"e","year":""}
+                ]}]}"""
+            )
+        )
+
+        val years = api.search("q").results.single().items.map { it.year }
+
+        assertEquals(listOf("2019", "2021", null, null, null), years)
     }
 
     @Test
@@ -223,8 +471,8 @@ class StreamHubApiTest {
         assertEquals(2, sources.size)
         assertEquals("A", sources[0].sourceLabel)
         // Already has ad segments subtracted, so it matches the player timeline.
-        assertEquals(2820, sources[0].durationSeconds)
-        assertEquals(88, sources[0].adSeconds)
+        assertEquals(2820.0, sources[0].durationSeconds!!, 0.0)
+        assertEquals(88.0, sources[0].adSeconds, 0.0)
         assertNull("a blank line must not produce an entry", sources[1].durationSeconds)
         assertEquals("B", sources[1].sourceLabel)
     }

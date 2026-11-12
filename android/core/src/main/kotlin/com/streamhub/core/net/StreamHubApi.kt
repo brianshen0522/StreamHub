@@ -30,6 +30,7 @@ import com.streamhub.core.model.ProvidersResponse
 import com.streamhub.core.model.RawStream
 import com.streamhub.core.model.RefreshRequest
 import com.streamhub.core.model.SearchResponse
+import com.streamhub.core.model.SeasonRef
 import com.streamhub.core.model.SessionsResponse
 import com.streamhub.core.model.ServerHealth
 import com.streamhub.core.model.Session
@@ -47,13 +48,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -390,7 +390,7 @@ class StreamHubApi(
                 val line = body.readUtf8Line() ?: break
                 val trimmed = line.trim()
                 if (trimmed.isEmpty()) continue
-                emit(json.decodeFromString<Source>(trimmed))
+                decodeSourceLine(trimmed)?.let { emit(it) }
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -423,7 +423,7 @@ class StreamHubApi(
                 val line = lines.readUtf8Line() ?: break
                 val trimmed = line.trim()
                 if (trimmed.isEmpty()) continue
-                emit(json.decodeFromString<Source>(trimmed))
+                decodeSourceLine(trimmed)?.let { emit(it) }
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -551,6 +551,14 @@ class StreamHubApi(
     // ── plumbing ────────────────────────────────────────────────────────────
 
     /**
+     * One NDJSON line, or null when it cannot be read. A single odd line —
+     * a field this build types differently, a truncated write — must cost that
+     * one source, not end the stream and every source still to come.
+     */
+    private fun decodeSourceLine(line: String): Source? =
+        runCatching { json.decodeFromString<Source>(line) }.getOrNull()
+
+    /**
      * Runs an authenticated call. A renewal that failed transiently surfaces
      * from the authenticator as [RefreshUnavailableException] (an Authenticator
      * may only throw IOException); it is unwrapped here into the server's
@@ -603,49 +611,74 @@ class StreamHubApi(
 
     /**
      * Which key is present decides the shape; there is no type field to switch
-     * on. `seasons` means a hub that needs a second call, `streams` means a
-     * movie, `episodes` means either a season or a single-page series.
+     * on. The order is Tizen's (`tizen/app/src/screens/detail.rs` `load`):
+     * seasons with a usable url, then an `episodes` key, then a movie. See
+     * [ItemDetail] for the rules.
      */
-    private fun parseItemDetail(body: String): ItemDetail {
-        val obj = json.decodeFromString<JsonObject>(body)
-        val provider = obj.text("provider").orEmpty()
-        val title = obj.text("title").orEmpty()
-        val poster = obj.text("posterUrl")
+    private fun parseItemDetail(body: String): ItemDetail = parseItemDetail(json, body)
 
-        obj["seasons"]?.let { seasons ->
-            return ItemDetail.Seasons(
-                provider = provider,
-                title = title,
-                posterUrl = poster,
-                seasons = seasons.jsonArray.map { json.decodeFromJsonElement(it) },
-            )
-        }
+    private fun String.asJson() = toRequestBody(JSON_MEDIA_TYPE)
 
-        obj["streams"]?.let { streams ->
+    internal companion object {
+        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun parseItemDetail(json: Json, body: String): ItemDetail {
+            val obj = json.decodeFromString<JsonObject>(body)
+            val provider = obj.textOf("provider").orEmpty()
+            val title = obj.textOf("title").orEmpty()
+            val poster = obj.textOf("posterUrl")
+            val mediaType = obj.textOf("mediaType")
+            val description = obj.textOf("description") ?: obj.textOf("summary")
+            val detailUrl = obj.textOf("detailUrl")
+
+            // A hub whose seasons all lack a url has nothing to open; Tizen drops
+            // those entries and, with none left, reads the body as if it had no
+            // seasons key at all. Entries that fail to decode are dropped too.
+            val seasons = (obj["seasons"] as? JsonArray).orEmpty()
+                .mapNotNull { runCatching { json.decodeFromJsonElement<SeasonRef>(it) }.getOrNull() }
+                .filter { it.url.isNotBlank() }
+            if (seasons.isNotEmpty()) {
+                return ItemDetail.Seasons(
+                    provider = provider,
+                    title = title,
+                    posterUrl = poster,
+                    seasons = seasons,
+                    mediaType = mediaType,
+                    description = description,
+                    detailUrl = detailUrl,
+                )
+            }
+
+            // The key's presence is what counts, as in Tizen: an empty list is
+            // a series the provider currently lists nothing for, not a movie.
+            if (obj.containsKey("episodes")) {
+                val episodes = (obj["episodes"] as? JsonArray).orEmpty()
+                    .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                return ItemDetail.Episodes(
+                    provider = provider,
+                    title = title,
+                    posterUrl = poster,
+                    episodes = episodes,
+                    seasonUrl = obj.textOf("seasonUrl"),
+                    mediaType = mediaType,
+                    description = description,
+                    detailUrl = detailUrl,
+                )
+            }
+
             return ItemDetail.Movie(
                 provider = provider,
                 title = title,
                 posterUrl = poster,
-                streams = streams.jsonArray.map { json.decodeFromJsonElement(it) },
+                streams = (obj["streams"] as? JsonArray).orEmpty()
+                    .mapNotNull { runCatching { json.decodeFromJsonElement<RawStream>(it) }.getOrNull() },
+                mediaType = mediaType,
+                description = description,
+                detailUrl = detailUrl,
             )
         }
 
-        val episodes = obj["episodes"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
-        return ItemDetail.Episodes(
-            provider = provider,
-            title = title,
-            posterUrl = poster,
-            episodes = episodes,
-            sourceUrl = obj.text("seasonUrl") ?: obj.text("detailUrl"),
-        )
-    }
-
-    private fun JsonObject.text(key: String): String? =
-        this[key]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }?.takeIf { it.isNotBlank() }
-
-    private fun String.asJson() = toRequestBody(JSON_MEDIA_TYPE)
-
-    private companion object {
-        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private fun JsonObject.textOf(key: String): String? =
+            (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
     }
 }
