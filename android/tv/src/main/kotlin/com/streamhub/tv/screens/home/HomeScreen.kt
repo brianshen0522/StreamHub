@@ -154,7 +154,6 @@ fun HomeScreen(
             if (loader.seq != mine) return@launch
             if (hero == null) initialHero(c, f)?.let(::setHero)
             val hd = if (h is Load.Ready) Load.Ready(dedupeHistory(h.value)) else h
-            firstLoading = false
             // A failed rail (server down, Wi-Fi not up yet at power-on) retries by itself with backoff.
             loader.retry?.cancel()
             if (listOf(c, f, hd).any { it is Load.Failed }) {
@@ -173,13 +172,18 @@ fun HomeScreen(
                 if (state.value != value) state.value = value
             }
             engine.afterLayout {
-                // Arriving (nothing pressed, or nothing focused): the card the viewer
-                // left from, else the first card. Later, focus moves only if what the
-                // viewer was on disappeared.
+                // `firstLoading` (the tvLoading marker) clears only here, once
+                // focus is decided. Tizen clears it before a 0 ms timeout, which
+                // beats its 200 ms watchdog; here the gap is a layout pass, and a
+                // watchdog run inside it parked focus on 搜尋 (autofocus), which
+                // restore() then kept: a slow first load landed on 搜尋 instead
+                // of the first card.
                 val noKeys = engine.keyCount == keysAtMount
                 val lost = engine.focused == null
-                if ((noKeys || lost) && engine.restore()) return@afterLayout
-                if (engine.focused == null) engine.focusFirst(TvSelect.inRegion("rows"))
+                if (!((noKeys || lost) && engine.restore()) && engine.focused == null) {
+                    engine.focusFirst(TvSelect.inRegion("rows"))
+                }
+                firstLoading = false
             }
         }
     }

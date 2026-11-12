@@ -51,7 +51,11 @@ class HomeBehaviourTest {
     private fun loaded() {
         rig.server.library()
         mount()
-        rig.settleUntil { rig.focused == "cw:p1" }
+        try {
+            rig.settleUntil { rig.focused == "cw:p1" }
+        } catch (e: AssertionError) {
+            throw AssertionError("focused=${rig.focused} requests=${rig.server.requests.map { it.first }}", e)
+        }
         rig.settle(500)
     }
 

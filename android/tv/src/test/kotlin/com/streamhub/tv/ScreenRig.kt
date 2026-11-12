@@ -70,11 +70,21 @@ class ScreenRig(val compose: ComposeContentTestRule, val font: Boolean = false) 
         compose.waitForIdle()
     }
 
-    /** Settle until [cond] holds (checked on the UI thread), or fail after [maxMs] of test time. */
+    /**
+     * Settle until [cond] holds (checked on the UI thread), or fail once both
+     * [maxMs] of test time *and* [maxMs] of wall time have passed. The fake
+     * server answers on real threads: on a loaded machine (the whole suite in
+     * one JVM) an answer can take longer than the ~7 ms of wall time each
+     * 48 ms test step costs, and a test-time-only bound then fails a test
+     * that is merely waiting for IO.
+     */
     fun settleUntil(maxMs: Long = 10_000, cond: () -> Boolean) {
         var waited = 0L
+        val start = System.currentTimeMillis()
         while (!compose.runOnIdle(cond)) {
-            if (waited >= maxMs) throw AssertionError("condition not met after ${maxMs}ms")
+            if (waited >= maxMs && System.currentTimeMillis() - start >= maxMs) {
+                throw AssertionError("condition not met after ${maxMs}ms")
+            }
             settle(48)
             Thread.sleep(5)
             waited += 48
