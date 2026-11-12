@@ -65,7 +65,7 @@ class SearchDetailScreenshotTest {
 
     private fun searchFor(q: String) {
         compose.runOnIdle {
-            SearchSession.query = androidx.compose.ui.text.input.TextFieldValue(q)
+            SearchSession.query = androidx.compose.ui.text.input.TextFieldValue(q, androidx.compose.ui.text.TextRange(q.length))
         }
         remote.ok() // OK in the field submits
     }

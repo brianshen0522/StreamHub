@@ -80,7 +80,14 @@ class PlayerScreenshotTest {
         }
     }
 
-    private fun shot(name: String, t: PlayTarget = target, focus: PlayerFocusTarget? = null, setup: PlayerUi.() -> Unit) {
+    private fun shot(
+        name: String,
+        t: PlayTarget = target,
+        focus: PlayerFocusTarget? = null,
+        first: Long = 600,
+        after: Long = 800,
+        setup: PlayerUi.() -> Unit,
+    ) {
         val nav = TvNav()
         val engine = TvFocusEngine(nav, clock = { compose.mainClock.currentTime })
         val ui = PlayerUi(0).apply(setup)
@@ -95,15 +102,17 @@ class PlayerScreenshotTest {
                 }
             }
         }
-        compose.mainClock.advanceTimeBy(600)
+        compose.mainClock.advanceTimeBy(first)
         compose.waitForIdle()
         if (focus != null) {
             compose.runOnIdle { focusPlayer(engine, focus) }
             compose.mainClock.advanceTimeBy(100)
             compose.waitForIdle()
         }
-        compose.mainClock.advanceTimeBy(800)
-        compose.waitForIdle()
+        if (after > 0) {
+            compose.mainClock.advanceTimeBy(after)
+            compose.waitForIdle()
+        }
         compose.onRoot().captureRoboImage("build/outputs/roborazzi/player_$name.png")
     }
 
@@ -144,12 +153,15 @@ class PlayerScreenshotTest {
         playingAt(755)
         osd = false
         strip = 0
+        // As in m85-player-episodes.png: the current episode has progress on record (its bar fills red).
+        stripInfo = listOf(StripInfo(1.0, true), StripInfo(0.0, false))
     }
 
     @Test
     fun sources() = shot("sources", focus = PlayerFocusTarget.PickerCurrent) {
         playingAt(1432)
-        osd = false
+        // The bar stays up under the picker, as in m85-player-sources.png (open_picker leaves osd alone).
+        osd = true
         picker = true
         currentSource = 0
         this.sources = listOf(SourceRow(longSource, 0, null), SourceRow("南亞線路", 0, null), SourceRow("矽谷線路", 0, null))
@@ -159,10 +171,18 @@ class PlayerScreenshotTest {
     fun sourcesAdFree() = shot("sources_adfree", target.copy(title = "黑暗榮耀"), focus = PlayerFocusTarget.PickerCurrent) {
         playingAt(19)
         sourceLabel = ""
-        osd = false
+        osd = true
         picker = true
         currentSource = 0
         this.sources = listOf(SourceRow("優質線路", 52, "47:07"), SourceRow("矽谷線路", 40, "47:18"), SourceRow("南亞線路", 31, "47:09"))
+    }
+
+    @Test
+    fun paused() = shot("paused", first = 200, after = 0) { // mid-pop: the glyph is a one-shot 600 ms keyframe
+        // An OK tap that paused: the bar stays up and the centre glyph pops (p02-player-paused.png).
+        playingAt(755)
+        status = PlayerState.PAUSED
+        flash = Flash(false, 1)
     }
 
     @Test
