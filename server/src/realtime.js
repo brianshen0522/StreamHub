@@ -347,6 +347,14 @@ export function attachRealtime(server) {
       }
 
       if (!socket.userId) {
+        // Only the first frame is the handshake. Anything a client sends
+        // behind it while the session lookups are still running — a receiver's
+        // heartbeat, a queued command — used to be read as a second, malformed
+        // `auth` and close the socket as unauthorized, which a client takes as
+        // being signed out. It is dropped instead; the client resends state on
+        // its next beat.
+        if (socket.authenticating) return;
+        socket.authenticating = true;
         authenticate(message).catch(() => {
           clearTimeout(authTimer);
           socket.close(CLOSE_UNAUTHORIZED, "Unauthorized.");

@@ -25,6 +25,8 @@ let attempts = 0;
 let closedByUs = false;
 let ownSessionId = null;
 let ownDeviceName = null;
+/** Whether the open socket has been answered with `ready`. */
+let authenticated = false;
 
 function endpoint() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -82,6 +84,7 @@ function connect() {
     return;
   }
   socket = ws;
+  authenticated = false;
 
   ws.addEventListener("open", () => {
     // Auth travels in the first frame rather than the URL, so the token stays
@@ -98,6 +101,7 @@ function connect() {
     }
     if (payload?.type === "ready") {
       attempts = 0;
+      if (socket === ws) authenticated = true;
       // The handshake carries this tab's own session id and the receivers
       // already connected, so a page that opens after the television still
       // sees it without waiting for the next announcement. It used to be
@@ -111,7 +115,10 @@ function connect() {
   });
 
   ws.addEventListener("close", (event) => {
-    if (socket === ws) socket = null;
+    if (socket === ws) {
+      socket = null;
+      authenticated = false;
+    }
     ownSessionId = null;
     ownDeviceName = null;
     // The receiver list only exists in the server's memory for as long as
@@ -181,7 +188,11 @@ export function subscribeRealtime(listener) {
  * rather than leaving a control that silently does nothing.
  */
 export function sendRealtime(frame) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  // Not before `ready`: the server reads the first frames of a socket as the
+  // handshake, and a heartbeat or a command that slipped in behind `auth`
+  // while it was still being checked got the socket closed as unauthorized —
+  // which this tab takes as being signed out.
+  if (!socket || socket.readyState !== WebSocket.OPEN || !authenticated) return false;
   try {
     socket.send(JSON.stringify(frame));
     return true;
@@ -207,6 +218,7 @@ export function resetRealtime() {
     try { socket.close(); } catch { /* already closing */ }
     socket = null;
   }
+  authenticated = false;
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
   closedByUs = false;
