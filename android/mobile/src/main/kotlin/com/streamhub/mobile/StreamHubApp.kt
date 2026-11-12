@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.streamhub.mobile.auth.LoginScreen
 import com.streamhub.mobile.cast.CastBar
 import com.streamhub.mobile.cast.CastButton
+import com.streamhub.mobile.cast.CastController
 import com.streamhub.mobile.cast.CastSheet
 import com.streamhub.mobile.cast.RemoteScreen
 import com.streamhub.mobile.auth.LoginViewModel
@@ -129,6 +130,9 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
     val receivers by container.cast.receivers.collectAsStateWithLifecycle()
     val castTarget by container.cast.target.collectAsStateWithLifecycle()
     val castLost by container.cast.lost.collectAsStateWithLifecycle()
+    val castPaused by container.cast.paused.collectAsStateWithLifecycle()
+    val castStarting by container.cast.starting.collectAsStateWithLifecycle()
+    val castNotice by container.cast.notice.collectAsStateWithLifecycle()
     var pickingDevice by remember { mutableStateOf(false) }
 
     // Supplied to the screens that have somewhere to put it. It renders nothing
@@ -138,6 +142,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
         CastButton(
             receivers = receivers,
             connected = castTarget != null,
+            lost = castLost,
             onClick = { pickingDevice = true },
         )
     }
@@ -152,11 +157,23 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
      * the app follows it until that choice is undone.
      */
     val startPlayback: (PlaybackRequest) -> Unit = { request ->
-        container.handover.playback = request
-        if (castTarget != null && container.cast.play(request)) {
-            navController.navigate(ROUTE_REMOTE)
-        } else {
-            navController.navigate(ROUTE_PLAYER)
+        when (container.cast.play(request)) {
+            CastController.PlayOutcome.SENT -> {
+                container.handover.playback = request
+                navController.navigate(ROUTE_REMOTE) { launchSingleTop = true }
+            }
+            CastController.PlayOutcome.UNREACHABLE -> {
+                // Not quietly on the phone instead: the person is looking at
+                // the television. Say so, and offer the choice.
+                val name = container.cast.target.value?.deviceName ?: "The television"
+                scope.launch { snackbar.showSnackbar("$name is not connected. Pick where to play.") }
+                pickingDevice = true
+            }
+            CastController.PlayOutcome.LOCAL,
+            CastController.PlayOutcome.LOCAL_ONLY -> {
+                container.handover.playback = request
+                navController.navigate(ROUTE_PLAYER)
+            }
         }
     }
 
@@ -181,11 +198,14 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     CastBar(
                         target = active,
                         lost = castLost,
-                        onOpen = { navController.navigate(ROUTE_REMOTE) },
+                        paused = castPaused,
+                        onOpen = { navController.navigate(ROUTE_REMOTE) { launchSingleTop = true } },
                         onTogglePlay = {
-                            if (active.state?.paused == true) container.cast.resume()
-                            else container.cast.pause()
+                            if (!container.cast.togglePause()) {
+                                scope.launch { snackbar.showSnackbar("${active.deviceName} is not reachable right now.") }
+                            }
                         },
+                        onDisconnect = container.cast::disconnect,
                     )
                 }
             NavigationBar {
@@ -304,6 +324,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                             }
                         },
                         castAction = castAction,
+                        playsOn = castTarget?.deviceName,
                     )
                 }
             }
@@ -320,6 +341,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                             CastButton(
                                 receivers = receivers,
                                 connected = castTarget != null,
+                                lost = castLost,
                                 onClick = { pickingDevice = true },
                                 tint = androidx.compose.ui.graphics.Color.White,
                             )
@@ -380,9 +402,12 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                     RemoteScreen(
                         target = active,
                         lost = castLost,
+                        paused = castPaused,
+                        starting = castStarting,
+                        notice = castNotice,
                         ownDeviceName = ownDeviceName,
-                        onPause = container.cast::pause,
-                        onResume = container.cast::resume,
+                        posterUrl = posterUrl,
+                        onTogglePause = container.cast::togglePause,
                         onFullscreen = container.cast::fullscreen,
                         onSeek = container.cast::seekTo,
                         onPrevious = container.cast::previous,
@@ -391,21 +416,31 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                             container.cast.stopAndDisconnect()
                             leaveRemote()
                         },
-                        onPlayHere = {
-                            // Pick up where the television is, rather than at
-                            // the start: this is a handover, not a restart.
-                            val request = container.handover.playback?.let { pending ->
-                                active.state?.positionMs?.let { position ->
-                                    pending.copy(resumeAtSeconds = (position / 1000).toInt())
-                                } ?: pending
-                            }
+                        onPlayHere = { positionMs ->
+                            // Pick up what the television is showing, where it
+                            // is showing it: a handover, not a restart. Only
+                            // the phone's own last request can be replayed,
+                            // and only while the television is still on it.
+                            val handBack = CastController.handBack(
+                                state = active.state,
+                                last = container.handover.playback,
+                                positionMs = positionMs,
+                            )
                             container.cast.stopAndDisconnect()
                             leaveRemote()
-                            if (request != null) {
-                                container.handover.playback = request
-                                navController.navigate(ROUTE_PLAYER)
+                            when (handBack) {
+                                is CastController.HandBack.Play -> {
+                                    container.handover.playback = handBack.request
+                                    navController.navigate(ROUTE_PLAYER)
+                                }
+                                is CastController.HandBack.Open -> {
+                                    container.handover.selection = handBack.selection
+                                    navController.navigate(ROUTE_DETAIL)
+                                }
+                                CastController.HandBack.Nothing -> Unit
                             }
                         },
+                        onClearNotice = container.cast::clearNotice,
                         onBack = { leaveRemote() },
                     )
                 }
@@ -486,6 +521,7 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
             container = container,
             receivers = receivers,
             target = castTarget,
+            lost = castLost,
             onPick = { receiver ->
                 pickingDevice = false
                 container.cast.connect(receiver.sessionId)
@@ -493,9 +529,25 @@ private fun SignedIn(container: AppContainer, session: Session, onSignedOut: () 
                 // nothing playing simply arms the next Play, which is why the
                 // sheet can be opened from the detail screen at all.
                 val pending = container.handover.playback
-                if (route == ROUTE_PLAYER && pending != null && container.cast.play(pending)) {
-                    navController.popBackStack()
-                    navController.navigate(ROUTE_REMOTE)
+                if (route == ROUTE_PLAYER && pending != null) {
+                    // From where the picture is now, not from where the
+                    // player was opened.
+                    val moving = container.handover.localPositionMs?.invoke()
+                        ?.let { pending.copy(resumeAtSeconds = (it / 1000).toInt()) }
+                        ?: pending
+                    when (container.cast.play(moving)) {
+                        CastController.PlayOutcome.SENT -> {
+                            container.handover.playback = moving
+                            navController.popBackStack(ROUTE_PLAYER, inclusive = true)
+                            navController.navigate(ROUTE_REMOTE)
+                        }
+                        CastController.PlayOutcome.LOCAL_ONLY -> scope.launch {
+                            snackbar.showSnackbar("A downloaded episode plays on this phone only. The next Play goes to ${receiver.deviceName}.")
+                        }
+                        else -> scope.launch {
+                            snackbar.showSnackbar("Could not reach ${receiver.deviceName}. Still playing here.")
+                        }
+                    }
                 }
             },
             onPlayHere = {

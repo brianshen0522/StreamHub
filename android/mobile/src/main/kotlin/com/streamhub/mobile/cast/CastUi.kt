@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -113,6 +116,8 @@ fun CastButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     tint: Color = MaterialTheme.colorScheme.onSurface,
+    /** The chosen device is unreachable: still shown, so there is a way back. */
+    lost: Boolean = false,
 ) {
     if (receivers.isEmpty() && !connected) return
     IconButton(
@@ -120,10 +125,46 @@ fun CastButton(
         modifier = modifier.semantics { contentDescription = "Play on another device" },
     ) {
         CastIcon(
-            connected = connected,
-            tint = if (connected) MaterialTheme.colorScheme.primary else tint,
+            connected = connected && !lost,
+            tint = when {
+                lost -> MaterialTheme.colorScheme.error
+                connected -> MaterialTheme.colorScheme.primary
+                else -> tint
+            },
         )
     }
+}
+
+/**
+ * The "Not connected" group: televisions signed in to the account whose app is
+ * not running.
+ *
+ * One row per device name, not one per sign-in — a television signed in a few
+ * times has several sessions, and rows sharing a name are indistinguishable.
+ * A name that is already listed above (connected, or the chosen device that
+ * dropped) is left out too: the same television once as "Ready" and again as
+ * "Open StreamHub on this device" reads as two televisions, one broken.
+ */
+fun notConnectedDevices(
+    sessions: List<DeviceSession>,
+    receivers: List<CastReceiver>,
+    lostTarget: CastReceiver?,
+    limit: Int = 3,
+): List<DeviceSession> {
+    val listedIds = receivers.map { it.sessionId }.toSet() + listOfNotNull(lostTarget?.sessionId)
+    val listedNames = receivers.map { it.deviceName }.toSet() + listOfNotNull(lostTarget?.deviceName)
+    return sessions
+        .filter { it.isTelevision && it.id !in listedIds && it.deviceName !in listedNames }
+        .sortedByDescending { it.lastSeenAt ?: "" }
+        .distinctBy { it.deviceName }
+        .take(limit)
+}
+
+/** What a connected device's row says under its name. */
+fun receiverDetail(receiver: CastReceiver): String {
+    val state = receiver.state?.takeIf { !it.idle } ?: return "Ready"
+    val title = state.title ?: return "Ready"
+    return if (state.paused) "Paused · $title" else "Playing $title"
 }
 
 /**
@@ -140,31 +181,30 @@ fun CastSheet(
     container: AppContainer,
     receivers: List<CastReceiver>,
     target: CastReceiver?,
+    lost: Boolean,
     onPick: (CastReceiver) -> Unit,
     onPlayHere: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var offline by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
+    var sessions by remember { mutableStateOf<List<DeviceSession>>(emptyList()) }
 
-    LaunchedEffect(receivers) {
-        val connectedIds = receivers.map { it.sessionId }.toSet()
-        offline = runCatching { container.api.sessions() }
-            .getOrDefault(emptyList())
-            .filter { it.isTelevision && it.id !in connectedIds }
-            // One row per device, not one per sign-in. A television that has
-            // been signed in a few times has several live sessions, and rows
-            // sharing a name are indistinguishable to whoever is reading them —
-            // so all but the most recent are noise.
-            .sortedByDescending { it.lastSeenAt ?: "" }
-            .distinctBy { it.deviceName }
-            .take(3)
+    // Keyed on *who* is connected, not on the list itself: a playing
+    // television re-sends the list every second with a new position, and
+    // keying on that asked the server for the account's sessions once a
+    // second for as long as the sheet was open.
+    val connectedIds = receivers.map { it.sessionId }.toSet()
+    LaunchedEffect(connectedIds) {
+        sessions = runCatching { container.api.sessions() }.getOrDefault(sessions)
     }
+    val lostTarget = target?.takeIf { lost }
+    val offline = notConnectedDevices(sessions, receivers, lostTarget)
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -185,10 +225,23 @@ fun CastSheet(
             for (receiver in receivers) {
                 DeviceRow(
                     name = receiver.deviceName,
-                    detail = receiver.state?.title?.let { "Playing $it" } ?: "Ready",
+                    detail = receiverDetail(receiver),
                     selected = receiver.sessionId == target?.sessionId,
                     enabled = true,
                     onClick = { onPick(receiver) },
+                )
+            }
+
+            // The chosen device, gone. Listed so the sheet still shows what
+            // the cast button is pointing at; picking "This phone" is the way
+            // out.
+            if (lostTarget != null) {
+                DeviceRow(
+                    name = lostTarget.deviceName,
+                    detail = "Disconnected — waiting for it to come back",
+                    selected = true,
+                    enabled = false,
+                    onClick = {},
                 )
             }
 
@@ -255,6 +308,7 @@ private fun DeviceRow(
     }
 }
 
+
 /**
  * The strip that keeps a remote session reachable from anywhere in the app.
  *
@@ -266,17 +320,20 @@ private fun DeviceRow(
 fun CastBar(
     target: CastReceiver,
     lost: Boolean,
+    paused: Boolean,
     onOpen: () -> Unit,
     onTogglePlay: () -> Unit,
+    onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val state = target.state
+    val state = target.state?.takeIf { !it.idle }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onOpen)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -302,9 +359,14 @@ fun CastBar(
                 maxLines = 1,
             )
         }
-        if (!lost && state?.title != null) {
-            IconButton(onClick = onTogglePlay) {
-                PlayPauseGlyph(paused = state.paused, tint = MaterialTheme.colorScheme.onSurface)
+        when {
+            // Gone: the one useful thing is a way back to the phone without a
+            // detour through the picker.
+            lost -> IconButton(onClick = onDisconnect) {
+                Icon(Icons.Default.Close, contentDescription = "Stop casting to ${target.deviceName}")
+            }
+            state?.title != null -> IconButton(onClick = onTogglePlay) {
+                PlayPauseGlyph(paused = paused, tint = MaterialTheme.colorScheme.onSurface)
             }
         }
     }

@@ -69,7 +69,22 @@ that crept forward would be a lie about the television.
 **A scrub has to survive until the receiver confirms it.** After a scrub the
 phone holds the scrubbed position until a report arrives near it (or four
 seconds pass). Without that, the bar snaps back to the last reported position
-for about a second and reads as a failed seek.
+for about a second and reads as a failed seek. The ±10 s buttons are seeks
+too: they hold the same way and count from the held target, so three quick
+taps move thirty seconds. The four seconds run from the seek, not from the
+latest report — restarting the timer on each report held a seek the receiver
+ignored for as long as it kept reporting. On Android all of this is
+`RemoteTimeline`, which is pure and tested.
+
+### A chosen device that goes away
+
+The phone keeps the device chosen, with its last known picture, and marks it
+lost: the remote screen stays up saying "Disconnected", the cast bar offers
+a way back to the phone, and a Play is refused with a message rather than
+quietly starting on the phone. When the device comes back under the same
+session id, the phone reattaches. The phone's *own* socket being down for
+more than a few seconds counts too — the receiver list it holds is then
+stale, and offering it invites commands into nothing.
 
 ---
 

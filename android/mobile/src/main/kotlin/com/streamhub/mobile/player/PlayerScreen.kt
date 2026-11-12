@@ -323,8 +323,13 @@ fun PlayerScreen(
             }
         }
         player.addListener(listener)
+        // So moving this playback to a television carries the position across
+        // instead of restarting where the player was opened.
+        val position: () -> Long = { player.currentPosition.coerceAtLeast(0) }
+        container.handover.localPositionMs = position
 
         onDispose {
+            if (container.handover.localPositionMs === position) container.handover.localPositionMs = null
             viewModel.report(player.currentPosition, player.duration.coerceAtLeast(0), "pause")
             player.removeListener(listener)
             player.release()

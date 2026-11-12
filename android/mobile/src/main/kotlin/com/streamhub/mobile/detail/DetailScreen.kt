@@ -50,6 +50,8 @@ fun DetailScreen(
     onDownload: (Source) -> Unit,
     /** The cast button, supplied by the host so this screen stays unaware of it. */
     castAction: @Composable () -> Unit = {},
+    /** The device a Play here will go to, or null for this phone. */
+    playsOn: String? = null,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -135,6 +137,21 @@ fun DetailScreen(
                 }
 
                 item { SectionTitle("Sources") }
+
+                // An armed device is easy to forget: the cast icon is a small
+                // thing in the corner, and a Play that starts on the
+                // television in the next room looks like a Play that did
+                // nothing. Saying where it goes, by the list it applies to.
+                if (playsOn != null) {
+                    item {
+                        Text(
+                            text = "Plays on $playsOn",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                }
 
                 if (state.sources.isEmpty() && state.loadingSources) {
                     item { InlineProgress("Checking sources") }

@@ -50,4 +50,11 @@ class Handover {
      * back rather than reloading the title from scratch.
      */
     var pendingEpisode: String? = null
+
+    /**
+     * Where the open player is, while one is open. Read when the running
+     * playback moves to a television, so it continues from there rather than
+     * from wherever the player was opened.
+     */
+    var localPositionMs: (() -> Long)? = null
 }
