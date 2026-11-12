@@ -315,4 +315,42 @@ class RealtimeClientTest {
         assertEquals("reconnected without help", 2, authFrames.size)
         assertEquals("and without renewing, because the token was fine", 0, renewals.get())
     }
+    /**
+     * The server takes the first frame after the upgrade as the auth frame.
+     * A cast frame that slipped in before `ready` closed the socket 4003,
+     * which reads as a refused token: no reconnect until the session changed.
+     */
+    @Test
+    fun `cast frames are not sent before the server is ready`() = runBlocking {
+        val frames: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val serverSide = CompletableDeferred<WebSocket>()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    frames.add(text)
+                    serverSide.complete(webSocket)
+                }
+            })
+        )
+
+        val realtime = client()
+        val collecting = launch { realtime.events().collect { } }
+        val socket = withTimeout(5_000) { serverSide.await() }
+
+        // Open and authenticated-in-flight, but not ready.
+        assertEquals(false, realtime.publishPlayback(null))
+        assertEquals(false, realtime.sendCommand("tv", com.streamhub.core.model.CastCommand.Pause))
+        assertEquals(false, realtime.withdrawReceiver())
+
+        socket.send("""{"type":"ready","sessionId":"phone"}""")
+        withTimeout(5_000) { while (!realtime.connected.value) delay(10) }
+        assertTrue(realtime.publishPlayback(null))
+        withTimeout(5_000) { while (frames.size < 2) delay(10) }
+
+        assertEquals(
+            listOf("""{"type":"auth","token":"access-1"}""", """{"type":"playback","state":null}"""),
+            frames.toList(),
+        )
+        collecting.cancelAndJoin()
+    }
 }

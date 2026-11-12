@@ -84,6 +84,13 @@ class RealtimeClient(
      * The socket currently carrying events, for the frames a client sends after
      * the handshake. Volatile because commands are sent from whichever thread
      * the UI is on, while this is assigned by the socket's own callback thread.
+     *
+     * Set on the server's `ready`, not when the socket opens. The server reads
+     * the first frame after the upgrade as the auth frame, so a playback or
+     * command frame sent in between — a television reconnecting mid-episode
+     * publishes every second, a phone taps pause — was taken for a malformed
+     * auth and closed 4003, which this client treats as a refused token and
+     * stops reconnecting until the session changes.
      */
     @Volatile
     private var live: WebSocket? = null
@@ -93,8 +100,8 @@ class RealtimeClient(
      * idle. Sending this at all is what makes a device appear as a cast target,
      * so a television calls it once on startup with a null state.
      *
-     * Returns false when there is no live socket — the caller decides whether
-     * that is worth surfacing.
+     * Returns false when there is no socket that has answered `ready` — the
+     * caller decides whether that is worth surfacing.
      */
     fun publishPlayback(state: CastPlaybackState?): Boolean {
         val socket = live ?: return false
@@ -194,7 +201,6 @@ class RealtimeClient(
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                live = webSocket
                 // Auth travels in the first frame rather than the query string,
                 // so access tokens stay out of proxy logs. The server allows
                 // five seconds for it.
@@ -206,6 +212,7 @@ class RealtimeClient(
                 val type = frame["type"]?.jsonPrimitive?.contentOrNull ?: return
                 if (type == READY) {
                     sawReady = true
+                    live = webSocket
                     _connected.value = true
                     _sessionId.value = frame["sessionId"]?.jsonPrimitive?.contentOrNull
                     _deviceName.value = frame["deviceName"]?.jsonPrimitive?.contentOrNull
