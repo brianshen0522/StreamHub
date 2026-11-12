@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
@@ -20,12 +21,14 @@ import com.streamhub.tv.focus.TvFocusEngine
 import com.streamhub.tv.focus.TvFocusRoot
 import com.streamhub.tv.nav.TvNav
 import com.streamhub.tv.nav.TvRoute
-import com.streamhub.tv.screens.DetailPlaceholder
 import com.streamhub.tv.player.PlayerScreen
-import com.streamhub.tv.screens.SearchPlaceholder
+import com.streamhub.tv.screens.common.ApiCatalog
+import com.streamhub.tv.screens.common.PrefsRecentStore
+import com.streamhub.tv.screens.detail.DetailScreen
 import com.streamhub.tv.screens.home.HomeScreen
 import com.streamhub.tv.screens.home.libraryChanges
 import com.streamhub.tv.screens.login.LoginScreen
+import com.streamhub.tv.screens.search.SearchScreen
 import com.streamhub.tv.sfx.SfxControl
 import com.streamhub.tv.ui.TvCanvas
 import com.streamhub.tv.ui.components.LocalTvToast
@@ -76,6 +79,9 @@ fun TvShell(
 fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxControl) {
     var signedIn by remember { mutableStateOf(container.sessionStore.load() != null) }
     val libraryChanges = remember(container) { libraryChanges(container) }
+    val context = LocalContext.current
+    val catalog = remember { ApiCatalog(container.api) }
+    val recents = remember { PrefsRecentStore(context) }
 
     // Posters sit behind auth: the image loader uses the client with the bearer token.
     setSingletonImageLoaderFactory { context ->
@@ -133,8 +139,8 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
                             },
                         )
                     }
-                    TvRoute.Search -> TvScreenEnter { SearchPlaceholder(container, onOpen = nav::push) }
-                    is TvRoute.Detail -> TvScreenEnter { DetailPlaceholder(route.target, onOpen = nav::push) }
+                    TvRoute.Search -> TvScreenEnter { SearchScreen(catalog, container.api, recents) }
+                    is TvRoute.Detail -> TvScreenEnter { DetailScreen(route.target, catalog, container.api) }
                     // The player is not a .tv-screen: no enter animation.
                     is TvRoute.Player -> PlayerScreen(container, route.target)
                 }

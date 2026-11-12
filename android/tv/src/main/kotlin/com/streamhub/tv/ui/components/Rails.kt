@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -323,7 +324,9 @@ fun homeRowAlpha(row: TvRowState): Float = when {
  * is-past state to its opacity, animated 240 ms.
  *
  * Paddings default to the generic `.tv-row` / `.tv-track`; Home passes its
- * overrides (row bottom 3 dp, track 11/9 dp).
+ * overrides (row bottom 3 dp, track 11/9 dp). [gap] is the track's gap
+ * (`.tv-chips` 9 dp, `.tv-segmented` 6 dp); [titleStyle] the heading when not
+ * collapsed (`.tv-row-compact` 14 sp).
  */
 @Composable
 fun TvRail(
@@ -338,6 +341,8 @@ fun TvRail(
     rowPaddingBottom: Dp = TvSpace.RowPaddingBottom,
     trackPadding: PaddingValues = PaddingValues(start = TvSpace.SafeX, end = TvSpace.SafeX, top = 13.dp, bottom = 14.dp),
     trackState: TvRailTrackState = rememberTvRailTrackState(),
+    gap: Dp = TvSpace.RailGap,
+    titleStyle: TextStyle? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val a by animateFloatAsState(alpha(row), TvMotion.focus(), label = "row-alpha")
@@ -355,7 +360,7 @@ fun TvRail(
         ) {
             TvText(
                 title,
-                if (collapsed) TvType.RowHeading.copy(fontSize = 14.sp, color = TvColors.Text2) else TvType.RowHeading,
+                if (collapsed) TvType.RowHeading.copy(fontSize = 14.sp, color = TvColors.Text2) else titleStyle ?: TvType.RowHeading,
                 Modifier.alignByBaseline(),
             )
             if (note != null) TvText(note, TvType.RowNote, Modifier.alignByBaseline())
@@ -364,7 +369,7 @@ fun TvRail(
             }
         }
         if (!collapsed) {
-            TvRailTrack(group = group, state = trackState, contentPadding = trackPadding, content = content)
+            TvRailTrack(group = group, state = trackState, contentPadding = trackPadding, gap = gap, content = content)
         } else {
             Spacer(Modifier.height(0.dp))
         }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,11 +23,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.streamhub.tv.focus.LocalTvFocus
 import com.streamhub.tv.focus.TextFieldHooks
@@ -49,6 +52,8 @@ import com.streamhub.tv.ui.theme.TvType
  * the IME is composing.
  *
  * Focused: white border and `--surface-2`, no scale, no transition.
+ * [height], [contentPadding] and [textStyle] default to `.tv-input`; the
+ * search field overrides them (`.tv-search-input`).
  */
 @Composable
 fun TvTextField(
@@ -67,6 +72,9 @@ fun TvTextField(
     imeAction: ImeAction = ImeAction.Done,
     target: TvFocusTarget? = null,
     leading: (@Composable () -> Unit)? = null,
+    height: Dp = 38.dp,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
+    textStyle: TextStyle = TvType.Input,
 ) {
     val engine = LocalTvFocus.current
     val own = rememberTvFocusTarget(focusId = focusId, action = action, group = group, autofocus = autofocus)
@@ -76,7 +84,7 @@ fun TvTextField(
     val latestSubmit by rememberUpdatedState(onSubmit)
     t.textField = remember(t) { TextFieldHooks(requester, { latestValue }, { latestSubmit() }) }
     val focused = t.isFocused
-    val style = TvType.Input.copy(fontFamily = LocalTvFontFamily.current)
+    val style = textStyle.copy(fontFamily = LocalTvFontFamily.current)
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
         if (label != null) TvText(label, TvType.FieldLabel, Modifier.padding(start = 14.dp))
@@ -84,11 +92,11 @@ fun TvTextField(
             Modifier
                 .tvFocusable(t)
                 .fillMaxWidth()
-                .height(38.dp)
+                .height(height)
                 .clip(TvShapes.Pill)
                 .background(if (focused) TvColors.Surface2 else TvColors.InputBg)
                 .border(1.dp, if (focused) TvColors.Focus else TvColors.InputBorder, TvShapes.Pill)
-                .padding(horizontal = 16.dp),
+                .padding(contentPadding),
             contentAlignment = Alignment.CenterStart,
         ) {
             leading?.invoke()
@@ -115,7 +123,7 @@ fun TvTextField(
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (value.text.isEmpty() && placeholder != null) {
-                            TvText(placeholder, TvType.Input, color = TvColors.Text3)
+                            TvText(placeholder, textStyle, color = TvColors.Text3)
                         }
                         inner()
                     }

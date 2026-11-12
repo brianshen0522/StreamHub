@@ -55,8 +55,9 @@ enum class TvButtonSize { Regular, Chip }
  * Pass [target] to own the focus target yourself (to read `isFocused` outside,
  * or share it); otherwise the attribute parameters build one.
  * [content] replaces the default label row; it gets the current text colour.
- * [height], [paddingX] and [textStyle] override the variant's box and label
- * (the top bar's 64px pills: `.tv-topbar .tv-btn`).
+ * [height], [paddingX] and [textStyle] override the size variant's box and label
+ * (the top bar's 64px pills `.tv-topbar .tv-btn`, `.tv-btn-play`, the search
+ * bar's 80px button); null keeps the variant's own.
  */
 @Composable
 fun TvButton(

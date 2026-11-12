@@ -19,7 +19,7 @@ com.streamhub.tv
 ├── ui/sample/          SampleHome — a Home-shaped screen of primitives; the screenshot subject
 ├── screens/login/, screens/home/   the Login and Home screens
 ├── screens/common/      helpers every screen shares (friendlyError, ProviderNames, favourites)
-├── screens/Placeholders.kt   stand-in Search/Detail — replace these
+├── screens/search/, screens/detail/   the Search and Detail screens
 ├── player/             the Player (port of player/*.rs): PlayerController, PlayerOsd, PlayerScreen, ExoEngine, Ladder, PlayerRules
 ├── cast/TvCastReceiver.kt  the receiver half of realtime.rs (announce, commands, driver, library version, heartbeat)
 ├── AppContainer.kt     kept data code
