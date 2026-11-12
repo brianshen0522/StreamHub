@@ -277,8 +277,10 @@ Open it with `nav.push(TvRoute.Player(target))` (Detail uses `replace` where Tiz
   published state on every `ready`, routes `play` to `pendingPlay` (TvApp
   pushes/replaces) and transport commands to the registered player, keeps the
   driver for 12 s, posts the heartbeat every 45 s. **`libraryVersion`** ticks on
-  favourites/progress frames and on every reconnect: Home and Detail should
-  refetch on it (Tizen's `library_version`).
+  favourites/progress frames and on every reconnect after the first `ready` of
+  a sign-in (Tizen's one `library_version`). Home collects it as
+  `libraryChanges`; Detail does not, as in Tizen. `publish` sends only on a
+  socket that has answered `ready`.
 
 ## 5. Sounds (`sfx/`)
 

@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.floor
 
@@ -64,7 +66,7 @@ interface CastHub {
  */
 class TvCastReceiver(
     events: Flow<RealtimeEvent>,
-    connected: StateFlow<Boolean>,
+    private val connected: StateFlow<Boolean>,
     private val send: (CastPlaybackState?) -> Boolean,
     scope: CoroutineScope,
     main: CoroutineDispatcher,
@@ -82,6 +84,9 @@ class TvCastReceiver(
 
     /** Ticks on every favourites/progress event and on every reconnect (`library_version`). */
     val libraryVersion: StateFlow<Long> = _libraryVersion.asStateFlow()
+
+    /** [libraryVersion] as ticks, without the current value: what Home collects (`home.rs:484`). */
+    val libraryChanges: Flow<Unit> get() = libraryVersion.drop(1).map { }
 
     /** What this set last said it is doing — re-sent after every reconnect. */
     var lastState: CastPlaybackState? = null
@@ -158,9 +163,15 @@ class TvCastReceiver(
         _pendingPlay.value = null
     }
 
+    /**
+     * Remembered always; sent only on a socket that has answered `ready`
+     * (`send_on_ready_socket`, realtime.rs:414-421). A frame sent between the
+     * socket opening and the server's `ready` is read as the auth frame and
+     * closes the socket 4003; [onReady] sends the latest state anyway.
+     */
     override fun publish(state: CastPlaybackState?) {
         lastState = state
-        send(state)
+        if (connected.value) send(state)
     }
 
     override fun setCommandHandler(handler: (CastCommand) -> Unit): Long {

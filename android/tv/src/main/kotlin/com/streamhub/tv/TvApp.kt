@@ -21,12 +21,12 @@ import com.streamhub.tv.focus.TvFocusEngine
 import com.streamhub.tv.focus.TvFocusRoot
 import com.streamhub.tv.nav.TvNav
 import com.streamhub.tv.nav.TvRoute
+import com.streamhub.tv.nav.playFromCast
 import com.streamhub.tv.player.PlayerScreen
 import com.streamhub.tv.screens.common.ApiCatalog
 import com.streamhub.tv.screens.common.PrefsRecentStore
 import com.streamhub.tv.screens.detail.DetailScreen
 import com.streamhub.tv.screens.home.HomeScreen
-import com.streamhub.tv.screens.home.libraryChanges
 import com.streamhub.tv.screens.login.LoginScreen
 import com.streamhub.tv.screens.search.SearchScreen
 import com.streamhub.tv.sfx.SfxControl
@@ -78,7 +78,6 @@ fun TvShell(
 @Composable
 fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxControl) {
     var signedIn by remember { mutableStateOf(container.sessionStore.load() != null) }
-    val libraryChanges = remember(container) { libraryChanges(container) }
     val context = LocalContext.current
     val catalog = remember { ApiCatalog(container.api) }
     val recents = remember { PrefsRecentStore(context) }
@@ -108,8 +107,7 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
         val target = pendingPlay ?: return@LaunchedEffect
         if (!signedIn) return@LaunchedEffect
         container.castReceiver.consumePendingPlay()
-        val route = TvRoute.Player(target)
-        if (nav.current is TvRoute.Player) nav.replace(route) else nav.push(route)
+        nav.playFromCast(target)
     }
     // Signing out forgets what this set last announced and who drove it.
     LaunchedEffect(signedIn) { if (!signedIn) container.castReceiver.onSignedOut() }
@@ -132,7 +130,7 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
                         HomeScreen(
                             api = container.api,
                             userName = user?.let { it.displayName ?: it.username }.orEmpty(),
-                            libraryChanges = libraryChanges,
+                            libraryChanges = container.castReceiver.libraryChanges,
                             onSignedOut = {
                                 signedIn = false
                                 nav.reset()

@@ -6,6 +6,7 @@ import com.streamhub.core.model.CastPlaybackState
 import com.streamhub.core.net.RealtimeEvent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -64,6 +65,21 @@ class TvCastReceiverTest {
     }
 
     @Test
+    fun nothingIsPublishedBeforeTheSocketIsReady() = runTest {
+        // A frame before `ready` would be taken for the auth frame (server closes 4003).
+        val r = Rig(this)
+        runCurrent()
+        r.receiver.publish(playing)
+        r.receiver.publish(playing.copy(positionMs = 6_000))
+        assertTrue(r.sent.isEmpty())
+        r.connected.value = true
+        runCurrent()
+        assertEquals(listOf<CastPlaybackState?>(playing.copy(positionMs = 6_000)), r.sent)
+        r.receiver.publish(playing.copy(positionMs = 7_000))
+        assertEquals(2, r.sent.size)
+    }
+
+    @Test
     fun libraryEventsBumpTheVersion() = runTest {
         val r = Rig(this)
         runCurrent()
@@ -72,6 +88,30 @@ class TvCastReceiverTest {
         r.events.emit(RealtimeEvent.Unknown("receivers"))
         runCurrent()
         assertEquals(2L, r.receiver.libraryVersion.value)
+    }
+
+    @Test
+    fun libraryChangesTickPerSignInAndOnlyAfterAnEarlierReady() = runTest {
+        // Tizen's one library_version (realtime.rs:436-453): the first ready of a
+        // sign-in is not a refetch, each later one is; signing out starts over.
+        val r = Rig(this)
+        val ticks = ArrayList<Unit>()
+        backgroundScope.launch(StandardTestDispatcher(testScheduler)) { r.receiver.libraryChanges.collect { ticks += it } }
+        runCurrent()
+        for (up in listOf(true, false, true, false, true)) {
+            r.connected.value = up
+            runCurrent()
+        }
+        assertEquals(2, ticks.size)
+        r.receiver.onSignedOut()
+        r.connected.value = false
+        runCurrent()
+        r.connected.value = true
+        runCurrent()
+        assertEquals(2, ticks.size)
+        r.events.emit(RealtimeEvent.Progress("update", false))
+        runCurrent()
+        assertEquals(3, ticks.size)
     }
 
     @Test

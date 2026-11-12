@@ -124,3 +124,13 @@ class TvNav {
         entries.add(Entry(nextId++, TvRoute.Home))
     }
 }
+
+/**
+ * A phone asking this television to play something (`realtime.rs` `on_command`
+ * "play", :494-501): replace a playing player rather than stacking a second
+ * one; push over any other screen, so Back returns to it.
+ */
+fun TvNav.playFromCast(target: PlayTarget) {
+    val route = TvRoute.Player(target)
+    if (current is TvRoute.Player) replace(route) else push(route)
+}

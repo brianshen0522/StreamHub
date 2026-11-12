@@ -1,9 +1,6 @@
 package com.streamhub.tv.screens.home
 
 import com.streamhub.tv.screens.login.mmss
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -102,12 +99,6 @@ class HomeCardsTest {
         assertEquals("黑暗榮耀", initialHero(Load.Ready(listOf(c)), Load.Ready(listOf(f)))?.title)
         assertEquals("做工的人", initialHero(Load.Ready(emptyList()), Load.Ready(listOf(f)))?.title)
         assertNull(initialHero(Load.Failed("x"), Load.Loading))
-    }
-
-    @Test
-    fun reconnectTicksOnlyAfterAnEarlierConnection() = runBlocking {
-        val ticks = reconnects(flowOf(false, true, true, false, false, true, false, true)).toList()
-        assertEquals(2, ticks.size)
     }
 
     @Test
