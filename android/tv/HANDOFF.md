@@ -1,5 +1,10 @@
 # `:tv` — handoff
 
+> **Superseded for the UI.** The TV app is being rewritten as a copy of the
+> Tizen client: see `PARITY.md` (what) and `ARCHITECTURE.md` (how). The old
+> screens, `ui/Color.kt`, `ui/Theme.kt` and `Navigation.kt` described below
+> are gone. The ownership rules in §2 still apply.
+
 For a second session building the Android TV app in parallel with the phone app.
 Everything here was verified against the working tree, not remembered.
 

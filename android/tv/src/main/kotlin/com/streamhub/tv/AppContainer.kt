@@ -31,7 +31,6 @@ class AppContainer(context: Context) {
     val serverUrl: String = BuildConfig.SERVER_URL
 
     val sessionStore: SessionStore = EncryptedSessionStore(appContext)
-    val handover = Handover()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
