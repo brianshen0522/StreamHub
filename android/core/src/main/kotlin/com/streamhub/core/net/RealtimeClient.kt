@@ -4,6 +4,7 @@ import com.streamhub.core.model.CastCommand
 import com.streamhub.core.model.CastPlaybackState
 import com.streamhub.core.model.CastReceiver
 import com.streamhub.core.model.Session
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -32,6 +33,9 @@ import okhttp3.WebSocketListener
  *
  * Collecting [events] opens the socket; cancelling the collection closes it. The
  * flow survives disconnects on its own, so a caller never has to reconnect.
+ *
+ * [renew] is [StreamHubApi.renewSession]: it returns null only when the session
+ * is over, and throws when the renewal merely failed (the session is kept).
  */
 class RealtimeClient(
     baseUrl: String,
@@ -141,9 +145,24 @@ class RealtimeClient(
                 // The socket is only authenticated at the handshake, so the
                 // server drops it the moment the token lapses. Renew *first* —
                 // reconnecting with the same dead token just loops.
+                //
+                // A renewal that *failed* (no network, 429, 5xx) is not the end
+                // of the session — [renew] throws then and the tokens are kept
+                // — so back off and go round again: the reconnect is closed
+                // 4002 once more and the renewal retried. Only a null, the
+                // refresh token refused and the session cleared, ends the flow.
                 outcome.closeCode == CLOSE_TOKEN_EXPIRED -> {
+                    val renewed = try {
+                        renew(outcome.token)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failed: Exception) {
+                        delay(backoffMs(attempts))
+                        attempts += 1
+                        continue
+                    }
                     attempts = 0
-                    if (renew(outcome.token) == null) return@channelFlow
+                    if (renewed == null) return@channelFlow
                 }
 
                 else -> {

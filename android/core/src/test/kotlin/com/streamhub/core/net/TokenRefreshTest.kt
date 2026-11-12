@@ -4,6 +4,7 @@ import com.streamhub.core.ApiConfig
 import com.streamhub.core.ClientKind
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -11,11 +12,13 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -117,6 +120,136 @@ class TokenRefreshTest {
         }
 
         assertNull("the dead session must be cleared so the app can send the user to sign in", store.load())
+    }
+
+    /** Rejects every access token and answers refresh with [refreshStatus]. */
+    private fun failingRefresh(refreshStatus: Int) = object : Dispatcher() {
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            if (request.path.orEmpty().startsWith("${ApiConfig.BASE_PATH}/auth/refresh")) {
+                refreshCount.incrementAndGet()
+                return MockResponse().setResponseCode(refreshStatus).setBody("""{"error":"refresh says $refreshStatus"}""")
+            }
+            return MockResponse().setResponseCode(401).setBody("""{"error":"Invalid access token."}""")
+        }
+    }
+
+    private fun assertSignedOutOn(status: Int) = runBlocking {
+        server.dispatcher = failingRefresh(status)
+        store.save(parse(session("access-1", "refresh-1")))
+        val ended = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            kotlinx.coroutines.withTimeoutOrNull(2_000) { api.sessionEnded.first() }
+        }
+
+        try {
+            api.favorites()
+            fail("expected the call to fail")
+        } catch (error: StreamHubException) {
+            assertEquals(401, error.status)
+        }
+
+        assertNull("a $status from /auth/refresh refuses the token itself: sign out", store.load())
+        assertNotNull("sessionEnded fires so the app returns to sign-in", ended.await())
+    }
+
+    private fun assertKeptOn(status: Int) = runBlocking {
+        server.dispatcher = failingRefresh(status)
+        store.save(parse(session("access-1", "refresh-1")))
+
+        try {
+            api.favorites()
+            fail("expected the call to fail")
+        } catch (error: StreamHubException) {
+            assertEquals("the refresh's own answer reaches the caller, not the stale 401", status, error.status)
+            assertEquals("refresh says $status", error.message)
+        }
+
+        assertEquals("a $status says nothing about the token: keep it", "refresh-1", store.load()?.refreshToken)
+        assertEquals("access-1", store.load()?.accessToken)
+    }
+
+    @Test
+    fun `a 400 from refresh ends the session`() = assertSignedOutOn(400)
+
+    @Test
+    fun `a 403 from refresh ends the session`() = assertSignedOutOn(403)
+
+    @Test
+    fun `a rate-limited refresh keeps the session`() = assertKeptOn(429)
+
+    @Test
+    fun `a server error during refresh keeps the session`() = assertKeptOn(500)
+
+    @Test
+    fun `an unavailable server during refresh keeps the session`() = assertKeptOn(503)
+
+    @Test
+    fun `a refresh that gets no answer keeps the session and reports offline`() = runBlocking {
+        // Access tokens are refused, and the refresh request never reaches the
+        // server: an interceptor fails it the way a dead Wi-Fi does. (MockWebServer's
+        // disconnect policies are not a dependable stand-in for this on OkHttp 5.)
+        server.dispatcher = rotatingDispatcher()
+        val offlineRefresh = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                if (chain.request().url.encodedPath.endsWith("/auth/refresh")) {
+                    refreshCount.incrementAndGet()
+                    throw java.net.SocketTimeoutException("no answer")
+                }
+                chain.proceed(chain.request())
+            }
+            .build()
+        val api = StreamHubApi(server.url("/").toString(), store, ClientKind.PHONE, baseClient = offlineRefresh)
+        store.save(parse(session("access-1", "refresh-1")))
+
+        try {
+            api.favorites()
+            fail("expected the call to fail")
+        } catch (error: StreamHubException) {
+            fail("an unanswered refresh must read as offline, not as $error")
+        } catch (error: IOException) {
+            // Offline, as every other unanswered request reports it.
+        }
+
+        assertEquals(1, refreshCount.get())
+        assertEquals("access-1", store.load()?.accessToken)
+        assertEquals("refresh-1", store.load()?.refreshToken)
+    }
+
+    @Test
+    fun `renewSession surfaces a transient failure and keeps the tokens`() = runBlocking {
+        server.dispatcher = failingRefresh(503)
+        store.save(parse(session("access-1", "refresh-1")))
+
+        try {
+            api.renewSession("access-1")
+            fail("a renewal that failed must not look like a session that ended")
+        } catch (error: StreamHubException) {
+            assertEquals(503, error.status)
+        }
+        assertEquals("refresh-1", store.load()?.refreshToken)
+    }
+
+    @Test
+    fun `renewSession returns null once the token is refused`() = runBlocking {
+        server.dispatcher = failingRefresh(401)
+        store.save(parse(session("access-1", "refresh-1")))
+
+        assertNull(api.renewSession("access-1"))
+        assertNull(store.load())
+    }
+
+    @Test
+    fun `a sign-out during the refresh is not undone by its answer`() {
+        val store = InMemorySessionStore(parse(session("access-1", "refresh-1")))
+        val refresher = TokenRefresher(
+            store = store,
+            perform = {
+                store.clear() // the person signed out while this was in flight
+                parse(session("access-2", "refresh-2"))
+            },
+        )
+
+        assertNull(refresher.refresh("access-1"))
+        assertNull("writing the answer would sign the device back in behind their back", store.load())
     }
 
     @Test

@@ -224,7 +224,7 @@ class StreamHubApi(
             .url(path("auth", "device", action))
             .post(json.encodeToString(DeviceCodeRequest(UserCode.normalise(code))).asJson())
             .build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
@@ -249,7 +249,7 @@ class StreamHubApi(
     /** Ends one. Passing the current device's id signs this device out. */
     suspend fun revokeSession(id: String) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(path("me", "sessions", id)).delete().build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     /** Keeps the account visible in the admin console's online list. Poll every 30-60s. */
@@ -258,7 +258,7 @@ class StreamHubApi(
             .url(path("auth", "heartbeat"))
             .post(ByteArray(0).toRequestBody())
             .build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     /**
@@ -268,6 +268,13 @@ class StreamHubApi(
      * @param staleAccessToken the token that stopped working, so a renewal that
      *   another caller already performed is reused rather than repeated.
      */
+    /**
+     * @return the renewed session, or null when the session is over (none
+     *   stored, or the server refused the refresh token — [sessionEnded] fires).
+     * @throws java.io.IOException when the server could not be reached, and
+     *   [StreamHubException] when it answered 429/5xx. In both cases the stored
+     *   session is kept; try again later.
+     */
     suspend fun renewSession(staleAccessToken: String?): Session? = withContext(Dispatchers.IO) {
         refresher.refresh(staleAccessToken)
     }
@@ -275,17 +282,21 @@ class StreamHubApi(
     /**
      * Called from the authenticator, on a thread OkHttp already blocked, so this
      * is deliberately not a suspend function.
+     *
+     * Throws rather than returning null so [TokenRefresher] can tell a refused
+     * token (400/401/403 — sign out) from a server that did not answer usefully
+     * (IOException, 429, 5xx — keep the session). A 2xx whose body cannot be
+     * read is the server's fault, not the token's, and is reported as a 500 as
+     * Tizen does.
      */
-    private fun refreshBlocking(refreshToken: String): Session? {
+    private fun refreshBlocking(refreshToken: String): Session {
         val request = Request.Builder()
             .url(path("auth", "refresh"))
             .post(json.encodeToString(RefreshRequest(refreshToken)).asJson())
             .build()
-        return runCatching {
-            bare.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) null else json.decodeFromString<Session>(response.body.string())
-            }
-        }.getOrNull()
+        val text = bare.newCall(request).execute().use { it.bodyOrThrow() }
+        return runCatching { json.decodeFromString<Session>(text) }
+            .getOrElse { throw StreamHubException(500, "The server sent an unreadable session.") }
     }
 
     // ── catalogue ───────────────────────────────────────────────────────────
@@ -372,7 +383,7 @@ class StreamHubApi(
             )
             .build()
 
-        authed.newCall(request).execute().use { response ->
+        authed.call(request).use { response ->
             response.expectSuccess()
             val body = response.body.source()
             while (true) {
@@ -405,7 +416,7 @@ class StreamHubApi(
             .post(json.encodeToString(body).asJson())
             .build()
 
-        authed.newCall(request).execute().use { response ->
+        authed.call(request).use { response ->
             response.expectSuccess()
             val lines = response.body.source()
             while (true) {
@@ -456,12 +467,12 @@ class StreamHubApi(
             .url(path("me", "favorites"))
             .post(json.encodeToString(favorite).asJson())
             .build()
-        authed.newCall(request).execute().use { json.decodeFromString<FavoriteResponse>(it.bodyOrThrow()).favorite }
+        authed.call(request).use { json.decodeFromString<FavoriteResponse>(it.bodyOrThrow()).favorite }
     }
 
     suspend fun removeFavorite(id: String) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(path("me", "favorites", id)).delete().build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     /** Capped at 200 rows server-side, with no pagination past that. */
@@ -484,7 +495,7 @@ class StreamHubApi(
             .url(path("me", "progress"))
             .put(json.encodeToString(update).asJson())
             .build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     /**
@@ -525,7 +536,7 @@ class StreamHubApi(
             .url(path("me", "source-preference"))
             .post(json.encodeToString(body).asJson())
             .build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     /** Note this DELETE carries a body, which the server requires. */
@@ -534,10 +545,22 @@ class StreamHubApi(
             .url(path("me", "progress"))
             .delete(json.encodeToString(delete).asJson())
             .build()
-        authed.newCall(request).execute().use { it.expectSuccess() }
+        authed.call(request).use { it.expectSuccess() }
     }
 
     // ── plumbing ────────────────────────────────────────────────────────────
+
+    /**
+     * Runs an authenticated call. A renewal that failed transiently surfaces
+     * from the authenticator as [RefreshUnavailableException] (an Authenticator
+     * may only throw IOException); it is unwrapped here into the server's
+     * answer, so the caller sees the 429 or 503 rather than "offline".
+     */
+    private fun OkHttpClient.call(request: Request): Response = try {
+        newCall(request).execute()
+    } catch (error: RefreshUnavailableException) {
+        throw error.error
+    }
 
     private fun path(vararg segments: String, query: HttpUrl.Builder.() -> Unit = {}): HttpUrl =
         root.newBuilder()
@@ -549,7 +572,7 @@ class StreamHubApi(
             .build()
 
     private suspend fun <T> get(url: HttpUrl, decode: (String) -> T): T = withContext(Dispatchers.IO) {
-        authed.newCall(Request.Builder().url(url).build()).execute().use { decode(it.bodyOrThrow()) }
+        authed.call(Request.Builder().url(url).build()).use { decode(it.bodyOrThrow()) }
     }
 
     private inline fun <reified T> Response.decode(): T = json.decodeFromString(bodyOrThrow())

@@ -180,6 +180,37 @@ class RealtimeClientTest {
     }
 
     @Test
+    fun `a renewal that fails transiently is retried rather than ending the stream`() = runBlocking {
+        // 4002, the renewal fails (no network); the same token is tried again,
+        // 4002 again, and this time the renewal goes through.
+        repeat(2) {
+            server.enqueue(
+                serverSocket { socket ->
+                    socket.send("""{"type":"ready"}""")
+                    socket.close(4002, "Access token expired.")
+                }
+            )
+        }
+        server.enqueue(
+            serverSocket { socket ->
+                socket.send("""{"type":"ready"}""")
+                socket.send("""{"type":"favorites","action":"added","id":"f1"}""")
+            }
+        )
+
+        val realtime = client {
+            if (renewals.incrementAndGet() == 1) throw java.io.IOException("offline")
+            session("access-2").also { store.save(it) }
+        }
+
+        val event = withTimeout(10_000) { realtime.events().first() }
+
+        assertEquals(RealtimeEvent.Favorites("added", "f1"), event)
+        assertEquals(2, renewals.get())
+        assertEquals("""{"type":"auth","token":"access-2"}""", authFrames.last())
+    }
+
+    @Test
     fun `a session that cannot be renewed ends the stream`() = runBlocking {
         server.enqueue(
             serverSocket { socket ->
