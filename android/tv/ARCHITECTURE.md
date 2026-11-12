@@ -19,8 +19,10 @@ com.streamhub.tv
 ├── ui/sample/          SampleHome — a Home-shaped screen of primitives; the screenshot subject
 ├── screens/login/, screens/home/   the Login and Home screens
 ├── screens/common/      helpers every screen shares (friendlyError, ProviderNames, favourites)
-├── screens/Placeholders.kt   stand-in Search/Detail/Player — replace these
-├── cast/, AppContainer.kt   kept data code
+├── screens/Placeholders.kt   stand-in Search/Detail — replace these
+├── player/             the Player (port of player/*.rs): PlayerController, PlayerOsd, PlayerScreen, ExoEngine, Ladder, PlayerRules
+├── cast/TvCastReceiver.kt  the receiver half of realtime.rs (announce, commands, driver, library version, heartbeat)
+├── AppContainer.kt     kept data code
 ```
 
 The previous screens were deleted; read them with
@@ -242,6 +244,41 @@ screen. Every screen except the player is wrapped in `TvScreenEnter` (fade +
 
 **To land a screen:** write it under `screens/<name>/`, then swap the
 placeholder call in `TvApp.kt` for it. Delete its placeholder.
+
+### 4.1 `PlayTarget` (what opens the player)
+
+`nav/TvNav.kt`, field for field `nav.rs` `PlayTarget`:
+
+| Field | Meaning | Detail passes (`detail.rs:295-308`) |
+|---|---|---|
+| `provider` | provider key | `target.provider` |
+| `itemUrl` | progress/favourite key, exactly as received | Detail's `target.url` |
+| `seasonUrl` | progress key: `/api/item`'s `seasonUrl` as sent, `""` for single-page providers (never detailUrl) | the resolved season URL |
+| `title`, `posterUrl` | as shown | the item's |
+| `mediaType` | `"movie"`/`"tv"`, `""` = infer (a cast play) | the resolved type |
+| `seasonLabel` | movieffm season label, `""` otherwise | the season's label |
+| `episodeLabel` | raw episode label (opaque key); `""` for a movie | the chosen episode |
+| `episodes` | every label of the season in order (next/prev/strip) | the season's list |
+| `source: SourceLine?` | a source already in hand (cast) | `null` |
+| `startSeconds` | where to start | `resume_position_seconds` (max(pos−30,0), 0 if completed); 0 for 從頭播放 |
+| `fromCast` | started by a phone | `false` |
+
+Open it with `nav.push(TvRoute.Player(target))` (Detail uses `replace` where Tizen does).
+
+### 4.2 The player and the cast receiver
+
+- `player/PlayerController` is `Ctl` from `player/mod.rs`, pure Kotlin on a
+  coroutine scope (timers are jobs; testable on virtual time). `PlayerUi`
+  holds its signals as Compose state; `PlayerOsd` draws them;
+  `PlayerScreen` wires ExoPlayer (`ExoEngine`, the shim's contract), keys
+  (`TvScreenKeys` incl. `onKeyUp`), lifecycle (ON_STOP = report pause +
+  suspend) and `keepScreenOn`.
+- `container.castReceiver` (`TvCastReceiver`): re-announces the last
+  published state on every `ready`, routes `play` to `pendingPlay` (TvApp
+  pushes/replaces) and transport commands to the registered player, keeps the
+  driver for 12 s, posts the heartbeat every 45 s. **`libraryVersion`** ticks on
+  favourites/progress frames and on every reconnect: Home and Detail should
+  refetch on it (Tizen's `library_version`).
 
 ## 5. Sounds (`sfx/`)
 

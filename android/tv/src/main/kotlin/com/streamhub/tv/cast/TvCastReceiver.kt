@@ -3,101 +3,146 @@ package com.streamhub.tv.cast
 import com.streamhub.core.model.CastCommand
 import com.streamhub.core.model.CastPlayRequest
 import com.streamhub.core.model.CastPlaybackState
-import com.streamhub.core.net.RealtimeClient
 import com.streamhub.core.net.RealtimeEvent
+import com.streamhub.tv.nav.PlayTarget
+import com.streamhub.tv.player.SourceLine
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.floor
+
+/** What the on-screen player needs from the cast channel (`realtime.rs` "API for the player"). */
+interface CastHub {
+    /** Say what this set is doing (null = idle). Remembered and re-sent after every reconnect. */
+    fun publish(state: CastPlaybackState?)
+
+    /** Register the player for transport commands; the id clears only this registration. */
+    fun setCommandHandler(handler: (CastCommand) -> Unit): Long
+
+    fun clearCommandHandler(id: Long)
+
+    /** The phone that last drove this set, while that is fresh (12 s). */
+    fun controlledBy(): String?
+
+    object None : CastHub {
+        override fun publish(state: CastPlaybackState?) = Unit
+        override fun setCommandHandler(handler: (CastCommand) -> Unit) = 0L
+        override fun clearCommandHandler(id: Long) = Unit
+        override fun controlledBy(): String? = null
+    }
+}
 
 /**
- * This television, seen from a phone.
+ * This television on the cast channel: a port of the receiver half of
+ * `tizen/app/src/realtime.rs`. The socket itself (auth frame, backoff, 4002 →
+ * refresh → reconnect, 4003) is `:core`'s `RealtimeClient`; this is what Tizen
+ * does on top of it.
  *
- * Two halves. Announcing: the server only lists devices that have sent a
- * playback frame, so an idle television has to send one with a null state or it
- * never appears as a cast target at all. Obeying: commands arrive on the same
- * socket and are split by what has to handle them — a `play` is a navigation
- * decision the app root makes, while a pause or a seek belongs to whatever
- * player is on screen.
+ * - **Announce.** The server lists a receiver once it has sent a playback
+ *   frame, and forgets it on every reconnect. On each `ready` the *last*
+ *   published state is sent again — `null` only when idle — so a playing
+ *   television reappears in the phones' pickers as playing, not idle.
+ * - **Library.** `favorites` / `progress` frames, and every reconnect after
+ *   the first ready of a sign-in (events sent while the socket was down were
+ *   never heard), bump [libraryVersion]; screens refetch on it.
+ * - **Commands.** `play` becomes a [PlayTarget] in [pendingPlay] for the app
+ *   root (push, or replace a playing player). Transport commands go to the
+ *   registered player and are dropped with none; `fullscreen` and anything
+ *   unknown are ignored entirely. A command's `fromName` is the driver, fresh
+ *   for 12 s.
+ * - **Heartbeat.** `POST /auth/heartbeat` as soon as a session appears, then
+ *   every 45 s.
  *
- * The split matters because the two have different lifetimes. A `play` can
- * arrive when no player exists yet, so it is held as state until something
- * consumes it; a pause is meaningless if nothing is playing, so it is a
- * one-shot event that is simply missed.
+ * There is no "refuse remote control": Tizen has none, and never withdraws.
+ *
+ * Everything that touches state runs on [main].
  */
 class TvCastReceiver(
-    private val realtime: RealtimeClient,
-    events: SharedFlow<RealtimeEvent>,
+    events: Flow<RealtimeEvent>,
+    connected: StateFlow<Boolean>,
+    private val send: (CastPlaybackState?) -> Boolean,
     scope: CoroutineScope,
-) {
+    main: CoroutineDispatcher,
+    private val clock: () -> Long,
+    private val sessionToken: () -> String? = { null },
+    private val heartbeat: (suspend () -> Unit)? = null,
+) : CastHub {
 
-    private val _pendingPlay = MutableStateFlow<CastPlayRequest?>(null)
+    private val _pendingPlay = MutableStateFlow<PlayTarget?>(null)
 
     /** A title a phone asked this television to start. Cleared once acted on. */
-    val pendingPlay: StateFlow<CastPlayRequest?> = _pendingPlay.asStateFlow()
+    val pendingPlay: StateFlow<PlayTarget?> = _pendingPlay.asStateFlow()
 
-    private val _transport = MutableSharedFlow<CastCommand>(extraBufferCapacity = 16)
+    private val _libraryVersion = MutableStateFlow(0L)
 
-    /** Pause, resume, seek, stop and next, for the player that is on screen. */
-    val transport: SharedFlow<CastCommand> = _transport.asSharedFlow()
+    /** Ticks on every favourites/progress event and on every reconnect (`library_version`). */
+    val libraryVersion: StateFlow<Long> = _libraryVersion.asStateFlow()
 
-    private val _controlledBy = MutableStateFlow<String?>(null)
+    /** What this set last said it is doing — re-sent after every reconnect. */
+    var lastState: CastPlaybackState? = null
+        private set
 
-    /**
-     * The phone currently driving, by name.
-     *
-     * Shown on screen when a command arrives: someone watching the television
-     * should be able to see that the picture changed because a person with a
-     * phone did it, not because the app misbehaved.
-     */
-    val controlledBy: StateFlow<String?> = _controlledBy.asStateFlow()
-
-    private val _refused = MutableStateFlow(false)
-
-    /**
-     * Whether the person holding this television's own remote has said no.
-     *
-     * The account is the authorization model, but the person physically at
-     * the screen outranks the account: refusing withdraws the television
-     * from every picker and goes deaf to commands already in flight. It
-     * lasts until the app restarts — the television has no settings screen
-     * to undo it from, and a restart is the television's natural reset.
-     */
-    val refused: StateFlow<Boolean> = _refused.asStateFlow()
-
-    fun refuse() {
-        _refused.value = true
-        _controlledBy.value = null
-        realtime.withdrawReceiver()
-    }
+    private var everReady = false
+    private var driver: Pair<String, Long>? = null
+    private var handler: Pair<Long, (CastCommand) -> Unit>? = null
+    private var handlerSeq = 0L
 
     init {
-        scope.launch {
-            events.collect { event ->
-                if (event !is RealtimeEvent.Command) return@collect
-                if (_refused.value) return@collect
-                _controlledBy.value = event.fromName
-                when (val command = event.command) {
-                    is CastCommand.Play -> _pendingPlay.value = command.playback
-                    else -> _transport.emit(command)
+        scope.launch(main) { events.collect(::onEvent) }
+        scope.launch(main) {
+            var was = false
+            connected.collect { now ->
+                if (now && !was) onReady()
+                was = now
+            }
+        }
+        if (heartbeat != null) {
+            scope.launch(main) {
+                var lastToken: String? = null
+                var lastBeat = 0L
+                while (true) {
+                    val token = sessionToken()
+                    val t = clock()
+                    if (token != null && (lastToken == null || t - lastBeat >= HEARTBEAT_MS)) {
+                        lastBeat = t
+                        launch { runCatching { heartbeat.invoke() } }
+                    }
+                    lastToken = token
+                    delay(1_000)
                 }
             }
         }
+    }
 
-        // Announce as soon as there is a socket, and again after every
-        // reconnect: the server keeps the receiver list in memory only, so a
-        // dropped connection means this television has been forgotten.
-        scope.launch {
-            while (true) {
-                realtime.connected.first { it }
-                if (!_refused.value) publish(null)
-                realtime.connected.first { !it }
-            }
+    /** `ready`: announce the last state, and refetch the library after a re-connect. */
+    internal fun onReady() {
+        send(lastState)
+        if (everReady) _libraryVersion.value += 1
+        everReady = true
+    }
+
+    internal fun onEvent(event: RealtimeEvent) {
+        when (event) {
+            is RealtimeEvent.Favorites, is RealtimeEvent.Progress -> _libraryVersion.value += 1
+            is RealtimeEvent.Command -> onCommand(event)
+            else -> Unit
+        }
+    }
+
+    private fun onCommand(event: RealtimeEvent.Command) {
+        val command = event.command
+        // Fullscreen (a television already is), and anything newer: not even a driver.
+        if (command is CastCommand.Fullscreen) return
+        val from = event.fromName.orEmpty()
+        if (from.isNotEmpty()) driver = from to clock()
+        when (command) {
+            is CastCommand.Play -> castPlayTarget(command.playback)?.let { _pendingPlay.value = it }
+            else -> handler?.second?.invoke(command)
         }
     }
 
@@ -105,9 +150,67 @@ class TvCastReceiver(
         _pendingPlay.value = null
     }
 
-    /** Tells the account's phones what this television is doing. */
-    fun publish(state: CastPlaybackState?) {
-        if (_refused.value) return
-        realtime.publishPlayback(state)
+    /** Signing out forgets the state, the driver and the "has been ready" mark (`on_token(None)`). */
+    fun onSignedOut() {
+        lastState = null
+        driver = null
+        everReady = false
+        _pendingPlay.value = null
     }
+
+    override fun publish(state: CastPlaybackState?) {
+        lastState = state
+        send(state)
+    }
+
+    override fun setCommandHandler(handler: (CastCommand) -> Unit): Long {
+        handlerSeq += 1
+        this.handler = handlerSeq to handler
+        return handlerSeq
+    }
+
+    override fun clearCommandHandler(id: Long) {
+        if (handler?.first == id) handler = null
+    }
+
+    override fun controlledBy(): String? =
+        driver?.takeIf { clock() - it.second < DRIVER_FRESH_MS }?.first
+
+    companion object {
+        /** The "controlled by" badge's freshness window, the same 12 s as the phones'. */
+        const val DRIVER_FRESH_MS = 12_000L
+        const val HEARTBEAT_MS = 45_000L
+    }
+}
+
+/**
+ * A cast `play` as a [PlayTarget] (`realtime.rs` `play_target`). `streamUrl`
+ * is the provider's direct URL; the player resolves `/api/manifest` from it.
+ * `episodeUrl` is the progress key's season URL. The episode list is just
+ * [prev?, episode, next?], so the player keeps its own next/previous.
+ */
+fun castPlayTarget(p: CastPlayRequest): PlayTarget? {
+    if (p.streamUrl.isEmpty()) return null
+    val episode = p.episodeLabel.orEmpty()
+    val episodes = buildList {
+        if (episode.isNotEmpty()) {
+            p.prevEpisodeLabel?.takeIf { it.isNotEmpty() }?.let(::add)
+            add(episode)
+            p.nextEpisodeLabel?.takeIf { it.isNotEmpty() }?.let(::add)
+        }
+    }
+    return PlayTarget(
+        provider = p.provider.orEmpty(),
+        itemUrl = p.itemUrl.orEmpty(),
+        seasonUrl = p.episodeUrl.orEmpty(),
+        title = p.title.orEmpty(),
+        posterUrl = p.posterUrl.orEmpty(),
+        mediaType = "",
+        seasonLabel = "",
+        episodeLabel = episode,
+        episodes = episodes,
+        source = SourceLine(directUrl = p.streamUrl, sourceLabel = p.subtitle.orEmpty()),
+        startSeconds = floor(p.positionMs.coerceAtLeast(0) / 1000.0),
+        fromCast = true,
+    )
 }

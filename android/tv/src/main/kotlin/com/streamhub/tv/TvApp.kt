@@ -18,11 +18,10 @@ import coil3.compose.setSingletonImageLoaderFactory
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.streamhub.tv.focus.TvFocusEngine
 import com.streamhub.tv.focus.TvFocusRoot
-import com.streamhub.tv.nav.PlayTarget
 import com.streamhub.tv.nav.TvNav
 import com.streamhub.tv.nav.TvRoute
 import com.streamhub.tv.screens.DetailPlaceholder
-import com.streamhub.tv.screens.PlayerPlaceholder
+import com.streamhub.tv.player.PlayerScreen
 import com.streamhub.tv.screens.SearchPlaceholder
 import com.streamhub.tv.screens.home.HomeScreen
 import com.streamhub.tv.screens.home.libraryChanges
@@ -95,27 +94,19 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
         }
     }
 
-    // A phone asking this television to play something: replace a playing
-    // player rather than stacking a second one.
+    // A phone asking this television to play something (realtime.rs
+    // `on_command` "play"): replace a playing player rather than stacking a
+    // second one; push over any other signed-in screen.
     val pendingPlay by container.castReceiver.pendingPlay.collectAsStateWithLifecycle()
     LaunchedEffect(pendingPlay, signedIn) {
-        val play = pendingPlay ?: return@LaunchedEffect
+        val target = pendingPlay ?: return@LaunchedEffect
         if (!signedIn) return@LaunchedEffect
         container.castReceiver.consumePendingPlay()
-        val route = TvRoute.Player(
-            PlayTarget(
-                provider = play.provider.orEmpty(),
-                itemUrl = play.itemUrl.orEmpty(),
-                seasonUrl = play.episodeUrl.orEmpty(),
-                title = play.title.orEmpty(),
-                posterUrl = play.posterUrl.orEmpty(),
-                episodeLabel = play.episodeLabel.orEmpty(),
-                startSeconds = play.positionMs / 1000.0,
-                fromCast = true,
-            ),
-        )
+        val route = TvRoute.Player(target)
         if (nav.current is TvRoute.Player) nav.replace(route) else nav.push(route)
     }
+    // Signing out forgets what this set last announced and who drove it.
+    LaunchedEffect(signedIn) { if (!signedIn) container.castReceiver.onSignedOut() }
 
     // Silent while the player is up (player/mod.rs:222-236).
     val playerUp = signedIn && nav.current is TvRoute.Player
@@ -145,7 +136,7 @@ fun TvApp(container: AppContainer, engine: TvFocusEngine, nav: TvNav, sfx: SfxCo
                     TvRoute.Search -> TvScreenEnter { SearchPlaceholder(container, onOpen = nav::push) }
                     is TvRoute.Detail -> TvScreenEnter { DetailPlaceholder(route.target, onOpen = nav::push) }
                     // The player is not a .tv-screen: no enter animation.
-                    is TvRoute.Player -> PlayerPlaceholder(route.target)
+                    is TvRoute.Player -> PlayerScreen(container, route.target)
                 }
             }
         }

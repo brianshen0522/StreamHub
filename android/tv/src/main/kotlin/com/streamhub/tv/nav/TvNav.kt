@@ -2,7 +2,7 @@ package com.streamhub.tv.nav
 
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateListOf
-import com.streamhub.core.model.Source
+import com.streamhub.tv.player.SourceLine
 
 /**
  * What the Detail screen opens (`nav.rs` `DetailTarget`). Built from a search
@@ -23,25 +23,37 @@ data class DetailTarget(
     val row: Any? = null,
 )
 
-/** What the Player plays (`nav.rs` `PlayTarget`). */
+/**
+ * What the Player plays (`nav.rs` `PlayTarget`), field for field. Detail
+ * builds it from the episode it resolved (`detail.rs:295-308`), a cast `play`
+ * from the phone's request (`castPlayTarget`), and the player itself for the
+ * next/previous episode and the episode strip.
+ */
 data class PlayTarget(
     val provider: String,
-    /** Progress/favourite key fields, sent exactly as received. */
+    /** Progress/favourite key field, sent exactly as received (Detail's `target.url`). */
     val itemUrl: String,
+    /**
+     * Progress key field: the season URL exactly as `/api/item` sent it
+     * (movieffm), "" for single-page providers. Never fall back to detailUrl.
+     */
     val seasonUrl: String = "",
     val title: String = "",
     val posterUrl: String = "",
-    /** "movie" / "tv" as Detail resolved it, "" when unknown (a cast play). */
+    /** "movie" / "tv" as Detail resolved it, "" when unknown (a cast play) — the player infers it then. */
     val mediaType: String = "",
-    /** The season's display label (movieffm hubs), "" otherwise. */
+    /** The season's display label (movieffm hubs), "" otherwise. Sent with progress only when non-empty. */
     val seasonLabel: String = "",
-    /** "" for a movie. */
+    /** The raw episode label (an opaque key); "" for a movie. */
     val episodeLabel: String = "",
-    /** Every episode label of the season in order, for next/previous. Empty for a movie. */
+    /** Every episode label of the season in order, for next/previous/the strip. Empty for a movie. */
     val episodes: List<String> = emptyList(),
-    /** The source chosen, or null to let the player take the first that arrives. */
-    val source: Source? = null,
-    /** Where to start, seconds. Null = the resume rules decide. */
+    /**
+     * A source already in hand (a cast play's stream), played at once while the
+     * rest are still listed; null lets the player choose. Detail passes null.
+     */
+    val source: SourceLine? = null,
+    /** Where to start, seconds. Detail passes `resume_position_seconds` (0 for 從頭播放). */
     val startSeconds: Double? = null,
     /** Started by a phone over the cast channel. */
     val fromCast: Boolean = false,

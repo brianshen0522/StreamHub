@@ -132,11 +132,3 @@ fun DetailPlaceholder(target: DetailTarget, onOpen: (TvRoute) -> Unit) {
         TvText("（詳細頁尚未完成）", TvType.Meta, color = TvColors.Text3)
     }
 }
-
-/** Player stand-in: black, with a caption. Back pops through the normal chain. */
-@Composable
-fun PlayerPlaceholder(target: PlayTarget) {
-    Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
-        TvText("${target.title}：播放器尚未完成", TvType.Title, color = TvColors.Text2)
-    }
-}

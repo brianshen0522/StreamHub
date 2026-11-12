@@ -56,9 +56,31 @@ class AppContainer(context: Context) {
             .shareIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), replay = 0)
     }
 
+    /**
+     * The cast receiver (Tizen's realtime.rs on top of the socket). Built
+     * with the container — MainActivity touches it before the first frame —
+     * because an idle television must announce itself to be castable at all.
+     */
     val castReceiver: TvCastReceiver by lazy {
-        TvCastReceiver(realtime, realtimeEvents, scope)
+        TvCastReceiver(
+            events = realtimeEvents,
+            connected = realtime.connected,
+            send = { state -> realtime.publishPlayback(state) },
+            scope = scope,
+            main = Dispatchers.Main.immediate,
+            clock = { android.os.SystemClock.uptimeMillis() },
+            sessionToken = { sessionStore.load()?.accessToken?.takeIf { it.isNotEmpty() } },
+            heartbeat = { api.heartbeat() },
+        )
     }
+
+    /** What the player asks the server. */
+    val playerData: com.streamhub.tv.player.PlayerData by lazy {
+        com.streamhub.tv.player.ApiPlayerData(api, serverUrl)
+    }
+
+    /** Fire-and-forget writes (progress, source preference) that must outlive the screen that sent them. */
+    val backgroundScope: CoroutineScope get() = scope
 
     /**
      * Give the app its own TLS stack instead of the one the television shipped
