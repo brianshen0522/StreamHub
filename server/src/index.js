@@ -281,6 +281,7 @@ async function ensureBootstrapped() {
     { key: "dramasq", name: "DramaSQ", sortOrder: 3 },
     { key: "chinaq", name: "ChinaQ", sortOrder: 4 },
     { key: "chinaqtw", name: "ChinaQ TW", sortOrder: 5 },
+    { key: "vidsrc", name: "VidSrc", sortOrder: 6 },
   ];
 
   await Promise.all(

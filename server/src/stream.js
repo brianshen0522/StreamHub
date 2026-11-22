@@ -1,9 +1,11 @@
 import { Readable, pipeline } from "node:stream";
+import { once } from "node:events";
 import { getBearerToken } from "./auth.js";
 import { caches } from "./cache.js";
 import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 import { analyzePlaylist, stripAds } from "./utils/adfilter.js";
 import { BlockedTargetError, assertPublicUrl, readLimited, safeFetch } from "./utils/safe-fetch.js";
+import { isVidsrcRefererOrigin } from "./providers/vidsrc.js";
 
 /**
  * What a proxied response may carry over from upstream. An allowlist because
@@ -50,6 +52,36 @@ async function sendUpstreamError(upstream, response) {
  * whole process down, and an upstream connection can drop at any moment. It also
  * releases the upstream fetch when the client goes away.
  */
+/**
+ * Peek at the first bytes of a body without decoding them: an m3u8 is text,
+ * but the same road also carries MPEG-TS that the CDN labels text/html. Only
+ * a byte-level look can tell them apart.
+ */
+async function readPrefix(upstream, sniffBytes) {
+  const reader = upstream.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (total < sniffBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  return { reader, chunks, total };
+}
+
+/** Relays whatever the reader has left, byte for byte, then ends the response. */
+async function relayReader(reader, response) {
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!response.write(Buffer.from(value))) await once(response, "drain");
+    }
+  } catch { /* the client went away; the response is over either way */ }
+  response.end();
+}
+
 function relayBody(upstream, response) {
   const source = Readable.fromWeb(upstream.body);
   // pipeline listens for errors only until it settles. The fetch's
@@ -72,25 +104,55 @@ function relayBody(upstream, response) {
 function buildProxyUrl(request, targetUrl) {
   const url = `/api/stream?target=${encodeURIComponent(targetUrl)}`;
   const token = getBearerToken(request, { allowQuery: true });
-  return token ? `${url}&accessToken=${encodeURIComponent(token)}` : url;
+  const params = token ? `&accessToken=${encodeURIComponent(token)}` : "";
+  // A proxied VidSrc request carries the upstream Referer the CDN demands;
+  // nested playlists and segments must keep it or every one of them 403s.
+  const referer = typeof request.query.r === "string" && request.query.r
+    ? `&r=${encodeURIComponent(request.query.r)}`
+    : "";
+  return `${url}${params}${referer}`;
 }
 
 function rewritePlaylist(request, sourceUrl, content) {
-  const lines = content.split("\n");
-  return lines
+  // The playback token rides on the master's query string, and VidSrc's CDN
+  // answers 403 to any nested request without it. Every URI this writes must
+  // therefore carry a copy: the token the incoming target had, or none.
+  let inheritedToken = null;
+  try {
+    inheritedToken = new URL(sourceUrl).searchParams.get("token");
+  } catch { /* not a URL: leave URIs as they are */ }
+
+  const absolute = (uri) => {
+    try {
+      const resolved = new URL(uri, sourceUrl);
+      if (inheritedToken && !resolved.searchParams.get("token")) {
+        resolved.searchParams.set("token", inheritedToken);
+      }
+      return resolved.toString();
+    } catch {
+      return null;
+    }
+  };
+
+  // Keys, init segments and media renditions carry their URL in a URI="…"
+  // attribute rather than on a line of its own.
+  const rewriteUriAttributes = (line) => line.replace(/URI="([^"]+)"/g, (match, uri) => {
+    const target = absolute(uri);
+    return target ? `URI="${buildProxyUrl(request, target)}"` : match;
+  });
+
+  return content
+    .split("\n")
     .map((line) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) {
-        if (trimmed.startsWith("#EXT-X-KEY")) {
-          return line.replace(/URI="([^"]+)"/, (_, uri) => {
-            const keyUrl = new URL(uri, sourceUrl).toString();
-            return `URI="${buildProxyUrl(request, keyUrl)}"`;
-          });
-        }
-        return line;
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        return /^#EXT-X-(?:KEY|MAP|MEDIA|SESSION-DATA|I-FRAME-STREAM-INF)/.test(trimmed)
+          ? rewriteUriAttributes(line)
+          : line;
       }
-      const absoluteUrl = new URL(trimmed, sourceUrl).toString();
-      return buildProxyUrl(request, absoluteUrl);
+      const target = absolute(trimmed);
+      return target ? buildProxyUrl(request, target) : line;
     })
     .join("\n");
 }
@@ -143,12 +205,13 @@ function extractVariantPlaylistUrls(sourceUrl, text) {
   return urls;
 }
 
-async function fetchTextSnippet(url, maxBytes = 256_000) {
+async function fetchTextSnippet(url, maxBytes = 256_000, referer = null) {
   // Variant URLs come out of the playlist body, so every one of these is
   // checked here rather than by the caller.
   const { response } = await safeFetch(url, {
     headers: {
       "user-agent": UA,
+      ...(referer ? { referer } : {}),
       range: `bytes=0-${Math.max(1024, maxBytes - 1)}`,
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -159,8 +222,8 @@ async function fetchTextSnippet(url, maxBytes = 256_000) {
   return readLimited(response.body, maxBytes);
 }
 
-async function inspectM3u8Metadata(url, depth = 0) {
-  const text = await fetchTextSnippet(url);
+async function inspectM3u8Metadata(url, depth = 0, referer = null) {
+  const text = await fetchTextSnippet(url, 256_000, referer);
   if (!isValidM3u8Content(text)) {
     return { durationSeconds: null, adSeconds: 0, playlistType: "invalid" };
   }
@@ -189,7 +252,7 @@ async function inspectM3u8Metadata(url, depth = 0) {
   const inspectedVariants = await Promise.all(
     variantUrls.slice(0, 5).map(async (variantUrl) => {
       try {
-        return await inspectM3u8Metadata(variantUrl, depth + 1);
+        return await inspectM3u8Metadata(variantUrl, depth + 1, referer);
       } catch {
         return null;
       }
@@ -219,7 +282,7 @@ export async function getStreamMetadata(stream) {
   if (stream.url.toLowerCase().includes(".m3u8")) {
     try {
       await assertPublicUrl(stream.url);
-      const inspected = await inspectM3u8Metadata(stream.url);
+      const inspected = await inspectM3u8Metadata(stream.url, 0, stream.referer ?? null);
       metadata = {
         durationSeconds: Number.isFinite(inspected.durationSeconds) ? inspected.durationSeconds : null,
         adSeconds: inspected.adSeconds || 0,
@@ -233,12 +296,13 @@ export async function getStreamMetadata(stream) {
   return { ...stream, ...metadata };
 }
 
-async function checkM3u8(url) {
+async function checkM3u8(url, referer = null) {
   let response;
   try {
     ({ response } = await safeFetch(url, {
       headers: {
         "user-agent": UA,
+        ...(referer ? { referer } : {}),
         range: "bytes=0-4095",
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -253,18 +317,25 @@ async function checkM3u8(url) {
   }
 }
 
-async function checkGeneric(url) {
+async function checkGeneric(url, referer = null) {
   let response;
   try {
     ({ response } = await safeFetch(url, {
       method: "HEAD",
-      headers: { "user-agent": UA },
+      headers: {
+        "user-agent": UA,
+        ...(referer ? { referer } : {}),
+      },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }));
     if ([403, 405, 500, 501].includes(response.status)) {
       ({ response } = await safeFetch(url, {
         method: "GET",
-        headers: { range: "bytes=0-0", "user-agent": UA },
+        headers: {
+          range: "bytes=0-0",
+          "user-agent": UA,
+          ...(referer ? { referer } : {}),
+        },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       }));
     }
@@ -294,9 +365,15 @@ export async function checkStream(stream) {
     return { ...stream, ...blocked };
   }
 
-  const result = stream.url.toLowerCase().includes(".m3u8")
-    ? await checkM3u8(stream.url)
-    : await checkGeneric(stream.url);
+  // VidSrc's masters live at extension-less paths (/pl/<hash>), so the
+  // extension test alone sent them to checkGeneric — whose HEAD carried no
+  // Referer and drew a 403 from the CDN. A referer-bearing stream that is not
+  // a media file is treated as a playlist and validated as one.
+  const looksLikePlaylist = stream.url.toLowerCase().includes(".m3u8")
+    || (Boolean(stream.referer) && !/\.(?:ts|mp4|m4s|m4v|jpg|png|webp)(?:\?|$)/i.test(stream.url));
+  const result = looksLikePlaylist
+    ? await checkM3u8(stream.url, stream.referer ?? null)
+    : await checkGeneric(stream.url, stream.referer ?? null);
 
   caches.streamCheck.set(stream.url, result);
   return { ...stream, ...result };
@@ -309,10 +386,26 @@ export async function streamCheckedSources(rawStreams, preferredLabel, onSource)
     const enriched = await getStreamMetadata(stream);
     const checked = await checkStream(enriched);
     if (checked.ok) {
+      const proxyUrl = `/api/stream?target=${encodeURIComponent(checked.url)}`;
+      // VidSrc's CDN demands the player-page Referer on every request; the
+      // emitted proxy URL carries it (allowlist-checked by the proxy) so the
+      // fetched road works without the caller knowing any of this.
+      const refererParam = stream.referer && isVidsrcRefererOrigin(stream.referer)
+        ? `&r=${encodeURIComponent(Buffer.from(stream.referer).toString("base64url"))}`
+        : "";
+      const fullProxyUrl = `${proxyUrl}${refererParam}`;
+      // VidSrc streams cannot be played by the browser at all — the CDN
+      // demands a specific Referer plus a per-request token, and hls.js can
+      // send neither. Their proxy road is the only road, so it is handed
+      // over as directUrl too and the fallback dance is skipped. The same
+      // flag tells the player to pin the highest quality rung and only step
+      // down when that rung will not play.
+      const preferProxy = Boolean(stream.preferProxy);
       onSource({
         ...checked,
-        directUrl: checked.url,
-        proxyUrl: `/api/stream?target=${encodeURIComponent(checked.url)}`,
+        directUrl: preferProxy ? fullProxyUrl : checked.url,
+        proxyUrl: fullProxyUrl,
+        ...(preferProxy ? { maxQuality: true } : {}),
       });
     }
   }
@@ -336,12 +429,33 @@ export async function handleStreamProxy(request, response) {
     return;
   }
 
+  // VidSrc's CDN 403s anything whose Referer is not the player page the chain
+  // handed out. The param is base64url of that full URL and is only honoured
+  // for hosts on the provider's own allowlist, so no caller can turn this
+  // proxy into a referer-forger for an arbitrary site.
+  let upstreamReferer;
+  const refererParam = typeof request.query.r === "string" ? request.query.r : "";
+  if (refererParam) {
+    let decoded;
+    try {
+      decoded = Buffer.from(refererParam, "base64url").toString("utf8");
+    } catch {
+      response.status(400).json({ error: "Invalid referer parameter." });
+      return;
+    }
+    if (!isVidsrcRefererOrigin(decoded)) {
+      response.status(400).json({ error: "Referer not allowed for this target." });
+      return;
+    }
+    upstreamReferer = decoded;
+  }
+
   let upstream;
   try {
     ({ response: upstream } = await safeFetch(target, {
       headers: {
         "user-agent": UA,
-        referer: new URL(target).origin + "/",
+        referer: upstreamReferer ?? new URL(target).origin + "/",
         range: request.get("range") || "",
       },
       signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
@@ -370,6 +484,36 @@ export async function handleStreamProxy(request, response) {
 
   if (contentType.includes("mpegurl") || target.toLowerCase().includes(".m3u8")) {
     const content = await readLimited(upstream.body, MAX_PLAYLIST_BYTES);
+    response.type("application/vnd.apple.mpegurl");
+    response.send(rewritePlaylist(request, target, content));
+    return;
+  }
+
+  // VidSrc serves its playlists at extension-less paths under text/plain, so
+  // the test above misses them — and it serves MPEG-TS the same way, as
+  // text/html. On the referer road the first bytes are read before deciding:
+  // an HLS signature means text to rewrite, anything else is a segment and is
+  // relayed as the raw bytes it is (decoding a segment as text destroys it).
+  if (refererParam && contentType.startsWith("text/")) {
+    const { reader, chunks, total } = await readPrefix(upstream, 16);
+    const prefix = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).subarray(0, 7).toString("latin1");
+    if (prefix !== "#EXTM3U") {
+      response.setHeader("content-type", "application/octet-stream");
+      if (chunks.length) response.write(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+      await relayReader(reader, response);
+      return;
+    }
+    // A playlist: the rest of it is text, up to the same cap as any other.
+    const rest = [];
+    let size = total;
+    while (size < MAX_PLAYLIST_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      rest.push(Buffer.from(value));
+      size += value.byteLength;
+    }
+    await reader.cancel().catch(() => {});
+    const content = Buffer.concat([...chunks.map((chunk) => Buffer.from(chunk)), ...rest]).toString("utf8");
     response.type("application/vnd.apple.mpegurl");
     response.send(rewritePlaylist(request, target, content));
     return;

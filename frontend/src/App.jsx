@@ -111,20 +111,57 @@ function withCurrentOrigin(url) {
   }
 }
 
+function isOwnProxyUrl(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.origin === window.location.origin && parsed.pathname === "/api/stream";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeSourceList(sources) {
+  // Anything on this origin's /api/ surface authenticates by query token, so
+  // every road into the proxy carries one. That includes a directUrl which is
+  // the proxy itself — VidSrc sources are exactly that, because their CDN
+  // needs a server-side Referer the browser cannot send.
+  const addToken = (absolute) => {
+    if (!absolute) return absolute;
+    try {
+      const url = new URL(absolute, window.location.origin);
+      if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) return absolute;
+      if (url.searchParams.has("accessToken")) return absolute;
+      url.searchParams.set("accessToken", getAccessToken() || "");
+      return url.toString();
+    } catch {
+      return absolute;
+    }
+  };
   return (sources || []).map((source) => ({
     ...source,
-    directUrl: withCurrentOrigin(source.directUrl || source.url),
-    proxyUrl: withCurrentOrigin(
-      source.proxyUrl
-        ? `${source.proxyUrl}${source.proxyUrl.includes("?") ? "&" : "?"}accessToken=${encodeURIComponent(getAccessToken())}`
-        : "",
-    ),
+    directUrl: addToken(withCurrentOrigin(source.directUrl || source.url)),
+    proxyUrl: addToken(withCurrentOrigin(source.proxyUrl || "")),
   }));
 }
 
 function normalizeSourceItem(source) {
   return normalizeSourceList([source])[0];
+}
+
+/**
+ * Providers whose TV items arrive with a show-wide season list. The others
+ * hand back a flat episode list for the URL they were given. Anything that
+ * asks "is this a season-based show?" goes through this one test, so adding a
+ * provider is one entry rather than a hunt for every special case.
+ */
+const SEASONED_PROVIDERS = new Set(["movieffm", "vidsrc"]);
+
+function hasSeasonList(detail) {
+  return detail?.mediaType === "tv"
+    && SEASONED_PROVIDERS.has(detail?.provider)
+    && Array.isArray(detail?.seasons)
+    && detail.seasons.length > 0;
 }
 
 function progressKey(seasonUrl, episodeLabel) {
@@ -650,6 +687,10 @@ function App() {
   // a reused instance keeps its first handler, and without this it would fall
   // back to the previous episode's proxy.
   const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null });
+  // How many rungs a max-quality source has already been stepped down. Reset
+  // with the source, so the next episode (or an explicit re-pick) starts at
+  // the top of its own ladder again.
+  const qualityDowngradesRef = useRef(0);
   /**
    * Sources already tried and exhausted for the episode on screen, by
    * `sourceKey`. A source is only added once *both* its roads have died, so
@@ -805,6 +846,24 @@ function App() {
     const directUrl = activeSource.directUrl || activeSource.url;
     const proxyUrl = activeSource.proxyUrl;
     sourceUrlsRef.current = { directUrl, proxyUrl };
+    // A new source starts its quality ladder from the top, whatever the
+    // previous one had to fall back to.
+    qualityDowngradesRef.current = 0;
+
+    // Pin a max-quality source to its best rung as soon as the ladder is
+    // known. Used by both hls paths — a fresh instance and the reused one.
+    const pinMaxQuality = (instance) => {
+      if (!latestRef.current.activeSource?.maxQuality || !instance.levels?.length) return;
+      const best = instance.levels.reduce(
+        (bestIndex, level, index) => (
+          ((level.height || level.bitrate || 0) >= (instance.levels[bestIndex].height || instance.levels[bestIndex].bitrate || 0))
+            ? index : bestIndex),
+        0,
+      );
+      instance.currentLevel = best;
+      instance.loadLevel = best;
+      instance.autoLevelCapping = best;
+    };
 
     function setMode(mode) { setPlaybackMode(mode); }
 
@@ -896,6 +955,9 @@ function App() {
         // never refetch, and the quota handler above reclaims it first when
         // memory actually runs short.
         backBufferLength: Infinity,
+        // VidSrc sources carry maxQuality: the ladder is pinned to its top
+        // rung below, and ABR must not quietly step around that pin.
+        capLevelToPlayerSize: false,
       });
       setMode(mode);
       setHlsInstance(hls);
@@ -903,6 +965,10 @@ function App() {
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Max-quality sources start at the top rung and stay there. Only the
+        // fatal handler below steps down, and only when that rung will not
+        // actually play — ABR never gets a say.
+        pinMaxQuality(hls);
         void video.play().catch(() => {});
       });
       // A segment that actually arrived is the only proof a host is reachable
@@ -933,7 +999,24 @@ function App() {
         }));
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) onFatalError?.(hls, data);
+        if (!data.fatal) return;
+        // A max-quality source degrades one rung per fatal error before the
+        // normal failover takes over — the ladder only shrinks when the
+        // current rung truly cannot play, never because bandwidth dipped.
+        const maxSource = latestRef.current.activeSource?.maxQuality;
+        const currentLevel = hls.currentLevel >= 0 ? hls.currentLevel : hls.loadLevel;
+        if (maxSource && hls.levels?.length > 1 && currentLevel > 0
+            && (qualityDowngradesRef.current < hls.levels.length - 1)) {
+          qualityDowngradesRef.current += 1;
+          const next = currentLevel - 1;
+          pendingNoticeRef.current = tRef.current?.playbackQualityFallback || "";
+          hls.currentLevel = next;
+          hls.loadLevel = next;
+          hls.autoLevelCapping = next;
+          hls.startLoad();
+          return;
+        }
+        onFatalError?.(hls, data);
       });
       return hls;
     }
@@ -966,6 +1049,9 @@ function App() {
       if (existing && existing.media === video) {
         setMode(directUrl ? "direct" : "proxy");
         existing.loadSource(directUrl || proxyUrl);
+        // The reused instance also owes the max-quality pin — it fires once
+        // for the incoming manifest, the same as a fresh load would.
+        existing.once(Hls.Events.MANIFEST_PARSED, () => pinMaxQuality(existing));
         // The instance is reused, so the success listener from its first load
         // is spent. Without this, every episode after the first would record
         // failures and never successes.
@@ -1018,16 +1104,19 @@ function App() {
     }
 
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {
-      // The one path with no hls.js and therefore no ad filter. Fed the raw
-      // playlist, an iPhone was the only client that actually played the
-      // spliced ad runs — and their segments live on hosts a phone's network
-      // often cannot reach, so direct playback died mid-ad while the proxy,
-      // whose fetches leave from the server, sailed. The cleaned manifest
-      // removes those runs server-side; the segment URLs stay the CDN's own,
-      // so the server serves a playlist, not the film.
-      const cleaned = withCurrentOrigin(
-        `/api/manifest?target=${encodeURIComponent(directUrl)}&accessToken=${encodeURIComponent(getAccessToken())}`,
-      );
+      // VidSrc sources hand over their proxy URL as directUrl (the CDN needs
+      // a server-side Referer), so it is already playable as-is — wrapping it
+      // in /api/manifest would just proxy the proxy. Everything else still
+      // gets the cleaned-manifest treatment: fed the raw playlist, an iPhone
+      // was the only client that actually played the spliced ad runs — and
+      // their segments live on hosts a phone's network often cannot reach,
+      // so direct playback died mid-ad while the proxy, whose fetches leave
+      // from the server, sailed.
+      const cleaned = isOwnProxyUrl(directUrl)
+        ? directUrl
+        : withCurrentOrigin(
+          `/api/manifest?target=${encodeURIComponent(directUrl)}&accessToken=${encodeURIComponent(getAccessToken())}`,
+        );
       loadNative(cleaned, "direct");
       video.onerror = () => {
         const err = video.error;
@@ -1222,7 +1311,7 @@ function App() {
 
             if (currentEpIdx < episodes.length - 1) {
               nextEp = episodes[currentEpIdx + 1];
-            } else if (itemDetail.provider === "movieffm" && Array.isArray(itemDetail.seasons)) {
+            } else if (hasSeasonList(itemDetail)) {
               const currentSeasonIdx = itemDetail.seasons.findIndex((s) => s.url === selectedSeason?.url);
               if (currentSeasonIdx !== -1 && currentSeasonIdx < itemDetail.seasons.length - 1) {
                 nextSeason = itemDetail.seasons[currentSeasonIdx + 1];
@@ -1447,8 +1536,8 @@ function App() {
       return { prev, next: { episode: label, season: null, label } };
     }
 
-    // Last episode of a movieffm season rolls over into the next season.
-    if (itemDetail.provider === "movieffm" && Array.isArray(itemDetail.seasons)) {
+    // Last episode of a season-based show rolls over into the next season.
+    if (hasSeasonList(itemDetail)) {
       const seasonIndex = itemDetail.seasons.findIndex((season) => season.url === selectedSeason?.url);
       const nextSeason = itemDetail.seasons[seasonIndex + 1];
       if (seasonIndex !== -1 && nextSeason) {
@@ -1832,7 +1921,7 @@ function App() {
   // WatchPanels stays presentational, so the progress bookkeeping and the two
   // provider-specific TV shapes are resolved into plain rows here.
   const seasonOptions = useMemo(() => {
-    const seasons = itemDetail?.mediaType === "tv" && itemDetail?.provider === "movieffm"
+    const seasons = hasSeasonList(itemDetail)
       ? itemDetail.seasons || []
       : [];
     return seasons.map((season) => {
@@ -1842,7 +1931,7 @@ function App() {
     });
   }, [itemDetail, itemProgressMap]);
 
-  const activeSeasonUrl = itemDetail?.provider === "movieffm"
+  const activeSeasonUrl = SEASONED_PROVIDERS.has(itemDetail?.provider)
     ? (selectedSeason?.url || itemDetail?.seasonUrl || null)
     : (itemDetail?.seasonUrl || null);
 
@@ -2450,7 +2539,7 @@ function App() {
       const progressMap = await fetchItemProgress(item.provider, item.url);
       setItemProgressMap(progressMap);
 
-      if (detail.provider === "movieffm" && Array.isArray(detail.seasons) && detail.seasons.length > 0) {
+      if (hasSeasonList(detail)) {
         // Determine which season to land on. Only a pointer at one viewing —
         // a row of history — overrides what has been watched; anything else
         // offers its season as a fallback and progress decides.

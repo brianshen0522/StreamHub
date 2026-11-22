@@ -50,7 +50,14 @@ async function checkProvider(providerRow) {
 
   const start = Date.now();
   try {
-    await client.search(PROVIDER_POLL_QUERY);
+    // A provider with a cheap pulse uses it instead of a full search. VidSrc's
+    // search walks TMDB and then runs a playback chain per title — running
+    // that every 30 s would trip its own rate limiter within the hour.
+    if (typeof client.ping === "function") {
+      await client.ping();
+    } else {
+      await client.search(PROVIDER_POLL_QUERY);
+    }
     await recordProviderHealth(providerRow, {
       success: true,
       responseTimeMs: Date.now() - start,

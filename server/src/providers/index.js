@@ -23,6 +23,13 @@ import {
   searchMovieffm,
 } from "./movieffm.js";
 import {
+  getVidsrcEpisodeStreams,
+  getVidsrcItem,
+  getVidsrcSeasonEpisodes,
+  pingVidsrc,
+  searchVidsrc,
+} from "./vidsrc.js";
+import {
   get777tvEpisodeStreams,
   get777tvEpisodes,
   get777tvItem,
@@ -68,6 +75,19 @@ export const providers = {
     getItem: getChinaqTwItem,
     getEpisodes: getChinaqTwEpisodes,
     getEpisodeStreams: getChinaqTwEpisodeStreams,
+  },
+  vidsrc: {
+    // No site of its own: the catalogue is TMDB, filtered by what the VidSrc
+    // embed chain actually carries. The item URL is our own synthetic one and
+    // only ever has to match this domain list.
+    domains: ["embed.vidsrc.si"],
+    search: searchVidsrc,
+    getItem: getVidsrcItem,
+    getEpisodes: getVidsrcSeasonEpisodes,
+    getEpisodeStreams: getVidsrcEpisodeStreams,
+    // The health poller takes this one-request pulse instead of a full
+    // search, because a search here is a batch of playback chains.
+    ping: pingVidsrc,
   },
 };
 

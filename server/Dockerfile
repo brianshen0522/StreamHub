@@ -4,6 +4,11 @@ FROM node:24-alpine
 # relative path here as it does locally, and one import works in both.
 WORKDIR /app
 
+# The VidSrc provider fetches themoviedb.org through curl: TMDB's edge
+# fingerprints the runtime and 403s Node's own TLS stack while passing the
+# system curl, so the catalogue needs the binary present.
+RUN apk add --no-cache curl
+
 # `prisma db push` regenerates the client on every boot, so the app's own
 # directory has to stay writable by the user it runs as. Files are owned by
 # that user as they land (COPY --chown, npm ci run as node) instead of a
