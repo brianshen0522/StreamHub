@@ -69,8 +69,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = 24
         targetSdk = 37
-        versionCode = 18
-        versionName = "0.9.0"
+        versionCode = 19
+        versionName = "0.8.9"
 
         buildConfigField("String", "GIT_SHA", "\"${gitSha()}\"")
         buildConfigField("String", "SERVER_URL", "\"${serverUrl()}\"")
