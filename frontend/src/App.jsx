@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import Hls from "hls.js";
 import { fmt, resolveLanguage, translations } from "./i18n.js";
-import { apiJson, apiNdjsonStream, getAccessToken, isOfflineError } from "./api.js";
+import { apiFetch, apiJson, apiNdjsonStream, getAccessToken, isOfflineError } from "./api.js";
 import { isOnline, probeServer, subscribeReconnect } from "./pwa.js";
 import { usePortalChrome, usePortalLanguage } from "./portal-chrome.js";
 import { useCast } from "./cast.js";
@@ -76,6 +76,7 @@ function sourceKey(source) {
 
 function getSourcePlaybackMode(source, activeSource, playbackMode) {
   if (!source) return "";
+  if (source.preferProxy) return "proxy";
   if (sourceKey(activeSource) === sourceKey(source)) return playbackMode || "direct";
   return "direct";
 }
@@ -111,21 +112,35 @@ function withCurrentOrigin(url) {
   }
 }
 
-function isOwnProxyUrl(url) {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url, window.location.origin);
-    return parsed.origin === window.location.origin && parsed.pathname === "/api/stream";
-  } catch {
-    return false;
+/**
+ * The roads this browser may take to a source's media. A `preferProxy` source
+ * (VidSrc) hands over its CDN URL as `directUrl` for the clients that can send
+ * the Referer that CDN demands — native players, a television being cast to —
+ * but a browser cannot, so here it has exactly one road: the proxy. Returning
+ * no direct road is what keeps every caller from trying it, falling back from
+ * it, or scoring its host on the strength of a failure that was never the
+ * host's.
+ */
+/** The HTTP status an hls.js error carries, or 0 when nothing answered. */
+function hlsErrorStatus(data) {
+  return Number(data?.response?.code ?? data?.networkDetails?.status) || 0;
+}
+
+function browserRoads(source) {
+  if (!source) return { directUrl: null, proxyUrl: null, preferProxy: false };
+  const directUrl = source.directUrl || source.url || null;
+  const proxyUrl = source.proxyUrl || null;
+  if (source.preferProxy) {
+    return { directUrl: null, proxyUrl: proxyUrl || directUrl, preferProxy: true };
   }
+  return { directUrl, proxyUrl, preferProxy: false };
 }
 
 function normalizeSourceList(sources) {
   // Anything on this origin's /api/ surface authenticates by query token, so
-  // every road into the proxy carries one. That includes a directUrl which is
-  // the proxy itself — VidSrc sources are exactly that, because their CDN
-  // needs a server-side Referer the browser cannot send.
+  // every road into the proxy carries one. A directUrl on another origin — a
+  // CDN, including a VidSrc source's absolute CDN URL — is left exactly as the
+  // server sent it: it is handed to televisions verbatim.
   const addToken = (absolute) => {
     if (!absolute) return absolute;
     try {
@@ -414,7 +429,12 @@ function pickAutoSource(arrived, preferredLabel) {
   // Hosts this device has struggled with sort to the back — by score, so a
   // host that failed once yesterday loses to a clean one but still beats a
   // host that has failed every time. Stable, so arrival order breaks ties.
-  const doubt = (source) => hostPenalty(source.directUrl || source.url);
+  // A preferProxy source never touches its CDN from here, so this device's
+  // record of that host says nothing about it: scored by the road it takes.
+  const doubt = (source) => {
+    const roads = browserRoads(source);
+    return hostPenalty(roads.directUrl || roads.proxyUrl);
+  };
   const ranked = [...arrived].sort((a, b) => doubt(a) - doubt(b));
   const modal = modalDuration(ranked);
   // Only meaningful as a comparison: "worse than something else here". With a
@@ -707,6 +727,9 @@ function App() {
     return play({
       ...payload,
       sourceLabel: source.sourceLabel,
+      // The absolute CDN URL even for a preferProxy source: the television
+      // fetches it itself, and the server resolves the Referer its CDN wants
+      // for native clients. browserRoads is for this browser's own fetches.
       directUrl: source.directUrl || source.url,
       // The same thirty-second rewind the local player applies, so handing a
       // title to a television lands where it would have landed here.
@@ -730,6 +753,22 @@ function App() {
   const [autoSelectedFromPreference, setAutoSelectedFromPreference] = useState(false);
   const [itemProgressMap, setItemProgressMap] = useState({});
   const [playerError, setPlayerError] = useState("");
+  // Information about playback that is still going — a quality step-down.
+  // Kept apart from playerError on purpose: that one renders as an error and
+  // is what the reconnect handler reads as "playback died, restart it".
+  const [playerNotice, setPlayerNotice] = useState("");
+  const playerNoticeTimerRef = useRef(null);
+  // Re-obtains the sources of whatever is on screen with fresh tokens: set by
+  // the loader that produced them. Used when a road answers 401/403, which
+  // means a token baked into the URLs expired, not that the source is dead.
+  const renewSourcesRef = useRef(null);
+  const lastRenewAtRef = useRef(0);
+  const showPlayerNotice = useCallback((text) => {
+    clearTimeout(playerNoticeTimerRef.current);
+    setPlayerNotice(text);
+    if (text) playerNoticeTimerRef.current = setTimeout(() => setPlayerNotice(""), 8000);
+  }, []);
+  useEffect(() => () => clearTimeout(playerNoticeTimerRef.current), []);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [favoriteEntries, setFavoriteEntries] = useState([]);
   const [resumeProgress, setResumeProgress] = useState(null);
@@ -741,7 +780,7 @@ function App() {
   // Read by the fatal-error handler, which outlives the render that made it:
   // a reused instance keeps its first handler, and without this it would fall
   // back to the previous episode's proxy.
-  const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null });
+  const sourceUrlsRef = useRef({ directUrl: null, proxyUrl: null, preferProxy: false });
   // How many rungs a max-quality source has already been stepped down. Reset
   // with the source, so the next episode (or an explicit re-pick) starts at
   // the top of its own ladder again.
@@ -910,6 +949,7 @@ function App() {
     // starts clean.
     setPlayerError(pendingNoticeRef.current);
     pendingNoticeRef.current = "";
+    setPlayerNotice("");
     setPlaybackMode("");
     setAdCuts([]);
     // Set only by the restart after an outage. Taken here so a later load of
@@ -928,9 +968,11 @@ function App() {
         : "native",
     );
 
-    const directUrl = activeSource.directUrl || activeSource.url;
-    const proxyUrl = activeSource.proxyUrl;
-    sourceUrlsRef.current = { directUrl, proxyUrl };
+    // For a preferProxy source directUrl comes back null: the proxy is its
+    // only road from a browser, so nothing below tries the CDN, falls back
+    // from it, or blames its host.
+    const { directUrl, proxyUrl, preferProxy } = browserRoads(activeSource);
+    sourceUrlsRef.current = { directUrl, proxyUrl, preferProxy };
     // A new source starts its quality ladder from the top, whatever the
     // previous one had to fall back to.
     qualityDowngradesRef.current = 0;
@@ -939,12 +981,17 @@ function App() {
     // known. Used by both hls paths — a fresh instance and the reused one.
     const pinMaxQuality = (instance) => {
       if (!latestRef.current.activeSource?.maxQuality || !instance.levels?.length) return;
-      const best = instance.levels.reduce(
-        (bestIndex, level, index) => (
-          ((level.height || level.bitrate || 0) >= (instance.levels[bestIndex].height || instance.levels[bestIndex].bitrate || 0))
-            ? index : bestIndex),
-        0,
-      );
+      // hls.js sorts the ladder ascending by bitrate, so the last rung is
+      // normally the best; ranking by height and then bitrate (never one
+      // against the other) still finds it when a manifest leaves RESOLUTION
+      // off some rungs. Ties go to the later, higher-bitrate rung.
+      const rank = (level) => [level?.height || 0, level?.bitrate || 0];
+      const best = instance.levels.reduce((bestIndex, level, index) => {
+        const [height, bitrate] = rank(level);
+        const [bestHeight, bestBitrate] = rank(instance.levels[bestIndex]);
+        return height > bestHeight || (height === bestHeight && bitrate >= bestBitrate)
+          ? index : bestIndex;
+      }, 0);
       instance.currentLevel = best;
       instance.loadLevel = best;
       instance.autoLevelCapping = best;
@@ -961,9 +1008,17 @@ function App() {
     // A CDN that died while the whole network was down is not a bad CDN, so
     // the failure is only recorded once the health probe proves the server
     // itself answers — which also starts the offline handling if it does not.
+    //
+    // A preferProxy source still probes — that is what notices the server
+    // has gone and arms the reconnect retry — but records nothing: every
+    // fetch went to our own proxy, so a failure is never the CDN host failing
+    // this network. Read from the ref because a reused instance keeps the
+    // first source's handlers.
     function markHostIfServerAnswers(url) {
       if (isOnline()) {
-        probeServer().then((reachable) => { if (reachable) recordHostResult(url, "bad"); });
+        probeServer().then((reachable) => {
+          if (reachable && !sourceUrlsRef.current.preferProxy) recordHostResult(url, "bad");
+        });
       }
     }
 
@@ -1012,7 +1067,7 @@ function App() {
       // same proof, and the counterpart to the failure recorded on error.
       video.addEventListener(
         "loadeddata",
-        () => recordHostResult(mode === "proxy" ? url : directUrl, "ok"),
+        () => { if (!preferProxy) recordHostResult(mode === "proxy" ? url : directUrl, "ok"); },
         { once: true },
       );
       void video.play().catch(() => {});
@@ -1063,7 +1118,7 @@ function App() {
       // segments, and a host does not become a thousand times more trusted
       // for playing one.
       hls.once(Hls.Events.FRAG_BUFFERED, (_event, data) => {
-        recordHostResult(data?.frag?.url || url, "ok");
+        if (!preferProxy) recordHostResult(data?.frag?.url || url, "ok");
       });
       // Where a break was is known twice over: as a sum of #EXTINF values, and
       // as the index of the segment that follows it. Once hls.js has the level
@@ -1086,24 +1141,70 @@ function App() {
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
         // A max-quality source degrades one rung per fatal error before the
-        // normal failover takes over — the ladder only shrinks when the
-        // current rung truly cannot play, never because bandwidth dipped.
+        // normal failover takes over — but only for an error that proves the
+        // rung itself cannot play, never because bandwidth dipped and never
+        // because the network went away. A death with no answer has to reach
+        // onFatalError, which probes the server and arms the reconnect retry;
+        // stepping down on it just burned the ladder while offline.
         const maxSource = latestRef.current.activeSource?.maxQuality;
-        const currentLevel = hls.currentLevel >= 0 ? hls.currentLevel : hls.loadLevel;
-        if (maxSource && hls.levels?.length > 1 && currentLevel > 0
+        const failedLevel = Number.isInteger(data.frag?.level) ? data.frag.level
+          : Number.isInteger(data.level) ? data.level
+            : (hls.loadLevel >= 0 ? hls.loadLevel : hls.currentLevel);
+        const recovery = maxSource ? rungFailure(data) : null;
+        if (recovery && hls.levels?.length > 1 && failedLevel > 0
             && (qualityDowngradesRef.current < hls.levels.length - 1)) {
           qualityDowngradesRef.current += 1;
-          const next = currentLevel - 1;
-          pendingNoticeRef.current = tRef.current?.playbackQualityFallback || "";
+          const next = failedLevel - 1;
+          // Shown now, and as a notice: playback carries on, so this must
+          // not land in playerError (an error box, and the reconnect
+          // handler's "restart the player" signal). It fades on its own.
+          showPlayerNotice(tRef.current?.playbackQualityFallback || "");
           hls.currentLevel = next;
           hls.loadLevel = next;
           hls.autoLevelCapping = next;
-          hls.startLoad();
+          if (recovery === "media") {
+            // A fatal media error tore down the buffer; startLoad() alone
+            // never rebuilds it. recoverMediaError re-attaches the element
+            // and resumes loading from the playhead, on the new rung.
+            hls.recoverMediaError();
+          } else {
+            // A fatal network error stopped loading; resume it from here.
+            hls.startLoad(video.currentTime > 0 ? video.currentTime : -1);
+          }
           return;
         }
         onFatalError?.(hls, data);
       });
       return hls;
+    }
+
+    /**
+     * Whether a fatal error indicts the rung that was loading, and if so how
+     * to recover: "media" (it would not decode or append), "network" (the
+     * server answered, and the answer was no), or null for anything that
+     * might be the network itself — a timeout, a refused connection, a
+     * response with no status. Manifest errors are not a rung's fault either:
+     * without a master there is no ladder to step down.
+     */
+    function rungFailure(data) {
+      if (data?.type === Hls.ErrorTypes.MEDIA_ERROR) return "media";
+      if (data?.type !== Hls.ErrorTypes.NETWORK_ERROR) return null;
+      const { details } = data;
+      // A playlist arrived and was unusable: an answer, not an outage.
+      if (details === Hls.ErrorDetails.LEVEL_PARSING_ERROR
+          || details === Hls.ErrorDetails.LEVEL_EMPTY_ERROR) return "network";
+      if (details !== Hls.ErrorDetails.LEVEL_LOAD_ERROR
+          && details !== Hls.ErrorDetails.FRAG_LOAD_ERROR) return null;
+      // xhr and fetch loaders both report status 0 when nothing answered.
+      // Only a 4xx is the rung refusing; a 5xx is as likely the proxy or its
+      // upstream being down, which is the failover's business. 401 and 403
+      // are neither: a token baked into the URLs expired (our accessToken,
+      // or VidSrc's playback JWT), and every rung — and every mirror, which
+      // carries the same token — would refuse alike. The fatal handler
+      // renews the sources instead.
+      const status = hlsErrorStatus(data);
+      if (status === 401 || status === 403) return null;
+      return status >= 400 && status < 500 ? "network" : null;
     }
 
     // What actually broke, spelled out beside the fallback notice. An iPhone
@@ -1141,7 +1242,7 @@ function App() {
         // is spent. Without this, every episode after the first would record
         // failures and never successes.
         existing.once(Hls.Events.FRAG_BUFFERED, (_event, data) => {
-          recordHostResult(data?.frag?.url || directUrl || proxyUrl, "ok");
+          if (!preferProxy) recordHostResult(data?.frag?.url || directUrl || proxyUrl, "ok");
         });
         void video.play().catch(() => {});
         return undefined;
@@ -1159,6 +1260,26 @@ function App() {
         rememberErrorPosition();
         instance.destroy();
         hlsRef.current = null;
+        // An expired token, not a dead source: /api/stream's baked
+        // accessToken (401), or a preferProxy source's playback JWT (403,
+        // shared by every mirror of it). Fetch the sources again — they come
+        // back with fresh tokens — and carry on where it died. At most once
+        // every ten minutes, so a source that really answers 403 still
+        // reaches the normal failover on its next death.
+        const status = hlsErrorStatus(data);
+        const expired = status === 401 || (status === 403 && urls.preferProxy);
+        if (expired && renewSourcesRef.current && Date.now() - lastRenewAtRef.current > 10 * 60_000) {
+          lastRenewAtRef.current = Date.now();
+          // Consumed by the next load that has a source; the loader clears
+          // activeSource first, and that pass of the effect returns before
+          // reading it.
+          seekAfterLoadRef.current = errorPositionRef.current;
+          errorPositionRef.current = 0;
+          Promise.resolve(renewSourcesRef.current()).catch((renewError) => {
+            setPlayerError(renewError?.message || tRef.current.statusError);
+          });
+          return;
+        }
         const detail = describeHlsError(data);
         // A connection-level death against the CDN — no HTTP status, nothing
         // answered — is this network telling us it cannot reach that host.
@@ -1188,20 +1309,36 @@ function App() {
       return undefined;
     }
 
+    if (video.canPlayType("application/vnd.apple.mpegurl") && preferProxy && proxyUrl) {
+      // A preferProxy source's CDN needs a Referer only the server can send,
+      // so the proxy is the one road and is already playable as-is — there is
+      // nothing to fall back to, and wrapping it in /api/manifest would just
+      // proxy the proxy.
+      loadNative(proxyUrl, "proxy");
+      video.onerror = () => {
+        const err = video.error;
+        const detail = err ? `MediaError ${err.code}${err.message ? ` ${err.message}` : ""}` : "";
+        rememberErrorPosition();
+        // Probes (and so notices an outage) but never scores a host.
+        if (err?.code === 2) markHostIfServerAnswers(proxyUrl);
+        if (!failOverToNextSource()) {
+          setPlayerError(detail ? `${tRef.current.statusError} — ${detail}` : tRef.current.statusError);
+        }
+      };
+      return () => { video.onerror = null; };
+    }
+
     if (video.canPlayType("application/vnd.apple.mpegurl") && directUrl) {
-      // VidSrc sources hand over their proxy URL as directUrl (the CDN needs
-      // a server-side Referer), so it is already playable as-is — wrapping it
-      // in /api/manifest would just proxy the proxy. Everything else still
-      // gets the cleaned-manifest treatment: fed the raw playlist, an iPhone
-      // was the only client that actually played the spliced ad runs — and
-      // their segments live on hosts a phone's network often cannot reach,
-      // so direct playback died mid-ad while the proxy, whose fetches leave
-      // from the server, sailed.
-      const cleaned = isOwnProxyUrl(directUrl)
-        ? directUrl
-        : withCurrentOrigin(
-          `/api/manifest?target=${encodeURIComponent(directUrl)}&accessToken=${encodeURIComponent(getAccessToken())}`,
-        );
+      // The one path with no hls.js and therefore no ad filter. Fed the raw
+      // playlist, an iPhone was the only client that actually played the
+      // spliced ad runs — and their segments live on hosts a phone's network
+      // often cannot reach, so direct playback died mid-ad while the proxy,
+      // whose fetches leave from the server, sailed. The cleaned manifest
+      // removes those runs server-side; the segment URLs stay the CDN's own,
+      // so the server serves a playlist, not the film.
+      const cleaned = withCurrentOrigin(
+        `/api/manifest?target=${encodeURIComponent(directUrl)}&accessToken=${encodeURIComponent(getAccessToken())}`,
+      );
       loadNative(cleaned, "direct");
       video.onerror = () => {
         const err = video.error;
@@ -1483,10 +1620,12 @@ function App() {
     // live verdict; the host's record covers the next episode before it has
     // played. A download has no failover of its own, so it takes the proxy on
     // weaker evidence than the auto-pick reorders on.
-    const directDl = activeSource.directUrl || activeSource.url;
-    const proxyDl = activeSource.proxyUrl;
-    const preferProxy = playbackMode === "proxy" || (directDl && hostPenalty(directDl) >= HOST_DOUBT);
-    const url = preferProxy ? (proxyDl || directDl) : (directDl || proxyDl);
+    // A preferProxy source has no direct road from a browser at all (its CDN
+    // 403s without a server-side Referer), so browserRoads leaves only the
+    // proxy.
+    const { directUrl: directDl, proxyUrl: proxyDl } = browserRoads(activeSource);
+    const takeProxy = playbackMode === "proxy" || (directDl && hostPenalty(directDl) >= HOST_DOUBT);
+    const url = takeProxy ? (proxyDl || directDl) : (directDl || proxyDl);
     if (!url) return;
 
     const id = await downloadIdentityFor();
@@ -1587,8 +1726,7 @@ function App() {
   // offset from the main one by the stripped ad seconds.
   const createPreview = useCallback((video) => {
     if (!activeSource) return null;
-    const directUrl = activeSource.directUrl || activeSource.url;
-    const proxyUrl = activeSource.proxyUrl;
+    const { directUrl, proxyUrl } = browserRoads(activeSource);
     const url = playbackMode === "proxy" ? (proxyUrl || directUrl) : (directUrl || proxyUrl);
     if (!url) return null;
 
@@ -2057,6 +2195,67 @@ function App() {
       return { url: season.url, label: season.label, optionLabel: `${mark}${season.label}` };
     });
   }, [itemDetail, itemProgressMap]);
+
+  // ── external subtitles (OpenSubtitles, for providers that can name the
+  // film — VidSrc) ───────────────────────────────────────────────────────────
+  // Asked for per episode, not per source: mirrors of one episode share its
+  // subtitles. The file itself is fetched only when a track is picked, with
+  // the bearer header, and handed to the player as a blob URL — a <track>
+  // cannot send the header and /api/subtitles/file does not take a query
+  // token.
+  const subtitleRequest = useMemo(() => {
+    if (!activeSource || !itemDetail?.provider) return null;
+    if (itemDetail.mediaType === "movie") {
+      const url = selectedItem?.url;
+      return url ? { provider: itemDetail.provider, url } : null;
+    }
+    const seasonUrl = selectedSeason?.url || itemDetail.seasonUrl || selectedItem?.url;
+    return seasonUrl && selectedEpisode
+      ? { provider: itemDetail.provider, url: seasonUrl, episode: selectedEpisode }
+      : null;
+  }, [Boolean(activeSource), itemDetail, selectedItem?.url, selectedSeason?.url, selectedEpisode]);
+  const subtitleQuery = subtitleRequest ? toQuery(subtitleRequest) : "";
+  const [externalSubtitles, setExternalSubtitles] = useState([]);
+  const subtitleBlobsRef = useRef([]);
+
+  useEffect(() => {
+    const revoke = () => {
+      for (const href of subtitleBlobsRef.current) URL.revokeObjectURL(href);
+      subtitleBlobsRef.current = [];
+    };
+    if (!subtitleQuery) {
+      setExternalSubtitles([]);
+      return revoke;
+    }
+    let cancelled = false;
+    apiJson(`/api/subtitles?${subtitleQuery}`)
+      .then((body) => {
+        if (cancelled) return;
+        setExternalSubtitles((body?.tracks || []).map((track) => ({ ...track, src: null })));
+      })
+      // No subtitles is a fine answer; it must never get in the way of playback.
+      .catch(() => { if (!cancelled) setExternalSubtitles([]); });
+    return () => {
+      cancelled = true;
+      setExternalSubtitles([]);
+      revoke();
+    };
+  }, [subtitleQuery]);
+
+  const requestSubtitle = useCallback(async (id) => {
+    const track = externalSubtitles.find((item) => item.id === id);
+    if (!track || track.src || track.loading) return;
+    setExternalSubtitles((list) => list.map((item) => (item.id === id ? { ...item, loading: true } : item)));
+    try {
+      const response = await apiFetch(track.url);
+      if (!response.ok) throw new Error(`Subtitle request failed (${response.status})`);
+      const href = URL.createObjectURL(new Blob([await response.text()], { type: "text/vtt" }));
+      subtitleBlobsRef.current.push(href);
+      setExternalSubtitles((list) => list.map((item) => (item.id === id ? { ...item, src: href, loading: false } : item)));
+    } catch {
+      setExternalSubtitles((list) => list.map((item) => (item.id === id ? { ...item, loading: false } : item)));
+    }
+  }, [externalSubtitles]);
 
   const activeSeasonUrl = SEASONED_PROVIDERS.has(itemDetail?.provider)
     ? (selectedSeason?.url || itemDetail?.seasonUrl || null)
@@ -2589,6 +2788,7 @@ function App() {
   }
 
   async function loadEpisodeSources(provider, sourceUrl, episode, title, mediaType) {
+    renewSourcesRef.current = () => loadEpisodeSources(provider, sourceUrl, episode, title, mediaType);
     sourcesAbortRef.current?.abort();
     const controller = new AbortController();
     sourcesAbortRef.current = controller;
@@ -2658,6 +2858,13 @@ function App() {
       setDetailLoading(false);
 
       if (detail.mediaType === "movie") {
+        // A movie's streams arrive inside the item, so renewing them means
+        // asking for the item again; re-checking these would hand back the
+        // same expired tokens.
+        renewSourcesRef.current = async () => {
+          const fresh = await apiJson(`/api/item?${toQuery(item)}`);
+          await loadSourcesFromRawStreams(fresh.streams || [], fresh.provider, fresh.title, fresh.mediaType);
+        };
         await loadSourcesFromRawStreams(detail.streams || [], detail.provider, detail.title, detail.mediaType);
         return;
       }
@@ -3184,6 +3391,8 @@ function App() {
                     onCreatePreview={createPreview}
                     onDownload={handleDownload}
                     download={download}
+                    externalSubtitles={externalSubtitles}
+                    onRequestSubtitle={requestSubtitle}
                     t={t}
                     title={itemDetail?.title || selectedItem.title}
                     subtitle={[activeSource?.sourceLabel, selectedEpisode].filter(Boolean).join(" · ")}
@@ -3231,6 +3440,9 @@ function App() {
                     </button>
                   ) : null}
                   {playerError && !cast.target && !cast.lostDevice ? <div className="error-box">{playerError}</div> : null}
+                  {playerNotice && !playerError && !cast.target && !cast.lostDevice
+                    ? <div className="notice-box" role="status">{playerNotice}</div>
+                    : null}
                 </div>
 
                 <div className="watch-info">

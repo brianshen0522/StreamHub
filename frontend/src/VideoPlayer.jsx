@@ -95,6 +95,27 @@ function levelLabel(level) {
  * through `videoRef` so the page keeps owning source loading, hls.js, and
  * progress syncing — this component only drives playback UI.
  */
+const EMPTY_LIST = [];
+// <track> ids for external subtitles, so their modes are managed apart from
+// the text tracks hls.js creates for subtitles inside the stream.
+const EXTERNAL_TRACK_PREFIX = "ext-sub-";
+const SUBTITLE_PREFERENCE_KEY = "streamhub.subtitleLanguage";
+
+/** The language last picked from external subtitles: a srclang, "off", or "". */
+function readSubtitlePreference() {
+  try {
+    return localStorage.getItem(SUBTITLE_PREFERENCE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSubtitlePreference(value) {
+  try {
+    localStorage.setItem(SUBTITLE_PREFERENCE_KEY, value);
+  } catch { /* private mode: the choice just isn't remembered */ }
+}
+
 export default function VideoPlayer({
   videoRef,
   hls,
@@ -110,6 +131,12 @@ export default function VideoPlayer({
   onCreatePreview,
   onDownload,
   download,
+  // Subtitles that do not come with the stream — fetched by the page (from
+  // OpenSubtitles, for VidSrc) and rendered as <track> elements here:
+  // [{ id, label, srclang, src }]. `src` is a blob URL, or null until
+  // onRequestSubtitle(id) has fetched the file.
+  externalSubtitles = EMPTY_LIST,
+  onRequestSubtitle,
   t,
 }) {
   const frameRef = useRef(null);
@@ -162,6 +189,9 @@ export default function VideoPlayer({
   const [autoLevel, setAutoLevel] = useState(-1);
   const [subtitles, setSubtitles] = useState([]);
   const [subtitleTrack, setSubtitleTrack] = useState(-1);
+  // The external track showing, by id; null when none is. Exclusive with
+  // subtitleTrack: at most one subtitle of either kind shows.
+  const [externalId, setExternalId] = useState(null);
   const [previewEnabled, setPreviewEnabled] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
 
@@ -409,17 +439,74 @@ export default function VideoPlayer({
   }, [hls, showFlash, t]);
 
   const selectSubtitle = useCallback((index) => {
+    setExternalId(null);
+    // Turning subtitles off while external ones are on offer is a choice
+    // worth keeping for the next episode; picking a stream track is not
+    // about the external ones at all.
+    if (index === -1 && externalSubtitles.length) writeSubtitlePreference("off");
     if (hls) {
       hls.subtitleTrack = index;
       setSubtitleTrack(index);
     } else if (videoEl) {
       for (let i = 0; i < videoEl.textTracks.length; i += 1) {
+        if (videoEl.textTracks[i].id?.startsWith(EXTERNAL_TRACK_PREFIX)) continue;
         videoEl.textTracks[i].mode = i === index ? "showing" : "disabled";
       }
       setSubtitleTrack(index);
     }
     setMenu(null);
-  }, [hls, videoEl]);
+  }, [hls, videoEl, externalSubtitles.length]);
+
+  const selectExternalSubtitle = useCallback((id, { remember = true } = {}) => {
+    if (hls && hls.subtitleTrack !== -1) hls.subtitleTrack = -1;
+    setSubtitleTrack(-1);
+    setExternalId(id);
+    const track = externalSubtitles.find((item) => item.id === id);
+    if (remember && track) writeSubtitlePreference(track.srclang || track.lang || "");
+    if (track && !track.src) onRequestSubtitle?.(id);
+    setMenu(null);
+  }, [hls, externalSubtitles, onRequestSubtitle]);
+
+  // A new list (another episode, another title): keep the language this
+  // person last chose, or the first track (the page orders them — Chinese
+  // first) when they never chose; "off" stays off.
+  const externalIds = externalSubtitles.map((item) => item.id).join("|");
+  useEffect(() => {
+    if (!externalSubtitles.length) {
+      setExternalId(null);
+      return;
+    }
+    if (externalSubtitles.some((item) => item.id === externalId)) return;
+    const preference = readSubtitlePreference();
+    if (preference === "off") {
+      setExternalId(null);
+      return;
+    }
+    const pick = externalSubtitles.find((item) => (item.srclang || item.lang) === preference)
+      || externalSubtitles[0];
+    selectExternalSubtitle(pick.id, { remember: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalIds]);
+
+  // <track> modes follow externalId. Re-applied when a track element is
+  // added, because a file fetched after the pick arrives as a new track.
+  useEffect(() => {
+    if (!videoEl) return undefined;
+    const apply = () => {
+      for (let i = 0; i < videoEl.textTracks.length; i += 1) {
+        const track = videoEl.textTracks[i];
+        if (!track.id?.startsWith(EXTERNAL_TRACK_PREFIX)) continue;
+        const want = externalId && track.id === `${EXTERNAL_TRACK_PREFIX}${externalId}` ? "showing" : "disabled";
+        if (track.mode !== want) track.mode = want;
+      }
+    };
+    apply();
+    videoEl.textTracks.addEventListener("addtrack", apply);
+    return () => videoEl.textTracks.removeEventListener("addtrack", apply);
+  }, [videoEl, externalId, externalSubtitles]);
+
+  const subtitlesOn = subtitleTrack !== -1 || externalId !== null;
+  const subtitleCount = subtitles.length + externalSubtitles.length;
 
   /* ── keyboard shortcuts ───────────────────────────────────── */
 
@@ -457,7 +544,14 @@ export default function VideoPlayer({
         case "m": toggleMute(); break;
         case "f": toggleFullscreen(); break;
         case "p": void togglePip(); break;
-        case "c": if (subtitles.length) selectSubtitle(subtitleTrack === -1 ? 0 : -1); break;
+        case "c":
+          if (subtitlesOn) selectSubtitle(-1);
+          else if (externalSubtitles.length) {
+            const preference = readSubtitlePreference();
+            const pick = externalSubtitles.find((item) => (item.srclang || item.lang) === preference) || externalSubtitles[0];
+            selectExternalSubtitle(pick.id);
+          } else if (subtitles.length) selectSubtitle(0);
+          break;
         case "<": applyRate(RATES[Math.max(0, RATES.indexOf(rate) - 1)]); break;
         case ">": applyRate(RATES[Math.min(RATES.length - 1, RATES.indexOf(rate) + 1)]); break;
         case "?": setShowHelp((v) => !v); break;
@@ -479,7 +573,8 @@ export default function VideoPlayer({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [videoEl, togglePlay, seekBy, seekTo, applyVolume, toggleMute, toggleFullscreen, togglePip,
-      selectSubtitle, subtitles.length, subtitleTrack, applyRate, rate, menu, showHelp, wake, showFlash]);
+      selectSubtitle, selectExternalSubtitle, subtitles.length, externalSubtitles, subtitlesOn,
+      applyRate, rate, menu, showHelp, wake, showFlash]);
 
   /* ── hover scrub preview ──────────────────────────────────── */
 
@@ -612,9 +707,12 @@ export default function VideoPlayer({
   const activeLevelLabel = currentLevel === -1
     ? `${t.vpAuto}${autoLevel >= 0 && levels[autoLevel] ? ` · ${levelLabel(levels[autoLevel])}` : ""}`
     : levelLabel(levels[currentLevel]);
-  const activeSubtitleLabel = subtitleTrack === -1
-    ? t.vpOff
-    : subtitles[subtitleTrack]?.name || subtitles[subtitleTrack]?.lang || t.vpOn;
+  const activeExternal = externalSubtitles.find((item) => item.id === externalId);
+  const activeSubtitleLabel = activeExternal
+    ? activeExternal.label
+    : subtitleTrack === -1
+      ? t.vpOff
+      : subtitles[subtitleTrack]?.name || subtitles[subtitleTrack]?.lang || t.vpOn;
 
   const shortcuts = useMemo(() => [
     ["Space / K", t.vpKeyPlay],
@@ -638,7 +736,18 @@ export default function VideoPlayer({
       onPointerMove={wake}
       onPointerLeave={() => { setHoverX(null); if (playing) setIdle(true); }}
     >
-      <video ref={attachRef} className="vp-video" playsInline />
+      <video ref={attachRef} className="vp-video" playsInline>
+        {externalSubtitles.filter((item) => item.src).map((item) => (
+          <track
+            key={item.id}
+            id={`${EXTERNAL_TRACK_PREFIX}${item.id}`}
+            kind="subtitles"
+            label={item.label}
+            srcLang={item.srclang || item.lang || ""}
+            src={item.src}
+          />
+        ))}
+      </video>
 
       {/* click / double-click / double-tap surface */}
       <div
@@ -809,10 +918,10 @@ export default function VideoPlayer({
             </button>
           ) : null}
 
-          {subtitles.length > 0 ? (
+          {subtitleCount > 0 ? (
             <button
               type="button"
-              className={`vp-btn${subtitleTrack !== -1 ? " is-on" : ""}`}
+              className={`vp-btn${subtitlesOn ? " is-on" : ""}`}
               onClick={() => setMenu("captions")}
               title={`${t.vpCaptions} (C)`}
               aria-label={t.vpCaptions}
@@ -850,7 +959,7 @@ export default function VideoPlayer({
                         <span className="vp-menu-item-value">{activeLevelLabel}<IconChevronRight /></span>
                       </button>
                     ) : null}
-                    {subtitles.length > 0 ? (
+                    {subtitleCount > 0 ? (
                       <button type="button" className="vp-menu-item" onClick={() => setMenu("captions")} role="menuitem">
                         <IconCaptions />
                         {t.vpCaptions}
@@ -950,8 +1059,8 @@ export default function VideoPlayer({
                     <button
                       type="button"
                       role="menuitemradio"
-                      aria-checked={subtitleTrack === -1}
-                      className={`vp-menu-item${subtitleTrack === -1 ? " is-selected" : ""}`}
+                      aria-checked={!subtitlesOn}
+                      className={`vp-menu-item${!subtitlesOn ? " is-selected" : ""}`}
                       onClick={() => selectSubtitle(-1)}
                     >
                       {t.vpOff}
@@ -967,6 +1076,21 @@ export default function VideoPlayer({
                         onClick={() => selectSubtitle(index)}
                       >
                         {track.name || track.lang || `${t.vpTrack} ${index + 1}`}
+                        <span className="vp-menu-check"><IconCheck /></span>
+                      </button>
+                    ))}
+                    {externalSubtitles.map((item) => (
+                      <button
+                        key={`ext-${item.id}`}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={externalId === item.id}
+                        className={`vp-menu-item${externalId === item.id ? " is-selected" : ""}`}
+                        onClick={() => selectExternalSubtitle(item.id)}
+                        title={item.releaseName || ""}
+                      >
+                        {item.label}
+                        {externalId === item.id && !item.src ? <span className="vp-menu-sub">{t.vpLoading}</span> : null}
                         <span className="vp-menu-check"><IconCheck /></span>
                       </button>
                     ))}

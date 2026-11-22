@@ -20,6 +20,7 @@
  */
 
 import { stripAds } from "./adfilter.js";
+import { getAccessToken, refreshSession } from "./api.js";
 
 const DB_NAME = "streamhub-downloads";
 const DB_VERSION = 1;
@@ -266,7 +267,31 @@ function parseSegments(text, playlistUrl) {
   return segments;
 }
 
-/** Resolves a master playlist down to the media playlist hls.js would pick. */
+/**
+ * The best variant a master lists: the tallest RESOLUTION, then the highest
+ * BANDWIDTH. A download is kept, so it takes the top of the ladder — the
+ * first variant listed is usually the bottom (a VidSrc master opens with
+ * 640x266). Falls back to the first URI line for a master with no
+ * #EXT-X-STREAM-INF attributes worth reading.
+ */
+function bestVariant(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  let best = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue;
+    const uri = lines.slice(i + 1).find((l) => l && !l.startsWith("#"));
+    if (!uri) continue;
+    const attrs = parseAttributes(lines[i]);
+    const height = Number(attrs.RESOLUTION?.split("x")[1]) || 0;
+    const bandwidth = Number(attrs["AVERAGE-BANDWIDTH"] || attrs.BANDWIDTH) || 0;
+    if (!best || height > best.height || (height === best.height && bandwidth > best.bandwidth)) {
+      best = { uri, height, bandwidth };
+    }
+  }
+  return best?.uri ?? lines.find((l) => l && !l.startsWith("#")) ?? null;
+}
+
+/** Resolves a master playlist down to its best media playlist. */
 async function toMediaPlaylist(url, signal) {
   let currentUrl = url;
   for (let hop = 0; hop < 3; hop += 1) {
@@ -275,7 +300,7 @@ async function toMediaPlaylist(url, signal) {
     const text = await response.text();
     if (text.includes("#EXTINF")) return { text, url: currentUrl };
 
-    const variant = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+    const variant = bestVariant(text);
     if (!variant) throw new Error("No playable variant in playlist.");
     currentUrl = resolve(variant, currentUrl);
   }
@@ -288,6 +313,83 @@ async function importKey(bytes) {
 
 export function sanitizeFileName(name) {
   return String(name).replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim().slice(0, 120) || "video";
+}
+
+// ── tokens inside stored URLs ───────────────────────────────────────────────
+//
+// A record keeps its segment URLs for as long as the download takes to
+// finish, which can be days. Two tokens ride inside them and both expire:
+// our own accessToken on every /api/stream URL (4 h), and for a proxied
+// VidSrc source the CDN's playback JWT as ?token= inside `target` (~4 h).
+
+/** This origin's /api/ URL with the current access token, else the URL as is. */
+function withCurrentToken(raw) {
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) return raw;
+    if (!url.searchParams.has("accessToken")) return raw;
+    url.searchParams.set("accessToken", getAccessToken() || "");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
+/** Fetch with the current token; on a 401, renew the session once and retry. */
+async function fetchWithToken(raw, signal) {
+  let response = await fetch(withCurrentToken(raw), { signal });
+  if (response.status === 401 && withCurrentToken(raw) !== raw) {
+    await refreshSession().catch(() => {});
+    response = await fetch(withCurrentToken(raw), { signal });
+  }
+  return response;
+}
+
+/**
+ * What a segment *is*, with every token taken out: the proxy unwrapped to its
+ * target, and `token`/`accessToken` dropped. Two playlists whose segments
+ * have the same identities, in the same order, are the same encode.
+ */
+function segmentIdentity(raw) {
+  try {
+    let url = new URL(raw, window.location.origin);
+    if (url.origin === window.location.origin && url.pathname.endsWith("/stream") && url.searchParams.get("target")) {
+      url = new URL(url.searchParams.get("target"));
+    }
+    url.searchParams.delete("token");
+    url.searchParams.delete("accessToken");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * On resume, re-reads the playlist only to pick up fresh tokens. The stored
+ * list stays the authority — "these providers rebuild their playlists" — so
+ * the fresh URLs are adopted only when the segment identities match one for
+ * one; anything else keeps the record as it was.
+ */
+async function refreshSegmentTokens(record, url, signal) {
+  try {
+    const { text, url: mediaUrl } = await toMediaPlaylist(url, signal);
+    const fresh = parseSegments(stripAds(text, mediaUrl).text, mediaUrl);
+    if (fresh.length !== record.segments.length) return record;
+    for (let i = 0; i < fresh.length; i += 1) {
+      if (segmentIdentity(fresh[i].url) !== segmentIdentity(record.segments[i].url)) return record;
+    }
+    return {
+      ...record,
+      segments: record.segments.map((segment, i) => ({
+        ...segment,
+        url: fresh[i].url,
+        key: segment.key && fresh[i].key ? { ...segment.key, uri: fresh[i].key.uri } : segment.key,
+      })),
+    };
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return record;
+  }
 }
 
 // ── the download itself ─────────────────────────────────────────────────────
@@ -362,6 +464,15 @@ export async function downloadStream({ id, url, fileName, onProgress, signal }) 
       createdAt: Date.now(),
     };
     await writeRecord(record);
+  } else if (!record.finished) {
+    // A resume, possibly hours later: swap in fresh tokens if the playlist
+    // is still the same encode, or every remaining segment would 401/403.
+    report({ phase: "playlist", done: record.completedSegments, total: record.segments.length, bytes: record.bytes });
+    const refreshed = await refreshSegmentTokens(record, url, signal);
+    if (refreshed !== record) {
+      record = refreshed;
+      await writeRecord(record);
+    }
   }
 
   // Segments come down a window at a time rather than strictly one after
@@ -382,7 +493,7 @@ export async function downloadStream({ id, url, fileName, onProgress, signal }) 
     let promise = keyPromises.get(uri);
     if (!promise) {
       promise = (async () => {
-        const keyResponse = await fetch(uri, { signal });
+        const keyResponse = await fetchWithToken(uri, signal);
         if (!keyResponse.ok) throw new Error(`Key request failed (${keyResponse.status})`);
         return importKey(new Uint8Array(await keyResponse.arrayBuffer()));
       })();
@@ -414,7 +525,7 @@ export async function downloadStream({ id, url, fileName, onProgress, signal }) 
 
   const fetchSegment = async (index) => {
     const segment = record.segments[index];
-    const response = await fetch(segment.url, { signal });
+    const response = await fetchWithToken(segment.url, signal);
     if (!response.ok) throw new Error(`Segment ${index + 1} failed (${response.status})`);
     let data = new Uint8Array(await response.arrayBuffer());
 
