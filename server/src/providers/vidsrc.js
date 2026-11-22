@@ -25,6 +25,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { caches } from "../cache.js";
+import { registerUpstreamReferer } from "../upstream-referers.js";
 import { SEARCH_TIMEOUT_MS } from "../config.js";
 
 const run = promisify(execFile);
@@ -101,7 +102,9 @@ async function tmdbFetchText(path) {
   const { stdout } = await run(
     "curl",
     [
-      "-sSL", "--compressed",
+      // --fail: a 403 challenge or 404 page must surface as an error, not
+      // be parsed as an empty result and cached (pages are kept for a day).
+      "-sSL", "--fail", "--compressed",
       "-A", UA,
       "-H", "accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "-H", "accept-language: en-US,en;q=0.9",
@@ -144,8 +147,10 @@ async function tmdbSearchRaw(keyword) {
     const window = html.slice(Math.max(0, match.index - 200), match.index + 1600);
     const type = typeMatch[1] === "movie" ? "movie" : "tv";
     const id = typeMatch[2];
-    const slugTitle = decodeURIComponent((urlPath.match(/^\d+-(.+)$/)?.[1] ?? "")
-      .replace(/-/g, " "));
+    let slugTitle = (urlPath.match(/\/\d+-([^/]+)$/)?.[1] ?? "").replace(/-/g, " ");
+    try {
+      slugTitle = decodeURIComponent(slugTitle);
+    } catch { /* a malformed escape keeps the raw slug rather than failing the search */ }
     const altTitle = window.match(/<img[^>]*alt="([^"]+)"/)?.[1];
     const title = (altTitle || slugTitle || "").trim();
     if (!title || /^(?:movie|tv)$/.test(title)) continue;
@@ -291,7 +296,7 @@ async function resolveVidsrc(type, tmdbId, { season, episode, withPlaybackToken 
   const encrypted = data?.stream_urls;
   if (!data || !encrypted) {
     // api.php answers 200 with no streams for a title it does not carry.
-    return { available: false, playerUrl, host: data?.stream_urls_api_host ?? null, fileName: data?.file_name ?? "", title: data?.title ?? "" };
+    return { available: false, playerUrl, host: data?.stream_urls_api_host ?? null, fileName: data?.file_name ?? "", title: data?.title ?? "", imdbId: data?.imdb_id ?? "" };
   }
 
   const wasmBytes = new Uint8Array(await (await vidFetch(streamBody.vs.wasm_url, { referer: playerUrl })).arrayBuffer());
@@ -388,6 +393,9 @@ async function probeAvailability(type, tmdbId, { season = null, episode = null }
 
 function toStreams(session, label) {
   if (!session?.available || !session.playbackToken) return [];
+  // A client handed the bare CDN URL (a native player's /api/manifest, a
+  // cast receiver) cannot send the Referer; the media endpoints look it up.
+  for (const playlist of session.playlists) registerUpstreamReferer(playlist, session.referer);
   return session.playlists.map((playlist, index) => ({
     url: `${playlist}?token=${encodeURIComponent(session.playbackToken)}`,
     // Two playlist URLs are two encodes of the same file on the same pool —
@@ -431,7 +439,9 @@ export async function searchVidsrc(keyword) {
   const probeCandidate = async (candidate) => {
     const season = candidate.type === "tv" ? 1 : null;
     const verdict = await probeAvailability(candidate.type, candidate.id, { season, episode: season ? 1 : null });
-    verdicts.set(candidate.id, verdict);
+    // Keyed by type too: TMDB numbers movies and shows separately, so
+    // movie 1396 and tv 1396 are two different titles.
+    verdicts.set(`${candidate.type}:${candidate.id}`, verdict);
     if (verdict === "gated") gated = true;
   };
   for (let start = 0; start < candidates.length; start += PROBE_CONCURRENCY) {
@@ -444,7 +454,7 @@ export async function searchVidsrc(keyword) {
   }
 
   const items = candidates
-    .filter((candidate) => verdicts.get(candidate.id) === true)
+    .filter((candidate) => verdicts.get(`${candidate.type}:${candidate.id}`) === true)
     .map((candidate) => ({
       provider: "vidsrc",
       title: candidate.title,
@@ -538,6 +548,37 @@ export async function getVidsrcEpisodeStreams(seasonUrl, episodeLabel) {
     throw error;
   }
   return toStreams(session, "VidSrc");
+}
+
+/**
+ * What /api/subtitles needs to search OpenSubtitles: the IMDb id, the episode,
+ * and the release name being played (scored against subtitle file names, so
+ * the cut and frame rate line up).
+ *
+ * Reads the same session the Watch page's own resolve filled — same key, with
+ * the playback token — so opening subtitles normally runs no chain of its own.
+ */
+export async function getVidsrcSubtitleContext(url, episodeLabel) {
+  const parsed = parseItemUrl(url);
+  if (!parsed) throw new Error("VidSrc item URL not recognised.");
+  let season = null;
+  let episode = null;
+  if (parsed.type === "tv") {
+    season = parsed.season;
+    episode = Number(String(episodeLabel ?? "").match(/(\d+)\s*$/)?.[1]);
+    if (!Number.isFinite(season) || !Number.isFinite(episode)) {
+      const error = new Error("VidSrc episode subtitles need a season and episode number.");
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+  const session = await resolveCached(parsed.type, parsed.tmdbId, { season, episode, withPlaybackToken: true });
+  return {
+    imdbId: String(session.imdbId || "").replace(/\D/g, ""),
+    season,
+    episode,
+    videoName: session.fileName || "",
+  };
 }
 
 /** The health poller's cheap pulse: one request, no chains. */

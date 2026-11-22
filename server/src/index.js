@@ -38,6 +38,7 @@ import {
 import { exportEverything, importEverything } from "./backup.js";
 import { assertProviderAccess, getEnabledProvidersForUser, listProviderAccess } from "./provider-access.js";
 import { rankSearchResults } from "./search-rank.js";
+import { getSubtitleVtt, listSubtitles } from "./subtitles.js";
 import {
   UNAVAILABLE_ERROR,
   UNAVAILABLE_NOT_FOUND,
@@ -1702,6 +1703,30 @@ app.post("/api/check-sources", requireAuth(), forbidAdminPlayback(), asyncHandle
   });
 
   response.end();
+}));
+
+// Registered before /api/subtitles only for reading order; Express matches
+// paths exactly, so neither shadows the other.
+app.get("/api/subtitles/file", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  const vtt = await getSubtitleVtt(request.query.id);
+  response.setHeader("Content-Type", "text/vtt; charset=utf-8");
+  response.setHeader("Cache-Control", "private, max-age=86400");
+  response.send(vtt);
+}));
+
+app.get("/api/subtitles", requireAuth(), forbidAdminPlayback(), asyncHandler(async (request, response) => {
+  const providerName = String(request.query.provider || "");
+  const url = String(request.query.url || "");
+  const episode = String(request.query.episode || "");
+  if (!providerName || !url) {
+    response.status(400).json({ error: "Missing provider or url." });
+    return;
+  }
+
+  await assertProviderAccess(request.auth.user, providerName);
+  const provider = getProvider(providerName);
+  assertProviderUrl(provider, url);
+  response.json(await listSubtitles({ providerName, provider, url, episodeLabel: episode }));
 }));
 
 app.get("/api/stream", requireAuth({ allowQueryToken: true }), forbidAdminPlayback(), asyncHandler(async (request, response) => {

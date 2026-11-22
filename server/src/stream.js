@@ -6,6 +6,7 @@ import { REQUEST_TIMEOUT_MS, STREAM_PROXY_TIMEOUT_MS } from "./config.js";
 import { analyzePlaylist, stripAds } from "./utils/adfilter.js";
 import { BlockedTargetError, assertPublicUrl, readLimited, safeFetch } from "./utils/safe-fetch.js";
 import { isVidsrcRefererOrigin } from "./providers/vidsrc.js";
+import { lookupUpstreamReferer, registerUpstreamReferer } from "./upstream-referers.js";
 
 /**
  * What a proxied response may carry over from upstream. An allowlist because
@@ -101,44 +102,101 @@ function relayBody(upstream, response) {
  * same way it does on the playlist request that got us here — without it every
  * segment answers 401 and proxy playback stalls on a black screen.
  */
-function buildProxyUrl(request, targetUrl) {
+function buildProxyUrl(request, targetUrl, referer = null) {
   const url = `/api/stream?target=${encodeURIComponent(targetUrl)}`;
   const token = getBearerToken(request, { allowQuery: true });
   const params = token ? `&accessToken=${encodeURIComponent(token)}` : "";
-  // A proxied VidSrc request carries the upstream Referer the CDN demands;
-  // nested playlists and segments must keep it or every one of them 403s.
-  const referer = typeof request.query.r === "string" && request.query.r
-    ? `&r=${encodeURIComponent(request.query.r)}`
-    : "";
-  return `${url}${params}${referer}`;
+  // On the referer road every nested playlist and segment needs the same
+  // upstream Referer or it 403s. It is written from the referer this request
+  // resolved — not copied from the incoming query — because a native client
+  // reaches the road through the host registry and sent no `r` at all.
+  return `${url}${params}${referer ? `&r=${encodeRefererParam(referer)}` : ""}`;
 }
 
-function rewritePlaylist(request, sourceUrl, content) {
-  // The playback token rides on the master's query string, and VidSrc's CDN
-  // answers 403 to any nested request without it. Every URI this writes must
-  // therefore carry a copy: the token the incoming target had, or none.
-  let inheritedToken = null;
-  try {
-    inheritedToken = new URL(sourceUrl).searchParams.get("token");
-  } catch { /* not a URL: leave URIs as they are */ }
+function encodeRefererParam(referer) {
+  return encodeURIComponent(Buffer.from(referer).toString("base64url"));
+}
 
-  const absolute = (uri) => {
-    try {
-      const resolved = new URL(uri, sourceUrl);
-      if (inheritedToken && !resolved.searchParams.get("token")) {
-        resolved.searchParams.set("token", inheritedToken);
-      }
-      return resolved.toString();
-    } catch {
-      return null;
-    }
-  };
+/**
+ * The `r` query parameter: base64url of a player-page URL, honoured only for
+ * hosts on the VidSrc allowlist so no caller can turn the proxy into a
+ * referer-forger for an arbitrary site.
+ *
+ * @returns {{ referer: string|null } | { error: string }}
+ */
+function decodeRefererParam(request) {
+  const raw = typeof request.query.r === "string" ? request.query.r : "";
+  if (!raw) return { referer: null };
+  let decoded;
+  try {
+    decoded = Buffer.from(raw, "base64url").toString("utf8");
+  } catch {
+    return { error: "Invalid referer parameter." };
+  }
+  if (!isVidsrcRefererOrigin(decoded)) return { error: "Referer not allowed for this target." };
+  return { referer: decoded };
+}
+
+/**
+ * The Referer a media request must go upstream with, when the target is on
+ * the referer road: the request's own (validated) `r`, else whatever the
+ * provider registered for the target's host. Null means the ordinary road.
+ */
+function resolveRoadReferer(request, target) {
+  const fromParam = decodeRefererParam(request);
+  if (fromParam.error) return fromParam;
+  return { referer: fromParam.referer ?? lookupUpstreamReferer(target) };
+}
+
+function parseAbsoluteUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * VidSrc's playback token rides on the master's query string and its CDN
+ * 403s any nested request without it, so on the referer road a nested URI
+ * inherits it — but only a URI on the same host as the URL that carried it.
+ * A token is a credential for one CDN; copying it to every host a playlist
+ * names would hand it to each of them.
+ */
+function inheritToken(tokenSourceUrl, resolved) {
+  let source;
+  try {
+    source = new URL(tokenSourceUrl);
+  } catch {
+    return resolved;
+  }
+  const token = source.searchParams.get("token");
+  if (token && resolved.hostname === source.hostname && !resolved.searchParams.get("token")) {
+    resolved.searchParams.set("token", token);
+  }
+  return resolved;
+}
+
+/** Resolves a playlist URI to absolute; on the referer road it also inherits the token. */
+function resolveNested(sourceUrl, uri, onRoad) {
+  try {
+    const resolved = new URL(uri, sourceUrl);
+    return (onRoad ? inheritToken(sourceUrl, resolved) : resolved).toString();
+  } catch {
+    return null;
+  }
+}
+
+function rewritePlaylist(request, sourceUrl, content, referer = null) {
+  const onRoad = Boolean(referer);
+  const absolute = (uri) => resolveNested(sourceUrl, uri, onRoad);
 
   // Keys, init segments and media renditions carry their URL in a URI="…"
   // attribute rather than on a line of its own.
   const rewriteUriAttributes = (line) => line.replace(/URI="([^"]+)"/g, (match, uri) => {
     const target = absolute(uri);
-    return target ? `URI="${buildProxyUrl(request, target)}"` : match;
+    return target ? `URI="${buildProxyUrl(request, target, referer)}"` : match;
   });
 
   return content
@@ -152,7 +210,7 @@ function rewritePlaylist(request, sourceUrl, content) {
           : line;
       }
       const target = absolute(trimmed);
-      return target ? buildProxyUrl(request, target) : line;
+      return target ? buildProxyUrl(request, target, referer) : line;
     })
     .join("\n");
 }
@@ -172,6 +230,16 @@ function isValidM3u8Content(text) {
   );
 }
 
+/**
+ * Whether a stream URL should be treated as an HLS playlist. VidSrc's masters
+ * live at extension-less paths (/pl/<hash>), so the extension test alone
+ * misses them; a referer-bearing stream that is not a media file is a playlist.
+ */
+function looksLikePlaylist(stream) {
+  return stream.url.toLowerCase().includes(".m3u8")
+    || (Boolean(stream.referer) && !/\.(?:ts|mp4|m4s|m4v|jpg|png|webp)(?:\?|$)/i.test(stream.url));
+}
+
 function parseM3u8DurationSeconds(text) {
   const matches = text.matchAll(/#EXTINF:([\d.]+)/g);
   let total = 0;
@@ -186,7 +254,7 @@ function parseM3u8DurationSeconds(text) {
   return count > 0 ? Math.round(total) : null;
 }
 
-function extractVariantPlaylistUrls(sourceUrl, text) {
+function extractVariantPlaylistUrls(sourceUrl, text, onRoad = false) {
   const lines = text.split("\n");
   const urls = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -198,9 +266,8 @@ function extractVariantPlaylistUrls(sourceUrl, text) {
     if (!nextLine || nextLine.startsWith("#")) {
       continue;
     }
-    try {
-      urls.push(new URL(nextLine, sourceUrl).toString());
-    } catch {}
+    const resolved = resolveNested(sourceUrl, nextLine, onRoad);
+    if (resolved) urls.push(resolved);
   }
   return urls;
 }
@@ -222,8 +289,20 @@ async function fetchTextSnippet(url, maxBytes = 256_000, referer = null) {
   return readLimited(response.body, maxBytes);
 }
 
+/**
+ * VidSrc variant playlists run to ~1.1 MB, so the usual 256 KB prefix would
+ * count a quarter of the film. Referer-road probes read further rather than
+ * report a runtime that is wrong.
+ */
+const METADATA_PREFIX_BYTES = 256_000;
+const ROAD_METADATA_PREFIX_BYTES = 2 * 1024 * 1024;
+
 async function inspectM3u8Metadata(url, depth = 0, referer = null) {
-  const text = await fetchTextSnippet(url, 256_000, referer);
+  const text = await fetchTextSnippet(
+    url,
+    referer ? ROAD_METADATA_PREFIX_BYTES : METADATA_PREFIX_BYTES,
+    referer,
+  );
   if (!isValidM3u8Content(text)) {
     return { durationSeconds: null, adSeconds: 0, playlistType: "invalid" };
   }
@@ -244,7 +323,7 @@ async function inspectM3u8Metadata(url, depth = 0, referer = null) {
     return { durationSeconds: null, adSeconds: 0, playlistType: "master" };
   }
 
-  const variantUrls = extractVariantPlaylistUrls(url, text);
+  const variantUrls = extractVariantPlaylistUrls(url, text, Boolean(referer));
   if (variantUrls.length === 0) {
     return { durationSeconds: null, adSeconds: 0, playlistType: "master" };
   }
@@ -279,7 +358,7 @@ export async function getStreamMetadata(stream) {
   }
 
   let metadata = { durationSeconds: null, adSeconds: 0 };
-  if (stream.url.toLowerCase().includes(".m3u8")) {
+  if (looksLikePlaylist(stream)) {
     try {
       await assertPublicUrl(stream.url);
       const inspected = await inspectM3u8Metadata(stream.url, 0, stream.referer ?? null);
@@ -365,13 +444,9 @@ export async function checkStream(stream) {
     return { ...stream, ...blocked };
   }
 
-  // VidSrc's masters live at extension-less paths (/pl/<hash>), so the
-  // extension test alone sent them to checkGeneric — whose HEAD carried no
-  // Referer and drew a 403 from the CDN. A referer-bearing stream that is not
-  // a media file is treated as a playlist and validated as one.
-  const looksLikePlaylist = stream.url.toLowerCase().includes(".m3u8")
-    || (Boolean(stream.referer) && !/\.(?:ts|mp4|m4s|m4v|jpg|png|webp)(?:\?|$)/i.test(stream.url));
-  const result = looksLikePlaylist
+  // An extension-less VidSrc master sent to checkGeneric drew a 403: its HEAD
+  // is not a playlist fetch. See looksLikePlaylist.
+  const result = looksLikePlaylist(stream)
     ? await checkM3u8(stream.url, stream.referer ?? null)
     : await checkGeneric(stream.url, stream.referer ?? null);
 
@@ -383,29 +458,31 @@ export async function streamCheckedSources(rawStreams, preferredLabel, onSource)
   if (rawStreams.length === 0) return;
 
   async function processOne(stream) {
+    const roadReferer = stream.referer && isVidsrcRefererOrigin(stream.referer) ? stream.referer : null;
+    // The provider registers its CDN hosts too; doing it here as well means a
+    // native client handed the bare directUrl reaches the referer road even
+    // if a provider forgot to.
+    if (roadReferer) registerUpstreamReferer(stream.url, roadReferer);
     const enriched = await getStreamMetadata(stream);
     const checked = await checkStream(enriched);
     if (checked.ok) {
-      const proxyUrl = `/api/stream?target=${encodeURIComponent(checked.url)}`;
-      // VidSrc's CDN demands the player-page Referer on every request; the
-      // emitted proxy URL carries it (allowlist-checked by the proxy) so the
-      // fetched road works without the caller knowing any of this.
-      const refererParam = stream.referer && isVidsrcRefererOrigin(stream.referer)
-        ? `&r=${encodeURIComponent(Buffer.from(stream.referer).toString("base64url"))}`
-        : "";
-      const fullProxyUrl = `${proxyUrl}${refererParam}`;
-      // VidSrc streams cannot be played by the browser at all — the CDN
-      // demands a specific Referer plus a per-request token, and hls.js can
-      // send neither. Their proxy road is the only road, so it is handed
-      // over as directUrl too and the fallback dance is skipped. The same
-      // flag tells the player to pin the highest quality rung and only step
-      // down when that rung will not play.
+      // directUrl is always the CDN's own absolute URL (for VidSrc it already
+      // carries ?token=): native clients wrap it in /api/manifest or
+      // /api/stream, which find the referer through the host registry.
+      // proxyUrl carries the referer explicitly as `r`, allowlist-checked by
+      // the proxy, so the proxied road works without the caller knowing.
+      const proxyUrl = `/api/stream?target=${encodeURIComponent(checked.url)}`
+        + (roadReferer ? `&r=${encodeRefererParam(roadReferer)}` : "");
+      // VidSrc streams cannot play from the browser directly — hls.js can send
+      // neither the Referer nor the token cross-origin — so preferProxy tells
+      // the client to start on proxyUrl. maxQuality pins the top rung, stepping
+      // down only when that rung will not play.
       const preferProxy = Boolean(stream.preferProxy);
       onSource({
         ...checked,
-        directUrl: preferProxy ? fullProxyUrl : checked.url,
-        proxyUrl: fullProxyUrl,
-        ...(preferProxy ? { maxQuality: true } : {}),
+        directUrl: checked.url,
+        proxyUrl,
+        ...(preferProxy ? { preferProxy: true, maxQuality: true } : {}),
       });
     }
   }
@@ -429,33 +506,27 @@ export async function handleStreamProxy(request, response) {
     return;
   }
 
-  // VidSrc's CDN 403s anything whose Referer is not the player page the chain
-  // handed out. The param is base64url of that full URL and is only honoured
-  // for hosts on the provider's own allowlist, so no caller can turn this
-  // proxy into a referer-forger for an arbitrary site.
-  let upstreamReferer;
-  const refererParam = typeof request.query.r === "string" ? request.query.r : "";
-  if (refererParam) {
-    let decoded;
-    try {
-      decoded = Buffer.from(refererParam, "base64url").toString("utf8");
-    } catch {
-      response.status(400).json({ error: "Invalid referer parameter." });
-      return;
-    }
-    if (!isVidsrcRefererOrigin(decoded)) {
-      response.status(400).json({ error: "Referer not allowed for this target." });
-      return;
-    }
-    upstreamReferer = decoded;
+  const targetUrl = parseAbsoluteUrl(target);
+  if (!targetUrl) {
+    response.status(400).json({ error: "Invalid target URL." });
+    return;
   }
+
+  // VidSrc's CDN 403s anything whose Referer is not the player page the chain
+  // handed out: that is the `r` param (allowlisted) or the host registry.
+  const road = resolveRoadReferer(request, target);
+  if (road.error) {
+    response.status(400).json({ error: road.error });
+    return;
+  }
+  const upstreamReferer = road.referer;
 
   let upstream;
   try {
     ({ response: upstream } = await safeFetch(target, {
       headers: {
         "user-agent": UA,
-        referer: upstreamReferer ?? new URL(target).origin + "/",
+        referer: upstreamReferer ?? targetUrl.origin + "/",
         range: request.get("range") || "",
       },
       signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
@@ -485,7 +556,7 @@ export async function handleStreamProxy(request, response) {
   if (contentType.includes("mpegurl") || target.toLowerCase().includes(".m3u8")) {
     const content = await readLimited(upstream.body, MAX_PLAYLIST_BYTES);
     response.type("application/vnd.apple.mpegurl");
-    response.send(rewritePlaylist(request, target, content));
+    response.send(rewritePlaylist(request, target, content, upstreamReferer));
     return;
   }
 
@@ -494,7 +565,7 @@ export async function handleStreamProxy(request, response) {
   // text/html. On the referer road the first bytes are read before deciding:
   // an HLS signature means text to rewrite, anything else is a segment and is
   // relayed as the raw bytes it is (decoding a segment as text destroys it).
-  if (refererParam && contentType.startsWith("text/")) {
+  if (upstreamReferer && contentType.startsWith("text/")) {
     const { reader, chunks, total } = await readPrefix(upstream, 16);
     const prefix = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).subarray(0, 7).toString("latin1");
     if (prefix !== "#EXTM3U") {
@@ -515,7 +586,7 @@ export async function handleStreamProxy(request, response) {
     await reader.cancel().catch(() => {});
     const content = Buffer.concat([...chunks.map((chunk) => Buffer.from(chunk)), ...rest]).toString("utf8");
     response.type("application/vnd.apple.mpegurl");
-    response.send(rewritePlaylist(request, target, content));
+    response.send(rewritePlaylist(request, target, content, upstreamReferer));
     return;
   }
 
@@ -537,8 +608,17 @@ function resolveAgainst(baseUrl, uri) {
   }
 }
 
-function buildManifestUrl(targetUrl) {
-  return `/api/manifest?target=${encodeURIComponent(targetUrl)}`;
+/**
+ * Every URL is written without the caller's access token: the cleaned body is
+ * cached and the token is added per request in handleCleanManifest.
+ */
+function buildManifestUrl(targetUrl, referer = null) {
+  const url = `/api/manifest?target=${encodeURIComponent(targetUrl)}`;
+  return referer ? `${url}&r=${encodeRefererParam(referer)}` : url;
+}
+
+function buildRoadSegmentUrl(targetUrl, referer) {
+  return `/api/stream?target=${encodeURIComponent(targetUrl)}&r=${encodeRefererParam(referer)}`;
 }
 
 /**
@@ -548,8 +628,23 @@ function buildManifestUrl(targetUrl) {
  *
  * #EXT-X-MAP is rewritten too, unlike in the proxy path, where an fMP4 source
  * would leak a direct init-segment fetch.
+ *
+ * The referer road is the exception: that CDN refuses any segment request
+ * without the player-page Referer, which a device cannot send, so there each
+ * media URI goes through /api/stream with `r` instead, inheriting the
+ * playlist's token for same-host URIs.
  */
-function absolutizeMediaPlaylist(sourceUrl, content) {
+function absolutizeMediaPlaylist(sourceUrl, content, referer = null, tokenSourceUrl = sourceUrl) {
+  const resolve = referer
+    ? (uri) => {
+        try {
+          const resolved = inheritToken(tokenSourceUrl, new URL(uri, sourceUrl));
+          return buildRoadSegmentUrl(resolved.toString(), referer);
+        } catch {
+          return uri;
+        }
+      }
+    : (uri) => resolveAgainst(sourceUrl, uri);
   return content
     .split("\n")
     .map((line) => {
@@ -557,11 +652,11 @@ function absolutizeMediaPlaylist(sourceUrl, content) {
       if (!trimmed) return line;
       if (trimmed.startsWith("#")) {
         if (trimmed.startsWith("#EXT-X-KEY") || trimmed.startsWith("#EXT-X-MAP")) {
-          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${resolveAgainst(sourceUrl, uri)}"`);
+          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${resolve(uri)}"`);
         }
         return line;
       }
-      return resolveAgainst(sourceUrl, trimmed);
+      return resolve(trimmed);
     })
     .join("\n");
 }
@@ -569,9 +664,20 @@ function absolutizeMediaPlaylist(sourceUrl, content) {
 /**
  * A master playlist has no segments to filter, so it is only redirected: each
  * variant and rendition comes back through this endpoint so that whichever one
- * the player picks arrives cleaned.
+ * the player picks arrives cleaned. On the referer road the variant URLs keep
+ * the master's token (same host only) and carry `r`, so the variant fetch goes
+ * upstream with the referer too.
  */
-function rewriteMasterPlaylist(sourceUrl, content) {
+function rewriteMasterPlaylist(sourceUrl, content, referer = null, tokenSourceUrl = sourceUrl) {
+  const resolve = referer
+    ? (uri) => {
+        try {
+          return buildManifestUrl(inheritToken(tokenSourceUrl, new URL(uri, sourceUrl)).toString(), referer);
+        } catch {
+          return uri;
+        }
+      }
+    : (uri) => buildManifestUrl(resolveAgainst(sourceUrl, uri));
   return content
     .split("\n")
     .map((line) => {
@@ -579,12 +685,12 @@ function rewriteMasterPlaylist(sourceUrl, content) {
       if (!trimmed) return line;
       if (trimmed.startsWith("#")) {
         if (trimmed.startsWith("#EXT-X-MEDIA") || trimmed.startsWith("#EXT-X-I-FRAME-STREAM-INF")) {
-          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${buildManifestUrl(resolveAgainst(sourceUrl, uri))}"`);
+          return line.replace(/URI="([^"]+)"/, (_, uri) => `URI="${resolve(uri)}"`);
         }
         return line;
       }
       // A bare URI line in a master playlist is a variant playlist.
-      return buildManifestUrl(resolveAgainst(sourceUrl, trimmed));
+      return resolve(trimmed);
     })
     .join("\n");
 }
@@ -598,16 +704,27 @@ function rewriteMasterPlaylist(sourceUrl, content) {
  *
  * The body deliberately carries no access token — unlike /api/stream, which has
  * to embed one because hls.js cannot put a header on a segment request. Here
- * the segment URLs are the CDN's own and need no credential of ours.
+ * the segment URLs are the CDN's own and need no credential of ours. (Except on
+ * the referer road, where segments must come through /api/stream; see
+ * handleCleanManifest.)
  */
 /**
  * Fetches a playlist and cleans it, or returns the cached result.
  *
+ * @param {string|null} referer the referer-road Referer, or null
  * @throws {BlockedTargetError|Object} an error carrying `statusCode`.
  */
-async function cleanedManifestFor(target) {
-  const cached = caches.cleanedManifest.get(target);
+async function cleanedManifestFor(target, referer = null) {
+  const cacheKey = referer ? `${target}\u0000${referer}` : target;
+  const cached = caches.cleanedManifest.get(cacheKey);
   if (cached) return cached;
+
+  const targetUrl = parseAbsoluteUrl(target);
+  if (!targetUrl) {
+    const failure = new Error("Invalid target URL.");
+    failure.statusCode = 400;
+    throw failure;
+  }
 
   let upstream;
   let landedOn;
@@ -615,7 +732,7 @@ async function cleanedManifestFor(target) {
     ({ response: upstream, finalUrl: landedOn } = await safeFetch(target, {
       headers: {
         "user-agent": UA,
-        referer: new URL(target).origin + "/",
+        referer: referer ?? targetUrl.origin + "/",
       },
       signal: AbortSignal.timeout(STREAM_PROXY_TIMEOUT_MS),
     }));
@@ -648,26 +765,30 @@ async function cleanedManifestFor(target) {
   const result = isMaster
     ? {
         isMaster: true,
-        body: rewriteMasterPlaylist(baseUrl, text),
+        body: rewriteMasterPlaylist(baseUrl, text, referer, target),
         cuts: [],
         removedSeconds: 0,
         reason: null,
         // Kept because the ads live in the variants, not here, and the rewritten
         // body no longer contains their real addresses.
-        variants: extractVariantPlaylistUrls(baseUrl, text),
+        variants: extractVariantPlaylistUrls(baseUrl, text, Boolean(referer)).map((url) => (
+          referer ? inheritToken(target, new URL(url)).toString() : url
+        )),
       }
     : (() => {
+        // Classify against the CDN's own URIs, before anything is pointed at
+        // the proxy: rewriting first would erase the directory signal.
         const stripped = stripAds(text, baseUrl);
         return {
           isMaster: false,
-          body: absolutizeMediaPlaylist(baseUrl, stripped.text),
+          body: absolutizeMediaPlaylist(baseUrl, stripped.text, referer, target),
           cuts: stripped.cuts,
           removedSeconds: stripped.removedSeconds,
           reason: stripped.reason,
         };
       })();
 
-  caches.cleanedManifest.set(target, result);
+  caches.cleanedManifest.set(cacheKey, result);
   return result;
 }
 
@@ -678,9 +799,15 @@ export async function handleCleanManifest(request, response) {
     return;
   }
 
+  const road = resolveRoadReferer(request, target);
+  if (road.error) {
+    response.status(400).json({ error: road.error });
+    return;
+  }
+
   let result;
   try {
-    result = await cleanedManifestFor(target);
+    result = await cleanedManifestFor(target, road.referer);
   } catch (error) {
     response.status(error.statusCode || 502).json({ error: error.message });
     return;
@@ -703,15 +830,31 @@ export async function handleCleanManifest(request, response) {
   // and shared across the account's users, and a token baked in there would
   // hand one user's credential to the next. Segment URLs are untouched —
   // they are the CDN's own and carry nothing of ours.
+  //
+  // On the referer road the segments are /api/stream URLs of ours and need a
+  // credential as much as the variants do, and a player that sent the
+  // manifest request with an Authorization header may not send one for each
+  // segment — so there the token is taken from either place and written onto
+  // every URI this server wrote.
   let body = result.body;
-  const queryToken = String(request.query.accessToken || "").trim();
-  if (queryToken && result.isMaster) {
-    // Only where this server wrote the URI: at the start of a line or of a URI
-    // attribute. A tag it leaves alone may name another host entirely.
-    body = body.replace(
-      /(^|URI=")(\/api\/manifest\?target=[^"\s,]+)/gm,
-      (_, prefix, uri) => `${prefix}${uri}&accessToken=${encodeURIComponent(queryToken)}`,
-    );
+  if (road.referer) {
+    const token = getBearerToken(request, { allowQuery: true });
+    if (token) {
+      body = body.replace(
+        /(^|URI=")(\/api\/(?:manifest|stream)\?target=[^"\s,]+)/gm,
+        (_, prefix, uri) => `${prefix}${uri}&accessToken=${encodeURIComponent(token)}`,
+      );
+    }
+  } else {
+    const queryToken = String(request.query.accessToken || "").trim();
+    if (queryToken && result.isMaster) {
+      // Only where this server wrote the URI: at the start of a line or of a URI
+      // attribute. A tag it leaves alone may name another host entirely.
+      body = body.replace(
+        /(^|URI=")(\/api\/manifest\?target=[^"\s,]+)/gm,
+        (_, prefix, uri) => `${prefix}${uri}&accessToken=${encodeURIComponent(queryToken)}`,
+      );
+    }
   }
   response.send(body);
 }
@@ -735,9 +878,15 @@ export async function handleAdCuts(request, response) {
     return;
   }
 
+  const road = resolveRoadReferer(request, target);
+  if (road.error) {
+    response.status(400).json({ error: road.error });
+    return;
+  }
+
   let result;
   try {
-    result = await cleanedManifestFor(target);
+    result = await cleanedManifestFor(target, road.referer);
 
     // A master playlist has no segments of its own. The ads are inside whichever
     // variant the player picks, so the variants are inspected and the one
@@ -746,7 +895,7 @@ export async function handleAdCuts(request, response) {
     if (result.isMaster) {
       const inspected = await Promise.all(
         (result.variants || []).slice(0, 5).map((url) =>
-          cleanedManifestFor(url).catch(() => null),
+          cleanedManifestFor(url, road.referer).catch(() => null),
         ),
       );
       result = inspected

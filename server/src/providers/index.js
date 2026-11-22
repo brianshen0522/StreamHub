@@ -26,6 +26,7 @@ import {
   getVidsrcEpisodeStreams,
   getVidsrcItem,
   getVidsrcSeasonEpisodes,
+  getVidsrcSubtitleContext,
   pingVidsrc,
   searchVidsrc,
 } from "./vidsrc.js";
@@ -88,6 +89,9 @@ export const providers = {
     // The health poller takes this one-request pulse instead of a full
     // search, because a search here is a batch of playback chains.
     ping: pingVidsrc,
+    // Only VidSrc names an IMDb id and the release being played, which is
+    // what /api/subtitles searches OpenSubtitles with.
+    getSubtitleContext: getVidsrcSubtitleContext,
   },
 };
 
