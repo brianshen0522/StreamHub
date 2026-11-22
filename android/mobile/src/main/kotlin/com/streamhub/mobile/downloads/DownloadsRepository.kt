@@ -48,11 +48,16 @@ class DownloadsRepository(
         (context.getExternalFilesDir(null) ?: context.filesDir).resolve("downloads").apply { mkdirs() }
 
     /**
-     * Segments and keys travel bare. The cleaned manifest points them at the
-     * CDN's own hosts, where a bearer token means nothing and does not belong —
-     * only the manifest itself comes from our server and needs the session.
+     * Segments and keys go through the authenticated client, which sends the
+     * bearer token to this server only — CDN hosts still get a bare request.
+     * Most cleaned manifests point every segment at the CDN, but a referer-bound
+     * host (VidSrc) cannot be reached from the device, so its manifest lists
+     * `/api/stream?…&accessToken=…` URLs instead. The record keeps those URLs
+     * for as long as the download takes to finish, which can outlive the token
+     * baked into them; the fresh header wins over the stale query parameter on
+     * the server, and a 401 renews it, so a download resumed tomorrow still runs.
      */
-    private val segmentClient = OkHttpClient()
+    private val segmentClient: OkHttpClient get() = api.authenticatedClient
 
     private val jobs = mutableMapOf<String, Job>()
 
