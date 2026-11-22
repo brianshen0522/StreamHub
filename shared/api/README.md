@@ -172,7 +172,7 @@ close throws away the whole point. Failing sources are simply never emitted.
 `preferredLabel` biases which source is probed first but guarantees nothing about
 arrival order. Each line carries `directUrl` and `proxyUrl`; prefer `directUrl`,
 since direct CDN access works without a Referer header and keeps the server out
-of the video path.
+of the video path — unless the line says `preferProxy` (see below).
 
 `durationSeconds` on those lines already has detected ad segments subtracted, so
 it matches the playable timeline rather than the raw manifest.
@@ -191,10 +191,61 @@ Android the HTTP client attaches it per request, to this server's host only. On
 iOS `AVURLAssetHTTPHeaderFieldsKey` applies to every host the asset touches, so
 the token goes in `?accessToken=` instead and the server carries it onto variant
 URLs. The response body written to the cache deliberately contains **no access
-token**, unlike `/api/stream`, so nothing sensitive lands in a cache.
+token**, unlike `/api/stream`, so nothing sensitive lands in a cache — except for
+a referer-bound host, below, whose segments have to come through the proxy.
 
 The response carries `x-adfilter-removed-seconds`, and `x-adfilter-reason` when
 nothing was removed — useful when a source's runtime looks wrong.
+
+Some hosts answer only the server. VidSrc's CDN refuses any request — master,
+variant, segment or key — that lacks a `?token=` from the provider and a Referer
+naming the provider's player page, and the token is bound to the address
+that asked for it — the server's. No client can satisfy either. A source
+on such a host still carries `directUrl` (and `url`) as the **absolute CDN URL,
+token included**, so it stays the identity of the line and the thing to pass as
+`target`; but the device cannot fetch it itself. Two extra fields mark it:
+
+| Field | Meaning |
+|---|---|
+| `preferProxy: true` | `directUrl` is not reachable from the device. Start on `proxyUrl` (or `/api/manifest`), not on `directUrl` |
+| `maxQuality: true` | Play the master's top variant and stay there; step down one rung only when that rung fails fatally. A preference, not a requirement — ordinary ABR still plays |
+
+Both are absent, not `false`, on every other source. `proxyUrl` for these lines
+carries an extra `r=` (base64url of the Referer); pass it through untouched. The
+server also remembers which hosts need which Referer once a provider has handed
+one out, so `/api/manifest`, `/api/stream` and `/api/ad-cuts` work on a bare
+`target=<directUrl>` without `r` — which is what native clients and a cast
+`play` send. That memory is in-process: after a server restart the host is
+unknown again until the next `/api/item` or `/api/episodes` call re-registers it,
+and VidSrc's own token expires in about four hours anyway, so a remembered
+`directUrl` is not a bookmark.
+
+For those hosts `/api/manifest` cannot send segments device-to-CDN. It still cuts
+ads, but every segment, key and map URI comes back as a root-relative
+`/api/stream?target=…&accessToken=…&r=…` URL (variants of a master still point at
+`/api/manifest?target=…&r=…`), so the body **does carry an access token** for these
+hosts — the caller's own, taken from the `Authorization` header or, failing that,
+`?accessToken=`. Relative URIs resolve against the manifest's origin, so a manifest
+fetched from `/api/v1/manifest` lists unversioned `/api/stream` URLs; both prefixes
+are served. What each client does:
+
+- **Web:** when `preferProxy` is set, load `proxyUrl` first and skip the
+  `directUrl` attempt — it can only 403, and a fatal error there costs a
+  visible stall before the fallback.
+- **Native:** nothing changes. Keep handing the player
+  `/api/manifest?target=<directUrl>`; it answers with proxied segments, ads cut.
+  The relay rung (`proxyUrl`, or `/api/stream?target=<directUrl>`) also works,
+  but it is no longer a different network path, only an unfiltered one.
+  `preferProxy` needs no handling, and `maxQuality` is not honoured yet (Android
+  and Tizen leave variant choice to the player's ABR).
+- **Token lifetime:** a token baked into segment URLs is the one the manifest was
+  fetched with, exactly as on the `/api/stream` relay. A client whose HTTP stack
+  also sends the bearer header to this server (Android's authenticated OkHttp)
+  is unaffected, because the header wins over the query parameter and is renewed
+  on 401. One that relies on the query alone (AVPlay, AVPlayer) has the segment
+  URLs it was given expire with that token — the access-token lifetime, four
+  hours by default — so reopen the manifest rather than reuse a stored one. Any
+  downloader that keeps segment URLs on disk must send the header too.
 
 `GET /api/item` is **polymorphic** and returned bare, not wrapped. Discriminate on
 which key is present:
@@ -226,6 +277,57 @@ on the named provider's own site.
 Posters sit behind auth, so a plain unauthenticated image load will fail. The
 image loader needs the bearer header (Coil and Kingfisher both support this) or
 the query parameter.
+
+## Subtitles
+
+`GET /api/subtitles?provider=<p>&url=<item or season URL>&episode=<label>` lists
+external subtitle tracks for what is playing. `url` is a movie's item URL or,
+for an episode, the season URL with `episode` set to the episode label exactly
+as `/api/episodes` gave it. Same guards as `/api/episodes`; a URL off the
+provider's site is a 400. It always answers 200 once the request is valid:
+
+```json
+{
+  "enabled": true,
+  "tracks": [
+    { "id": "1958464317", "lang": "chi", "srclang": "zh", "label": "中文",
+      "releaseName": "Inception.2010.1080p.x264.DTS.2AUDIO-WAF.Chs.srt",
+      "score": 7, "url": "/api/subtitles/file?id=1958464317" },
+    { "id": "1952777677", "lang": "eng", "srclang": "en", "label": "English",
+      "releaseName": "Inception.2010.1080p.BluRay.DTS.x264-CtrlHD.eng.srt",
+      "score": 8, "url": "/api/subtitles/file?id=1952777677" }
+  ]
+}
+```
+
+- At most one track per language, in the server's configured order
+  (`OPENSUBTITLES_LANGUAGES`, default `chi,eng`). A language with nothing
+  found is simply absent.
+- `enabled: false` (with `tracks: []`) means the server has subtitles turned
+  off. Hide the control rather than showing an empty menu.
+- Only VidSrc supports subtitles today; any other provider answers
+  `{ "enabled": true, "tracks": [] }`.
+- `error` appears when a lookup failed (OpenSubtitles throttling, the provider
+  failing to identify the title). Whatever tracks were found are still
+  listed. Treat it as informational — never block playback on it.
+- `srclang` is a BCP 47 tag for `<track srclang>`. Chinese is `zh-Hant` with
+  label `中文（繁體）` when the chosen file is Traditional, otherwise `zh` /
+  `中文` (OpenSubtitles files Traditional and Simplified under one code, and
+  Traditional is preferred when there is a choice). `label` is the language's
+  own name, not translated.
+- `url` is root-relative and unversioned; resolve it against the server
+  origin. `id` is opaque.
+- A cold call can take a few seconds: the server queues its upstream requests
+  a second apart. Answers are cached for a day, so a repeat is immediate.
+
+`GET /api/subtitles/file?id=<id>` returns the track as
+`text/vtt; charset=utf-8` (`cache-control: private, max-age=86400`), converted
+from SRT and decoded to UTF-8. It needs the bearer header like any other route
+— it does **not** take `?accessToken=` — so a browser fetches it and hands the
+`<track>` an object URL, and a native player loads it through its
+authenticated HTTP client. Only ids returned by a list call on this server are
+served, for a day after that call; anything else is a 404, which a client
+recovers from by listing again.
 
 ## Realtime
 
